@@ -1,0 +1,33 @@
+name: ci
+
+# Both events on purpose: GitHub App-authored PRs do NOT trigger pull_request
+# (anti-recursion), so `push` is the reliable signal for the agent's own fix PRs.
+on:
+  push:
+  pull_request:
+
+jobs:
+  agent:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: agent
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install deps
+        run: pip install -r requirements.txt
+      - name: Assert google-adk is pinned to 1.x
+        run: |
+          python - <<'PY'
+          import importlib.metadata as m
+          v = m.version("google-adk")
+          assert v.startswith("1."), f"google-adk must be 1.x, got {v} (2.0 is a breaking rewrite)"
+          print("google-adk", v, "OK")
+          PY
+      - name: Run tests (mock mode)
+        env:
+          AIRBAG_USE_MOCK: "true"
+        run: python -m pytest -q

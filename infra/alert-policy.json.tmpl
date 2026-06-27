@@ -1,0 +1,27 @@
+{
+  "_comment": "Template — replace PROJECT, SERVICE, CHANNEL_ID. Create the log-based metric first (see below), then: gcloud monitoring policies create --policy-from-file=alert-policy.json",
+  "_create_metric_first": "gcloud logging metrics create cloudrun_5xx_count --description='Cloud Run 5xx' --log-filter='resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"SERVICE\" AND httpRequest.status>=500'",
+  "displayName": "SERVICE 5xx spike",
+  "combiner": "OR",
+  "enabled": true,
+  "conditions": [
+    {
+      "displayName": "5xx count > 5 for 2m",
+      "conditionThreshold": {
+        "filter": "metric.type=\"logging.googleapis.com/user/cloudrun_5xx_count\" resource.type=\"cloud_run_revision\"",
+        "comparison": "COMPARISON_GT",
+        "thresholdValue": 5,
+        "duration": "120s",
+        "aggregations": [
+          {
+            "alignmentPeriod": "60s",
+            "perSeriesAligner": "ALIGN_DELTA",
+            "crossSeriesReducer": "REDUCE_SUM"
+          }
+        ]
+      }
+    }
+  ],
+  "notificationChannels": ["projects/PROJECT/notificationChannels/CHANNEL_ID"],
+  "_webhook_channel": "gcloud monitoring channels create --display-name='airbag webhook' --type=webhook_tokenauth --channel-labels=url=https://airbag-agent-XXXX.run.app/alerts/cloud-monitoring --sensitive-labels=authToken=YOUR_TOKEN"
+}

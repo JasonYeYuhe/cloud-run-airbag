@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Env / secrets — NEVER commit
+.env
+.env.*
+!.env.example
+*-key.json
+*-sa.json
+service-account*.json
+*.pem
+client_secret*.json
+
+# Node / dashboard
+node_modules/
+.next/
+dist/
+build/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+*.log

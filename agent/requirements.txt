@@ -1,0 +1,14 @@
+# Airbag agent — pinned deps.
+# ⚠️ google-adk MUST stay 1.x — 2.0/2.3 is a breaking graph-runtime rewrite (CI asserts this).
+google-adk~=1.0
+google-genai
+google-cloud-run
+google-cloud-monitoring
+google-cloud-logging
+fastapi
+uvicorn[standard]
+httpx
+PyGithub
+pydantic>=2
+# dev/test
+pytest
