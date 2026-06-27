@@ -119,7 +119,7 @@
 const $ = s => document.querySelector(s);
 const tl = $('#timeline');
 let series = [];           // error-rate points
-function api(path){ fetch(path,{method:'POST'}); }
+function api(path){ fetch(path,{method:'POST'}).catch(()=>{}); setTimeout(()=>{ if(!live) playScript(); }, 500); }
 
 function setDot(id,on){ $(id).classList.toggle('on', !!on); }
 
@@ -197,11 +197,37 @@ function renderDecision(ev){
      <div style="margin-top:6px">${esc(ev.reasoning||'')}</div>`;
 }
 
-// connect SSE
+// ---- live SSE (when the agent is running) ----
+let live=false;
 const es = new EventSource('/events');
-es.onmessage = e => { try{ addEvent(JSON.parse(e.data)); }catch(_){}}
+es.onmessage = e => { try{ const d=JSON.parse(e.data); if(d.stage && d.stage!=='CONNECTED') live=true; addEvent(d); }catch(_){}}
 es.onerror = () => setDot('#d-sse',false);
-fetch('/healthz').then(r=>r.json()).then(j=>{ setBackend(j.backend); setDot('#d-gemini', j.gemini); });
+fetch('/healthz').then(r=>r.json()).then(j=>{ setBackend(j.backend); setDot('#d-gemini', j.gemini); }).catch(()=>{});
+
+// ---- offline self-playing demo (no server needed; also a graceful fallback) ----
+const REVS=[{name:'airbag-target-00002-bad',ready:true,traffic_percent:100},
+            {name:'airbag-target-00001-good',ready:true,traffic_percent:0}];
+const SCRIPT=[
+  [0,   {stage:'FAULT_INJECTED',msg:'bad revision now returns 5xx on /api/orders'}],
+  [600, {stage:'RECEIVED',msg:'incident inc-demo on airbag-target (out-of-window alert)'}],
+  [700, {stage:'TRIAGED',msg:'collected revisions + error rate',error_rate:1.0,revisions:REVS}],
+  [800, {stage:'DECISION',action:'ROLLBACK',confidence:0.92,_source:'heuristic',
+         bad_revision:'airbag-target-00002-bad',rollback_revision:'airbag-target-00001-good',
+         msg:'ROLLBACK',reasoning:'5xx rate 1.0 on …-00002-bad; …-00001-good is a healthy prior revision.'}],
+  [800, {stage:'ROLLBACK_APPLIED',msg:'100% traffic -> airbag-target-00001-good'}],
+  [900, {stage:'VERIFYING',msg:'attempt 1/6',error_rate:0.6,probe_ok:false}],
+  [900, {stage:'VERIFYING',msg:'attempt 2/6',error_rate:0.15,probe_ok:true}],
+  [900, {stage:'VERIFYING',msg:'attempt 3/6',error_rate:0.0,probe_ok:true}],
+  [700, {stage:'MITIGATED',msg:'error rate back to zero — recovery proven',before:1.0,after:0.0}],
+  [700, {stage:'FIX_PR',msg:'stretch: Gemini-authored fix PR + real CI'}],
+];
+function playScript(){
+  if(live) return;
+  addEvent({stage:'RUN_START',msg:'offline demo (no GCP) — run ./run-local.sh for the real loop'});
+  let t=0;
+  SCRIPT.forEach(([d,e])=>{ t+=d; setTimeout(()=>{ if(!live) addEvent({ts:Date.now()/1000,...e}); }, t); });
+}
+setTimeout(()=>{ if(!live) playScript(); }, 1500);  // auto-play if no server
 </script>
 </body>
 </html>
