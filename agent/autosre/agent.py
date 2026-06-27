@@ -7,11 +7,8 @@ Pinned to google-adk ~=1.0 — 2.0 is a breaking graph-runtime rewrite (see requ
 """
 from __future__ import annotations
 
-from typing import List, Literal, Optional
-
-from pydantic import BaseModel, Field
-
 from . import config, tools
+from .schemas import IncidentDecision  # noqa: F401 (used as decision_agent output_schema)
 
 try:
     from google.adk.agents import LlmAgent, SequentialAgent
@@ -19,15 +16,6 @@ except ImportError as e:  # pragma: no cover - adk only needed for the ADK path
     raise ImportError(
         "google-adk not installed. `pip install -r requirements.txt` (must be 1.x)."
     ) from e
-
-
-class IncidentDecision(BaseModel):
-    """Structured decision the state machine validates before acting."""
-    action: Literal["ROLLBACK", "OBSERVE", "OPEN_FIX_PR", "ESCALATE"]
-    bad_revision: Optional[str] = None
-    rollback_revision: Optional[str] = None
-    confidence: float = Field(ge=0, le=1)
-    evidence: List[str] = []
 
 
 triage_agent = LlmAgent(

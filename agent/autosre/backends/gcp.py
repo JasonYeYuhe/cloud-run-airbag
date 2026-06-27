@@ -42,14 +42,14 @@ def list_cloud_run_revisions(service: str, region: str) -> dict:
 def query_error_rate(service: str, region: str, window_minutes: int = 5) -> dict:
     """5xx count from Cloud Logging over the window. Coarse rate (0 vs >0) is enough
     for the recovery gate; refine with Monitoring request_count ratio if needed."""
-    from google.cloud import logging_v2
+    from google.cloud import logging as cloud_logging
 
     since = (datetime.datetime.now(datetime.timezone.utc)
              - datetime.timedelta(minutes=window_minutes)).strftime("%Y-%m-%dT%H:%M:%SZ")
     flt = (f'resource.type="cloud_run_revision" '
            f'resource.labels.service_name="{service}" '
            f'httpRequest.status>=500 timestamp>="{since}"')
-    client = logging_v2.Client(project=config.GCP_PROJECT)
+    client = cloud_logging.Client(project=config.GCP_PROJECT)
     errs = sum(1 for _ in client.list_entries(filter_=flt, max_results=200))
     return {"service": service, "error_rate": 1.0 if errs else 0.0, "errors": errs,
             "total_requests": None, "window_minutes": window_minutes}
@@ -72,7 +72,8 @@ def rollback_traffic_to_revision(service: str, region: str, revision: str) -> di
     svc.traffic = [run_v2.TrafficTarget(
         type_=run_v2.TrafficTargetAllocationType.TRAFFIC_TARGET_ALLOCATION_TYPE_REVISION,
         revision=revision, percent=100)]
-    op = run_v2.ServicesClient().update_service(service=svc)
+    op = run_v2.ServicesClient().update_service(
+        service=svc, update_mask={"paths": ["traffic"]})
     op.result()  # block on the long-running operation
     return {"status": "success", "service": service, "active_revision": revision}
 
@@ -84,5 +85,6 @@ def restore_traffic_to_latest(service: str, region: str) -> dict:
     svc.traffic = [run_v2.TrafficTarget(
         type_=run_v2.TrafficTargetAllocationType.TRAFFIC_TARGET_ALLOCATION_TYPE_LATEST,
         percent=100)]
-    run_v2.ServicesClient().update_service(service=svc).result()
+    run_v2.ServicesClient().update_service(
+        service=svc, update_mask={"paths": ["traffic"]}).result()
     return {"status": "success", "service": service, "active_revision": "LATEST"}

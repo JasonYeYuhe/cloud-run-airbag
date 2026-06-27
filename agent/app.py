@@ -122,6 +122,8 @@ async def cloud_monitoring_alert(request: Request, background_tasks: BackgroundT
         return {"status": "ignored", "reason": f"state={state}", "incident_id": incident_id}
     if incident_id in _seen_incidents:
         return {"status": "duplicate", "incident_id": incident_id}
+    if len(_seen_incidents) > 1000:  # bound memory (Day-0; replace with TTLCache/Firestore)
+        _seen_incidents.clear()
     _seen_incidents.add(incident_id)
 
     background_tasks.add_task(run_self_heal, incident_id, service)
@@ -136,4 +138,6 @@ async def sentry_alert(request: Request, background_tasks: BackgroundTasks):
         expected = hmac.new(config.SENTRY_SECRET.encode(), raw, hashlib.sha256).hexdigest()
         if not hmac.compare_digest(sig, expected):
             raise HTTPException(status_code=401, detail="invalid signature")
-    return {"status": "todo"}
+    incident_id = f"sentry-{uuid.uuid4().hex[:8]}"
+    background_tasks.add_task(run_self_heal, incident_id, config.TARGET_SERVICE)
+    return {"status": "accepted", "incident_id": incident_id}

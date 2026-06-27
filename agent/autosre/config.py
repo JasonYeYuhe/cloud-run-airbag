@@ -29,8 +29,10 @@ ERROR_SAMPLE_N = int(os.getenv("AIRBAG_ERROR_SAMPLE_N", "12"))
 
 # Gemini (AI Studio API key). Empty -> deterministic fallback decision.
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_AI_API_KEY") or ""
-GEMINI_DECISION_MODEL = os.getenv("GEMINI_DECISION_MODEL", "gemini-2.5-flash")
-GEMINI_PATCH_MODEL = os.getenv("GEMINI_PATCH_MODEL", "gemini-2.5-pro")
+# "*-latest" aliases auto-point to the newest Gemini (3.x) and avoid 400s from guessing
+# a version string; override via env if you want to pin.
+GEMINI_DECISION_MODEL = os.getenv("GEMINI_DECISION_MODEL", "gemini-flash-latest")
+GEMINI_PATCH_MODEL = os.getenv("GEMINI_PATCH_MODEL", "gemini-pro-latest")
 
 CONFIDENCE_THRESHOLD = float(os.getenv("AIRBAG_CONFIDENCE_THRESHOLD", "0.7"))
 ERROR_RATE_THRESHOLD = float(os.getenv("AIRBAG_ERROR_RATE_THRESHOLD", "0.05"))
