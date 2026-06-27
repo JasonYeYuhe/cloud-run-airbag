@@ -1,10 +1,10 @@
-"""Smoke test: the whole self-heal loop runs end-to-end in MOCK mode."""
-from autosre import tools
+"""Smoke test: the whole self-heal loop runs end-to-end in the mock backend."""
+from autosre.backends import mock
 from autosre.state_machine import run_self_heal
 
 
 def setup_function(_):
-    tools._MOCK["rolled_back"] = False  # reset mock world between tests
+    mock.reset()
 
 
 def test_mock_heal_mitigates():
@@ -17,6 +17,6 @@ def test_mock_heal_mitigates():
 
 
 def test_no_error_means_noop():
-    tools._MOCK["rolled_back"] = True  # error rate reads 0 -> OBSERVE, not ROLLBACK
+    mock._STATE["rolled_back"] = True  # error rate reads 0 -> OBSERVE, not ROLLBACK
     result = run_self_heal("inc-quiet", "airbag-target")
     assert result["status"] == "noop"

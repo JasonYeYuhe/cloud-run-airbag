@@ -1,0 +1,7 @@
+# Slim deps for the local demo (no GCP libs). Full set is requirements.txt.
+fastapi
+uvicorn[standard]
+httpx
+google-genai
+pydantic>=2
+pytest

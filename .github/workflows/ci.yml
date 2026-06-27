@@ -27,7 +27,7 @@ jobs:
           assert v.startswith("1."), f"google-adk must be 1.x, got {v} (2.0 is a breaking rewrite)"
           print("google-adk", v, "OK")
           PY
-      - name: Run tests (mock mode)
+      - name: Run tests (mock backend)
         env:
-          AIRBAG_USE_MOCK: "true"
+          AIRBAG_BACKEND: "mock"
         run: python -m pytest -q

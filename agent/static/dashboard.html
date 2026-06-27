@@ -1,0 +1,207 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Airbag — Cloud Run self-heal</title>
+<style>
+  :root{
+    --bg:#0a0e14; --panel:#0e141d; --panel2:#121a25; --line:#1d2733;
+    --txt:#c9d4e0; --muted:#6b7a8d; --mono:'SFMono-Regular',ui-monospace,Menlo,Consolas,monospace;
+    --green:#3fb950; --red:#f85149; --amber:#e3b341; --cyan:#58a6ff; --violet:#bc8cff;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:radial-gradient(1200px 600px at 70% -10%,#10202e 0%,var(--bg) 55%);
+    color:var(--txt);font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;min-height:100vh}
+  header{display:flex;align-items:center;gap:14px;padding:16px 24px;border-bottom:1px solid var(--line)}
+  .logo{font-weight:800;letter-spacing:.5px;font-size:18px}
+  .logo b{color:var(--green)}
+  .tag{color:var(--muted);font-size:13px}
+  .status{margin-left:auto;display:flex;gap:16px;font-size:12px;color:var(--muted);font-family:var(--mono)}
+  .dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--muted);margin-right:6px;vertical-align:middle}
+  .dot.on{background:var(--green);box-shadow:0 0 8px var(--green)}
+  .wrap{display:grid;grid-template-columns:1.1fr .9fr;gap:18px;padding:18px 24px;max-width:1280px;margin:0 auto}
+  .panel{background:linear-gradient(180deg,var(--panel),var(--panel2));border:1px solid var(--line);border-radius:14px;padding:16px}
+  .panel h2{margin:0 0 12px;font-size:12px;letter-spacing:1.5px;text-transform:uppercase;color:var(--muted);font-weight:600}
+  .controls{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px}
+  button{font:inherit;font-size:13px;font-weight:600;color:var(--txt);background:#16202c;border:1px solid var(--line);
+    padding:9px 14px;border-radius:9px;cursor:pointer;transition:.15s}
+  button:hover{border-color:#2b3a4d;transform:translateY(-1px)}
+  button.primary{background:linear-gradient(180deg,#1b7f37,#15692e);border-color:#1f8d3c;color:#eafff0}
+  button.danger{border-color:#5a2330;color:#ff9b95}
+  /* timeline */
+  #timeline{height:520px;overflow:auto;display:flex;flex-direction:column;gap:8px;font-family:var(--mono);font-size:12.5px}
+  .ev{display:flex;gap:10px;padding:9px 11px;border:1px solid var(--line);border-radius:9px;background:#0c121a;
+    animation:slide .25s ease}
+  @keyframes slide{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+  .ev .stg{flex:0 0 130px;font-weight:700;letter-spacing:.3px}
+  .ev .msg{color:var(--txt);opacity:.9}
+  .ev .t{margin-left:auto;color:var(--muted);font-size:11px;white-space:nowrap}
+  .s-RUN_START .stg,.s-CONNECTED .stg{color:var(--muted)}
+  .s-FAULT_INJECTED .stg,.s-RECEIVED .stg{color:var(--red)}
+  .s-TRIAGED .stg{color:var(--cyan)}
+  .s-DECISION .stg{color:var(--violet)}
+  .s-ROLLBACK_APPLIED .stg{color:var(--cyan)}
+  .s-VERIFYING .stg{color:var(--amber)}
+  .s-MITIGATED .stg{color:var(--green)}
+  .s-ESCALATED .stg{color:var(--amber)}
+  .s-FIX_PR .stg,.s-DONE .stg{color:var(--muted)}
+  /* gate */
+  .gate{display:flex;align-items:center;gap:14px;margin-bottom:14px}
+  .big{font-size:46px;font-weight:800;font-family:var(--mono);line-height:1}
+  .badge{padding:6px 12px;border-radius:999px;font-size:12px;font-weight:700;letter-spacing:.5px;
+    border:1px solid var(--line);color:var(--muted)}
+  .badge.pending{color:var(--amber);border-color:#4a3c17;background:#1c1708}
+  .badge.verified{color:#0a0e14;background:var(--green);border-color:var(--green);box-shadow:0 0 16px rgba(63,185,80,.5)}
+  svg{width:100%;height:120px;display:block}
+  .axis{stroke:var(--line);stroke-width:1}
+  .curve{fill:none;stroke:var(--red);stroke-width:2.5;transition:.3s}
+  .curve.ok{stroke:var(--green)}
+  .zline{stroke:var(--green);stroke-dasharray:4 4;stroke-width:1;opacity:.6}
+  /* revisions */
+  .rev{margin:8px 0}
+  .rev .row{display:flex;justify-content:space-between;font-family:var(--mono);font-size:12px;margin-bottom:4px}
+  .bar{height:10px;border-radius:6px;background:#0c121a;border:1px solid var(--line);overflow:hidden}
+  .bar > i{display:block;height:100%;width:0;transition:width .6s cubic-bezier(.4,0,.2,1)}
+  .bad i{background:var(--red)} .good i{background:var(--green)}
+  /* decision */
+  .dec{font-family:var(--mono);font-size:12.5px;line-height:1.6}
+  .dec .act{font-size:16px;font-weight:800}
+  .chip{display:inline-block;padding:2px 8px;border-radius:6px;font-size:11px;border:1px solid var(--line);color:var(--muted)}
+  .chip.gemini{color:var(--violet);border-color:#3a2b52}
+  .muted{color:var(--muted)}
+</style>
+</head>
+<body>
+<header>
+  <div class="logo">🛟 <b>Airbag</b></div>
+  <div class="tag">autonomous release safety net for Cloud Run</div>
+  <div class="status">
+    <span><span class="dot" id="d-sse"></span>stream</span>
+    <span><span class="dot" id="d-backend"></span><span id="backend">backend</span></span>
+    <span><span class="dot" id="d-gemini"></span>gemini</span>
+  </div>
+</header>
+
+<div class="wrap">
+  <div class="panel">
+    <div class="controls">
+      <button class="primary" onclick="api('/demo/run')">▶ Run demo</button>
+      <button class="danger" onclick="api('/demo/inject')">💣 Inject fault</button>
+      <button onclick="api('/demo/trigger')">🚨 Trigger incident</button>
+      <button onclick="api('/demo/reset')">↺ Reset</button>
+    </div>
+    <h2>Incident timeline · agent thought-chain</h2>
+    <div id="timeline"></div>
+  </div>
+
+  <div class="panel">
+    <h2>Proof of recovery · 5xx error rate</h2>
+    <div class="gate">
+      <div class="big" id="rate">—</div>
+      <div class="badge pending" id="gate">PENDING</div>
+    </div>
+    <svg viewBox="0 0 300 120" preserveAspectRatio="none">
+      <line class="axis" x1="0" y1="119" x2="300" y2="119"/>
+      <line class="zline" x1="0" y1="115" x2="300" y2="115"/>
+      <polyline class="curve" id="curve" points=""/>
+    </svg>
+
+    <h2 style="margin-top:18px">Cloud Run revisions · traffic</h2>
+    <div id="revs"></div>
+
+    <h2 style="margin-top:18px">Decision</h2>
+    <div class="dec" id="decision"><span class="muted">waiting for an incident…</span></div>
+  </div>
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+const tl = $('#timeline');
+let series = [];           // error-rate points
+function api(path){ fetch(path,{method:'POST'}); }
+
+function setDot(id,on){ $(id).classList.toggle('on', !!on); }
+
+function addEvent(ev){
+  const stage = ev.stage || '';
+  if(stage==='RUN_START'){ tl.innerHTML=''; series=[]; drawCurve(); $('#gate').className='badge pending'; $('#gate').textContent='PENDING'; $('#rate').textContent='—'; $('#decision').innerHTML='<span class="muted">analyzing…</span>'; }
+  if(stage==='CONNECTED'){ setDot('#d-sse',true); setBackend(ev.backend); return; }
+
+  const row = document.createElement('div');
+  row.className = 'ev s-'+stage;
+  const t = ev.ts ? new Date(ev.ts*1000).toLocaleTimeString() : '';
+  row.innerHTML = `<span class="stg">${stage}</span><span class="msg">${esc(ev.msg||'')}</span><span class="t">${t}</span>`;
+  tl.appendChild(row); tl.scrollTop = tl.scrollHeight;
+
+  if(stage==='TRIAGED'){ renderRevs(ev.revisions); pushRate(ev.error_rate); }
+  if(stage==='DECISION'){ renderDecision(ev); }
+  if(stage==='ROLLBACK_APPLIED'){ shiftTraffic(); }
+  if(stage==='VERIFYING'){ pushRate(ev.error_rate); }
+  if(stage==='MITIGATED'){ pushRate(0); verified(ev); }
+  if(stage==='FAULT_INJECTED'){ pushRate(1.0); }
+}
+
+function setBackend(b){ if(!b) return; $('#backend').textContent=b; setDot('#d-backend',true); }
+function esc(s){ return (s+'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
+
+function pushRate(r){
+  if(r===undefined||r===null) return;
+  series.push(Number(r));
+  if(series.length>40) series.shift();
+  const pct = (Number(r)*100);
+  $('#rate').textContent = (pct>=0? pct.toFixed(pct<10?1:0) : 0)+'%';
+  $('#rate').style.color = r>0 ? 'var(--red)' : 'var(--green)';
+  drawCurve();
+}
+function drawCurve(){
+  const w=300,h=120, n=series.length;
+  if(n===0){ $('#curve').setAttribute('points',''); return; }
+  const max=Math.max(0.01,...series);
+  const pts = series.map((v,i)=>{
+    const x = n===1? 0 : (i/(n-1))*w;
+    const y = 115 - (v/max)*100;
+    return x.toFixed(1)+','+y.toFixed(1);
+  }).join(' ');
+  const c=$('#curve'); c.setAttribute('points',pts);
+  c.classList.toggle('ok', series[series.length-1]===0);
+}
+function verified(ev){
+  const g=$('#gate'); g.className='badge verified'; g.textContent='✓ VERIFIED RESOLVED';
+}
+function renderRevs(revs){
+  if(!revs) return;
+  const el=$('#revs'); el.innerHTML='';
+  revs.forEach(r=>{
+    const bad = r.name.includes('bad');
+    const d=document.createElement('div');
+    d.className='rev '+(bad?'bad':'good');
+    d.dataset.name=r.name;
+    d.innerHTML=`<div class="row"><span>${r.name}${bad?' ⚠':' ✓'}</span><span>${r.traffic_percent}%</span></div>
+                 <div class="bar"><i style="width:${r.traffic_percent}%"></i></div>`;
+    el.appendChild(d);
+  });
+}
+function shiftTraffic(){
+  document.querySelectorAll('.rev').forEach(d=>{
+    const good = !d.dataset.name.includes('bad');
+    d.querySelector('.row span:last-child').textContent=(good?100:0)+'%';
+    d.querySelector('.bar i').style.width=(good?100:0)+'%';
+  });
+}
+function renderDecision(ev){
+  const src = (ev._source||'').startsWith('gemini') ? `<span class="chip gemini">${ev._source}</span>` : `<span class="chip">${ev._source||'heuristic'}</span>`;
+  const conf = ev.confidence!=null ? Math.round(ev.confidence*100)+'%' : '—';
+  $('#decision').innerHTML =
+    `<div class="act" style="color:${ev.action==='ROLLBACK'?'var(--cyan)':'var(--amber)'}">${ev.action} · <span class="muted">conf ${conf}</span> ${src}</div>
+     <div style="margin-top:6px">${esc(ev.reasoning||'')}</div>`;
+}
+
+// connect SSE
+const es = new EventSource('/events');
+es.onmessage = e => { try{ addEvent(JSON.parse(e.data)); }catch(_){}}
+es.onerror = () => setDot('#d-sse',false);
+fetch('/healthz').then(r=>r.json()).then(j=>{ setBackend(j.backend); setDot('#d-gemini', j.gemini); });
+</script>
+</body>
+</html>

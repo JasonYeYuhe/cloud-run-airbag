@@ -1,86 +1,107 @@
 """Deterministic self-heal state machine.
 
-This is where production actions execute. The LLM (Gemini, via `decide`) is only
-asked to choose an action; it never calls a prod tool directly. Every stage emits
-an auditable event (the "thought-chain" the dashboard will replay).
+Production actions execute here. Gemini (gemini.decide) is asked only to choose an
+action; the state machine validates it and acts. Every stage is published to the
+event bus so the dashboard can replay it as a verifiable thought-chain.
 
-Stages: RECEIVED → TRIAGED → DECISION → ROLLBACK_APPLIED → VERIFYING
-        → MITIGATED → (stretch) FIX_PR  |  OBSERVE/ESCALATED
+Stages: RUN_START → RECEIVED → TRIAGED → DECISION → ROLLBACK_APPLIED → VERIFYING…
+        → MITIGATED  |  OBSERVE → DONE  |  ESCALATED
 """
 from __future__ import annotations
 
 import logging
 import time
 
-from . import config, tools
+from . import config, events, gemini, tools
 
 log = logging.getLogger("airbag.sm")
 
 
 def run_self_heal(incident_id: str, service: str) -> dict:
-    events: list[dict] = []
+    run_events: list[dict] = []
 
     def emit(stage: str, msg: str, **data):
         log.info("[%s] %s %s", stage, msg, data or "")
-        events.append({"stage": stage, "msg": msg, **data})
+        ev = events.publish({"incident_id": incident_id, "service": service,
+                             "stage": stage, "msg": msg, **data})
+        run_events.append(ev)
 
+    emit("RUN_START", f"backend={config.BACKEND} gemini={'on' if gemini.available() else 'off'}")
     emit("RECEIVED", f"incident {incident_id} on {service}")
 
-    # --- TRIAGE: gather evidence ------------------------------------------
+    # --- TRIAGE -----------------------------------------------------------
     revs = tools.list_cloud_run_revisions(service, config.GCP_REGION)
     err = tools.query_error_rate(service, config.GCP_REGION, window_minutes=5)
+    before = dict(err)
     emit("TRIAGED", "collected revisions + error rate",
          error_rate=err.get("error_rate"), revisions=revs.get("revisions"))
 
-    # --- DECISION (TODO: replace heuristic with Gemini responseSchema) -----
-    decision = decide(revs, err)
+    # --- DECISION (Gemini, with deterministic fallback) -------------------
+    decision = gemini.decide(service, revs, err) or _heuristic(revs, err)
+    decision = _validate(decision, revs)
     emit("DECISION", decision["action"], **decision)
     if decision["action"] != "ROLLBACK":
         emit("DONE", "no rollback needed")
-        return {"status": "noop", "incident_id": incident_id, "events": events}
+        return {"status": "noop", "incident_id": incident_id, "events": run_events}
 
-    # --- ROLLBACK: deterministic stop-the-bleeding ------------------------
+    # --- ROLLBACK (deterministic stop-the-bleeding) -----------------------
     target = decision["rollback_revision"]
     result = tools.rollback_traffic_to_revision(service, config.GCP_REGION, target)
     emit("ROLLBACK_APPLIED", f"100% traffic -> {target}", result=result)
 
-    # --- VERIFY: error-rate -> 0 AND synthetic probe ok -------------------
+    # --- VERIFY (error-rate -> 0 AND synthetic probe ok) ------------------
     if not _verify(service, emit):
         emit("ESCALATED", "rollback did not clear errors within budget")
-        return {"status": "escalated", "incident_id": incident_id, "events": events}
-    emit("MITIGATED", "error rate back to zero — recovery proven")
+        return {"status": "escalated", "incident_id": incident_id, "events": run_events}
 
-    # --- FIX PR (stretch, see docs/PLAN.md step 9) ------------------------
+    after = tools.query_error_rate(service, config.GCP_REGION, window_minutes=2)
+    note = gemini.explain_recovery(service, before, after)
+    emit("MITIGATED", note or "error rate back to zero — recovery proven",
+         before=before.get("error_rate"), after=after.get("error_rate"))
+
+    # --- FIX PR (stretch) -------------------------------------------------
     emit("FIX_PR", "stretch: Gemini-authored fix PR + real CI not yet wired")
 
     return {"status": "mitigated", "incident_id": incident_id,
-            "rolled_back_to": target, "events": events}
+            "rolled_back_to": target, "events": run_events}
 
 
-def decide(revs: dict, err: dict) -> dict:
-    """Day-0 deterministic heuristic. Replace with a Gemini structured decision
-    (IncidentDecision schema in agent.py) once the model path is wired."""
+def _heuristic(revs: dict, err: dict) -> dict:
     rs = revs.get("revisions", [])
     serving = next((r for r in rs if r.get("traffic_percent", 0) > 0), None)
     healthy = next((r for r in rs if r.get("traffic_percent", 0) == 0 and r.get("ready")), None)
     if err.get("error_rate", 0) >= config.ERROR_RATE_THRESHOLD and serving and healthy:
         return {"action": "ROLLBACK", "bad_revision": serving["name"],
                 "rollback_revision": healthy["name"], "confidence": 0.9,
-                "evidence": [f"5xx rate {err.get('error_rate')} on {serving['name']}"]}
-    return {"action": "OBSERVE", "confidence": 0.4, "evidence": []}
+                "reasoning": f"5xx rate {err.get('error_rate')} on {serving['name']}; "
+                             f"{healthy['name']} is a healthy prior revision.",
+                "evidence": [f"error_rate={err.get('error_rate')}"], "_source": "heuristic"}
+    return {"action": "OBSERVE", "confidence": 0.4,
+            "reasoning": "no clear bad-revision/healthy-revision pair", "_source": "heuristic"}
 
 
-def _verify(service: str, emit, attempts: int = 6, interval_s: int = 5) -> bool:
+def _validate(decision: dict, revs: dict) -> dict:
+    """Safety gate: only act on a known-good revision above the confidence threshold."""
+    if decision.get("action") != "ROLLBACK":
+        return decision
+    known = {r["name"] for r in revs.get("revisions", []) if r.get("ready")}
+    target = decision.get("rollback_revision")
+    if decision.get("confidence", 0) < config.CONFIDENCE_THRESHOLD or target not in known:
+        return {**decision, "action": "ESCALATE",
+                "reasoning": f"gate failed (confidence/target). {decision.get('reasoning', '')}"}
+    return decision
+
+
+def _verify(service: str, emit) -> bool:
     """Poll until error-rate is zero AND a synthetic probe succeeds (guards the
     zero-traffic trap: error_rate can read 0 simply because nothing is hitting it)."""
-    for i in range(attempts):
+    for i in range(config.VERIFY_ATTEMPTS):
         err = tools.query_error_rate(service, config.GCP_REGION, window_minutes=2)
         probe = tools.synthetic_probe(service)
-        emit("VERIFYING", f"attempt {i + 1}/{attempts}",
+        emit("VERIFYING", f"attempt {i + 1}/{config.VERIFY_ATTEMPTS}",
              error_rate=err.get("error_rate"), total_requests=err.get("total_requests"),
              probe_ok=probe.get("ok"))
         if probe.get("ok") and err.get("error_rate", 1) == 0:
             return True
-        if not config.USE_MOCK:
-            time.sleep(interval_s)
+        time.sleep(config.VERIFY_INTERVAL_S)
     return False

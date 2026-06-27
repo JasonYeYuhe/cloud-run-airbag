@@ -43,17 +43,25 @@ Cloud Monitoring alert ─webhook(token)→ /alerts  (Cloud Run: airbag-agent, F
 | `.github/workflows/` | CI |
 
 ## Status
-🚧 Day 0 — scaffold. See [docs/PLAN.md](docs/PLAN.md) for the day-by-day "delay-bomb rollback" minimal slice.
+✅ **Working local demo** — the full loop (detect → decide → rollback → prove recovery) runs end-to-end over real HTTP with a live dashboard, **no GCP required**. Real Cloud Run path is wired behind a flag. See [docs/PLAN.md](docs/PLAN.md).
 
-## Local dev
+## Run the live demo (no GCP, ~1 min)
 ```bash
-# agent
-cd agent && python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-python -c "import importlib.metadata as m; assert m.version('google-adk').startswith('1.'), 'MUST be ADK 1.x'"
-cp .env.example .env   # fill in, then:
-uvicorn app:app --reload --port 8080   # tools run in MOCK mode by default (no GCP needed)
+./run-local.sh            # boots target-app (:8081) + agent+dashboard (:8080)
+# open http://localhost:8080  →  click "▶ Run demo"
 ```
+You'll watch the agent detect the injected fault, decide, roll Cloud Run traffic back to
+the healthy revision, and prove the 5xx rate hits zero — streamed live as a thought-chain.
+
+## Execution backends (`AIRBAG_BACKEND`)
+| value | what it does | needs |
+|---|---|---|
+| `mock` | in-memory (CI/tests) | nothing |
+| `local` | **real HTTP** against the local target-app; rollback = shift traffic off the faulty revision | nothing (default for the demo) |
+| `gcp` | **real Cloud Run** via `run_v2` + Cloud Monitoring | `gcloud auth` + billing-enabled project |
+
+**Gemini:** set `GEMINI_API_KEY` (AI Studio) to use a real Gemini structured decision;
+without it the agent falls back to a deterministic decision so the demo always runs.
 
 ## License
 MIT © 2026 Jason Ye
