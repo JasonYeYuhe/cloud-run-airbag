@@ -1,8 +1,9 @@
-"""GCP backend — real Cloud Run + Cloud Logging.
+"""GCP backend — real Cloud Run + Cloud Logging. Behind AIRBAG_BACKEND=gcp.
 
-Wired to the verified API shapes (run_v2 traffic split, logging 5xx count). It is
-behind AIRBAG_BACKEND=gcp and untested until `gcloud auth` + a billing-enabled
-project exist — validate against the live project before the demo (see docs/PLAN.md).
+Shapes hardened per code review (Codex + Gemini): real Condition.State enum compare,
+short revision names, region-scoped log filter, post-rollback verify window, business-
+path probe, update_mask on traffic updates. Still validate against a live project
+before the demo (docs/PLAN.md) — this path is untested until `gcloud auth` exists.
 """
 from __future__ import annotations
 
@@ -22,15 +23,19 @@ def _get_service(service: str, region: str):
     return run_v2.ServicesClient().get_service(name=_service_path(service, region))
 
 
+def _short(name: str | None) -> str | None:
+    return name.split("/")[-1] if name else name
+
+
 def list_cloud_run_revisions(service: str, region: str) -> dict:
     from google.cloud import run_v2
 
     svc = _get_service(service, region)
-    traffic = {t.revision: t.percent for t in svc.traffic_statuses if t.revision}
+    traffic = {_short(t.revision): t.percent for t in svc.traffic_statuses if t.revision}
     revs = []
     for r in run_v2.RevisionsClient().list_revisions(parent=_service_path(service, region)):
-        name = r.name.split("/")[-1]
-        ready = any(c.type_ == "Ready" and str(c.state).endswith("CONDITION_SUCCEEDED")
+        name = _short(r.name)
+        ready = any(c.type_ == "Ready" and c.state == run_v2.Condition.State.CONDITION_SUCCEEDED
                     for c in r.conditions)
         revs.append({"name": name, "ready": ready,
                      "traffic_percent": traffic.get(name, 0),
@@ -39,52 +44,59 @@ def list_cloud_run_revisions(service: str, region: str) -> dict:
     return {"service": service, "revisions": revs, "uri": svc.uri}
 
 
-def query_error_rate(service: str, region: str, window_minutes: int = 5) -> dict:
-    """5xx count from Cloud Logging over the window. Coarse rate (0 vs >0) is enough
-    for the recovery gate; refine with Monitoring request_count ratio if needed."""
+def query_error_rate(service: str, region: str, window_minutes: int = 5,
+                     since_epoch: float | None = None) -> dict:
+    """5xx presence from Cloud Logging. `since_epoch` (set during verify) anchors the
+    window at rollback time so we don't keep counting pre-rollback errors. Coarse
+    has-errors gate is enough for recovery; the synthetic probe is the active signal."""
     from google.cloud import logging as cloud_logging
 
-    since = (datetime.datetime.now(datetime.timezone.utc)
-             - datetime.timedelta(minutes=window_minutes)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    if since_epoch:
+        start = datetime.datetime.fromtimestamp(since_epoch, datetime.timezone.utc)
+    else:
+        start = (datetime.datetime.now(datetime.timezone.utc)
+                 - datetime.timedelta(minutes=window_minutes))
     flt = (f'resource.type="cloud_run_revision" '
            f'resource.labels.service_name="{service}" '
-           f'httpRequest.status>=500 timestamp>="{since}"')
+           f'resource.labels.location="{region}" '
+           f'httpRequest.status>=500 timestamp>="{start.strftime("%Y-%m-%dT%H:%M:%SZ")}"')
     client = cloud_logging.Client(project=config.GCP_PROJECT)
-    errs = sum(1 for _ in client.list_entries(filter_=flt, max_results=200))
-    return {"service": service, "error_rate": 1.0 if errs else 0.0, "errors": errs,
-            "total_requests": None, "window_minutes": window_minutes}
+    has_errors = any(True for _ in client.list_entries(
+        filter_=flt, resource_names=[f"projects/{config.GCP_PROJECT}"], max_results=1))
+    return {"service": service, "error_rate": 1.0 if has_errors else 0.0,
+            "errors": int(has_errors), "total_requests": None, "window_minutes": window_minutes}
 
 
-def synthetic_probe(service: str, region: str = "", path: str = "/healthz") -> dict:
+def synthetic_probe(service: str, path: str | None = None) -> dict:
+    path = path or config.PROBE_PATH
     try:
         uri = _get_service(service, config.GCP_REGION).uri
         with httpx.Client(timeout=5.0) as c:
             r = c.get(uri.rstrip("/") + path)
         return {"ok": r.status_code == 200, "path": path, "status": r.status_code}
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         return {"ok": False, "path": path, "status": 0, "error": str(e)}
+
+
+def _set_traffic(service: str, region: str, target):
+    from google.cloud import run_v2
+    svc = _get_service(service, region)
+    svc.traffic = [target]
+    run_v2.ServicesClient().update_service(
+        service=svc, update_mask={"paths": ["traffic"]}).result(timeout=120)
 
 
 def rollback_traffic_to_revision(service: str, region: str, revision: str) -> dict:
     from google.cloud import run_v2
-
-    svc = _get_service(service, region)
-    svc.traffic = [run_v2.TrafficTarget(
+    _set_traffic(service, region, run_v2.TrafficTarget(
         type_=run_v2.TrafficTargetAllocationType.TRAFFIC_TARGET_ALLOCATION_TYPE_REVISION,
-        revision=revision, percent=100)]
-    op = run_v2.ServicesClient().update_service(
-        service=svc, update_mask={"paths": ["traffic"]})
-    op.result()  # block on the long-running operation
+        revision=revision, percent=100))
     return {"status": "success", "service": service, "active_revision": revision}
 
 
 def restore_traffic_to_latest(service: str, region: str) -> dict:
     from google.cloud import run_v2
-
-    svc = _get_service(service, region)
-    svc.traffic = [run_v2.TrafficTarget(
+    _set_traffic(service, region, run_v2.TrafficTarget(
         type_=run_v2.TrafficTargetAllocationType.TRAFFIC_TARGET_ALLOCATION_TYPE_LATEST,
-        percent=100)]
-    run_v2.ServicesClient().update_service(
-        service=svc, update_mask={"paths": ["traffic"]}).result()
+        percent=100))
     return {"status": "success", "service": service, "active_revision": "LATEST"}

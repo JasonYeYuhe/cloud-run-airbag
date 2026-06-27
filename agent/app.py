@@ -44,14 +44,20 @@ def healthz():
 
 
 @app.get("/events")
-async def events_stream():
+async def events_stream(request: Request):
     async def gen():
         idx = 0
+        last_ping = time.time()
         yield f"data: {json.dumps({'stage': 'CONNECTED', 'backend': config.BACKEND})}\n\n"
         while True:
+            if await request.is_disconnected():
+                break
             batch, idx = events.get_since(idx)
             for ev in batch:
                 yield f"data: {json.dumps(ev)}\n\n"
+            if time.time() - last_ping > 15:
+                last_ping = time.time()
+                yield ": ping\n\n"
             await asyncio.sleep(0.25)
 
     return StreamingResponse(gen(), media_type="text/event-stream")

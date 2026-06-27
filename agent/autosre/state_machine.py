@@ -47,14 +47,16 @@ def run_self_heal(incident_id: str, service: str) -> dict:
     # --- ROLLBACK (deterministic stop-the-bleeding) -----------------------
     target = decision["rollback_revision"]
     result = tools.rollback_traffic_to_revision(service, config.GCP_REGION, target)
+    rollback_at = time.time()
     emit("ROLLBACK_APPLIED", f"100% traffic -> {target}", result=result)
 
-    # --- VERIFY (error-rate -> 0 AND synthetic probe ok) ------------------
-    if not _verify(service, emit):
+    # --- VERIFY (error-rate -> 0 AND synthetic probe ok), measured from rollback --
+    if not _verify(service, emit, since_epoch=rollback_at):
         emit("ESCALATED", "rollback did not clear errors within budget")
         return {"status": "escalated", "incident_id": incident_id, "events": run_events}
 
-    after = tools.query_error_rate(service, config.GCP_REGION, window_minutes=2)
+    after = tools.query_error_rate(service, config.GCP_REGION, window_minutes=2,
+                                   since_epoch=rollback_at)
     note = gemini.explain_recovery(service, before, after)
     emit("MITIGATED", note or "error rate back to zero — recovery proven",
          before=before.get("error_rate"), after=after.get("error_rate"))
@@ -92,12 +94,14 @@ def _validate(decision: dict, revs: dict) -> dict:
     return decision
 
 
-def _verify(service: str, emit) -> bool:
+def _verify(service: str, emit, since_epoch: float | None = None) -> bool:
     """Poll until error-rate is zero AND a synthetic probe succeeds (guards the
-    zero-traffic trap: error_rate can read 0 simply because nothing is hitting it)."""
+    zero-traffic trap: error_rate can read 0 simply because nothing is hitting it).
+    `since_epoch` anchors the error window at rollback time (gcp backend)."""
     for i in range(config.VERIFY_ATTEMPTS):
-        err = tools.query_error_rate(service, config.GCP_REGION, window_minutes=2)
-        probe = tools.synthetic_probe(service)
+        err = tools.query_error_rate(service, config.GCP_REGION, window_minutes=2,
+                                     since_epoch=since_epoch)
+        probe = tools.synthetic_probe(service, path=config.PROBE_PATH)
         emit("VERIFYING", f"attempt {i + 1}/{config.VERIFY_ATTEMPTS}",
              error_rate=err.get("error_rate"), total_requests=err.get("total_requests"),
              probe_ok=probe.get("ok"))

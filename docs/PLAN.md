@@ -27,6 +27,16 @@ Full unattended end-to-end loop is high-risk in ~12 days. Ship in this order; ev
 - [ ] `DatabaseSessionService` (Cloud SQL), not InMemory (multi-instance/cold-start loses session). `min-instances≥1`.
 - [ ] Webhook: 200 first, heal async; HMAC/token verify; idempotency on incident id.
 
+## Production hardening (post-demo — flagged by Codex/Gemini review)
+- **Durable idempotency + queue**: replace the in-process `_seen_incidents` set + FastAPI
+  `BackgroundTasks` with a Firestore/Cloud SQL atomic insert + Cloud Tasks/Pub/Sub worker
+  (BackgroundTasks aren't durable — a restart drops in-flight heals; a set isn't shared
+  across Cloud Run instances).
+- **Webhook auth**: require a non-empty token when `BACKEND=gcp`; prefer header/HMAC over a
+  URL-query token (keeps secrets out of logs).
+- **gcp error-rate**: the has-errors gate is coarse; for a true rate use a Cloud Monitoring
+  `request_count` 5xx ratio / log-based metric — validate all filters against the live project.
+
 ## Pre-flight (needs Jason — see chat)
 - [ ] GCP project + **billing enabled** (no student credits; Gemini is pay-as-you-go Tier 1).
 - [ ] Install `gcloud` (+ optionally Docker; Cloud Run can build from source without it).

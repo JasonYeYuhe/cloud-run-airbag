@@ -26,6 +26,9 @@ TARGET_SERVICE = os.getenv("TARGET_SERVICE", "airbag-target")
 # local backend: where the target-app is reachable
 TARGET_BASE_URL = os.getenv("TARGET_BASE_URL", "http://localhost:8081")
 ERROR_SAMPLE_N = int(os.getenv("AIRBAG_ERROR_SAMPLE_N", "12"))
+# probe the business path (not /healthz, which can stay 200 during a fault) so the
+# "verified recovered" signal actually proves the failing endpoint is healthy again.
+PROBE_PATH = os.getenv("AIRBAG_PROBE_PATH", "/api/orders")
 
 # Gemini (AI Studio API key). Empty -> deterministic fallback decision.
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_AI_API_KEY") or ""

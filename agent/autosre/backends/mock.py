@@ -18,7 +18,8 @@ def list_cloud_run_revisions(service: str, region: str) -> dict:
     ]}
 
 
-def query_error_rate(service: str, region: str, window_minutes: int = 5) -> dict:
+def query_error_rate(service: str, region: str, window_minutes: int = 5,
+                     since_epoch: float | None = None) -> dict:
     rate = 0.0 if _STATE["rolled_back"] else 0.12
     return {"service": service, "error_rate": rate, "total_requests": 200,
             "window_minutes": window_minutes}

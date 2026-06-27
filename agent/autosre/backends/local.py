@@ -42,7 +42,8 @@ def list_cloud_run_revisions(service: str, region: str) -> dict:
     ]}
 
 
-def query_error_rate(service: str, region: str, window_minutes: int = 5) -> dict:
+def query_error_rate(service: str, region: str, window_minutes: int = 5,
+                     since_epoch: float | None = None) -> dict:
     errs, total = _sample()
     rate = round(errs / total, 3) if total else 0.0
     return {"service": service, "error_rate": rate, "total_requests": total,

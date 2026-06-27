@@ -5,6 +5,7 @@ LlmAgent as FunctionTools (see agent.py).
 """
 from __future__ import annotations
 
+from . import config
 from .backends import get_backend
 
 
@@ -18,7 +19,8 @@ def list_cloud_run_revisions(service: str, region: str) -> dict:
     return get_backend().list_cloud_run_revisions(service, region)
 
 
-def query_error_rate(service: str, region: str, window_minutes: int = 5) -> dict:
+def query_error_rate(service: str, region: str, window_minutes: int = 5,
+                     since_epoch: float | None = None) -> dict:
     """Return the 5xx error rate and request count over a recent window.
 
     Args:
@@ -26,17 +28,18 @@ def query_error_rate(service: str, region: str, window_minutes: int = 5) -> dict
         region (str): GCP region.
         window_minutes (int): lookback window in minutes.
     """
-    return get_backend().query_error_rate(service, region, window_minutes)
+    return get_backend().query_error_rate(service, region, window_minutes, since_epoch)
 
 
-def synthetic_probe(service: str, path: str = "/healthz") -> dict:
-    """Actively hit the service to confirm it is really serving (zero-traffic guard).
+def synthetic_probe(service: str, path: str | None = None) -> dict:
+    """Actively hit the service to confirm it is really serving the business path
+    (zero-traffic guard + proves the failing endpoint recovered).
 
     Args:
         service (str): Cloud Run service name.
-        path (str): health path to probe.
+        path (str): path to probe (defaults to the business path, not /healthz).
     """
-    return get_backend().synthetic_probe(service, path=path)
+    return get_backend().synthetic_probe(service, path=path or config.PROBE_PATH)
 
 
 def rollback_traffic_to_revision(service: str, region: str, revision: str) -> dict:
