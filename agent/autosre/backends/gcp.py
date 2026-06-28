@@ -71,10 +71,10 @@ def query_error_rate(service: str, region: str, window_minutes: int = 5,
            f'resource.labels.location="{region}" '
            f'httpRequest.status>=500 timestamp>="{start.strftime("%Y-%m-%dT%H:%M:%SZ")}"')
     client = cloud_logging.Client(project=config.GCP_PROJECT)
-    has_errors = any(True for _ in client.list_entries(
-        filter_=flt, resource_names=[f"projects/{config.GCP_PROJECT}"], max_results=1))
-    return {"service": service, "error_rate": 1.0 if has_errors else 0.0,
-            "errors": int(has_errors), "total_requests": None, "window_minutes": window_minutes}
+    errs = sum(1 for _ in client.list_entries(
+        filter_=flt, resource_names=[f"projects/{config.GCP_PROJECT}"], max_results=50))
+    return {"service": service, "error_rate": 1.0 if errs else 0.0,
+            "errors": errs, "total_requests": None, "window_minutes": window_minutes}
 
 
 def synthetic_probe(service: str, path: str | None = None) -> dict:

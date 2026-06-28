@@ -44,10 +44,13 @@ def decide(service: str, revs: dict, err: dict) -> dict | None:
             f"Service: {service}\n"
             f"Error metrics: {json.dumps(err)}\n"
             f"Revisions (newest first): {json.dumps(revs.get('revisions', []))}\n\n"
-            "Decide the safest action. Prefer ROLLBACK only when one revision clearly "
-            "correlates with new 5xx errors AND a previous healthy (ready, 0% traffic) "
-            "revision exists; set rollback_revision to that healthy revision's name. "
-            "Otherwise OBSERVE. Be concise and set confidence honestly."
+            "Decide the safest action. If the revision currently serving traffic has a "
+            "high 5xx error rate (error_rate >= 0.5, or many errors) AND a previous "
+            "healthy (ready, 0% traffic) revision exists, choose ROLLBACK and set "
+            "rollback_revision to that healthy revision's EXACT name. Rolling back is safe "
+            "and reversible, so prefer it whenever the serving revision is clearly failing. "
+            "Choose OBSERVE only if errors are minor or there is no healthy revision to roll "
+            "back to. Be concise."
         )
         resp = _client().models.generate_content(
             model=config.GEMINI_DECISION_MODEL,
