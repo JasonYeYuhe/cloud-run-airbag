@@ -68,3 +68,18 @@ def rollback_traffic_to_revision(service: str, region: str, revision: str) -> di
 
 def restore_traffic_to_latest(service: str, region: str) -> dict:
     return {"status": "success", "service": service, "active_revision": "LATEST"}
+
+
+# --- demo harness: toggle the runtime KeyError fault on the local target-app ---------
+def break_target(service: str, region: str) -> dict:
+    with httpx.Client(timeout=3.0) as c:
+        c.post(_url("/__fault/bug"))
+    return {"status": "success", "service": service,
+            "active_revision": f"{service}-00002-bad", "fault": "bug"}
+
+
+def reset_target(service: str, region: str) -> dict:
+    with httpx.Client(timeout=3.0) as c:
+        c.post(_url("/__fault/off"))
+    return {"status": "success", "service": service,
+            "active_revision": f"{service}-00001-good"}

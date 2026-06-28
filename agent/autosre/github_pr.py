@@ -33,6 +33,16 @@ def open_fix_pr(service: str, error_context: str) -> dict | None:
     repo, path, base = config.GITHUB_REPO, config.FIX_FILE, config.FIX_BASE
     try:
         with httpx.Client(timeout=30.0, headers=_headers()) as c:
+            # Idempotency: if Airbag already has an open fix PR, reuse it instead of opening
+            # a new one. Without this, every heal (incl. repeated demo runs) spams duplicate PRs.
+            opens = c.get(f"{_API}/repos/{repo}/pulls", params={"state": "open", "per_page": 100})
+            if opens.status_code == 200:
+                for pr in opens.json():
+                    if (pr.get("head", {}).get("ref", "") or "").startswith("airbag/fix"):
+                        log.info("fix PR already open, reusing: %s", pr["html_url"])
+                        return {"pr_url": pr["html_url"], "branch": pr["head"]["ref"],
+                                "summary": "existing open fix PR (reused — not re-opened)"}
+
             meta = c.get(f"{_API}/repos/{repo}/contents/{path}", params={"ref": base})
             meta.raise_for_status()
             meta = meta.json()

@@ -47,6 +47,11 @@ TARGET_SERVICE = os.getenv("TARGET_SERVICE", "airbag-target")
 
 # local backend: where the target-app is reachable
 TARGET_BASE_URL = os.getenv("TARGET_BASE_URL", "http://localhost:8081")
+# demo harness (gcp): after 'break' shifts traffic to the bad revision, generate this many
+# requests to create real 5xx in Cloud Logging, then wait this long for ingestion before
+# the agent heals (the one-click /demo/run path). Tunable for the live demo.
+DEMO_BURST_N = int(os.getenv("AIRBAG_DEMO_BURST_N", "30"))
+DEMO_HEAL_DELAY_S = float(os.getenv("AIRBAG_DEMO_HEAL_DELAY_S", "15"))
 ERROR_SAMPLE_N = int(os.getenv("AIRBAG_ERROR_SAMPLE_N", "12"))
 # probe the business path (not /healthz, which can stay 200 during a fault) so the
 # "verified recovered" signal actually proves the failing endpoint is healthy again.

@@ -38,3 +38,16 @@ def rollback_traffic_to_revision(service: str, region: str, revision: str) -> di
 def restore_traffic_to_latest(service: str, region: str) -> dict:
     _STATE["rolled_back"] = False
     return {"status": "success", "service": service, "active_revision": "LATEST"}
+
+
+# --- demo harness ---
+def break_target(service: str, region: str) -> dict:
+    _STATE["rolled_back"] = False  # bad revision serving 100% (error rate 0.12)
+    return {"status": "success", "service": service,
+            "active_revision": f"{service}-00002-bad", "fault": "bug"}
+
+
+def reset_target(service: str, region: str) -> dict:
+    _STATE["rolled_back"] = True  # good revision serving
+    return {"status": "success", "service": service,
+            "active_revision": f"{service}-00001-good"}

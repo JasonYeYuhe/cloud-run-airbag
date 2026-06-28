@@ -61,3 +61,16 @@ def restore_traffic_to_latest(service: str, region: str) -> dict:
         region (str): GCP region.
     """
     return get_backend().restore_traffic_to_latest(service, region)
+
+
+# --- demo harness (not part of the heal; drives the repeatable break/heal/reset demo) ---
+def break_target(service: str, region: str) -> dict:
+    """Put the target into the faulty state (gcp: route 100% to the bad revision carrying
+    FAULT_MODE=bug; local: toggle the runtime KeyError fault)."""
+    return get_backend().break_target(service, region)
+
+
+def reset_target(service: str, region: str) -> dict:
+    """Restore the target to the healthy baseline (gcp: route 100% to the healthy revision;
+    local: clear the runtime fault) so the demo can be run again."""
+    return get_backend().reset_target(service, region)

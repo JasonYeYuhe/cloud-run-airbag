@@ -88,8 +88,8 @@
   <div class="panel">
     <div class="controls">
       <button class="primary" onclick="api('/demo/run')">▶ Run demo</button>
-      <button class="danger" onclick="api('/demo/inject')">💣 Inject fault</button>
-      <button onclick="api('/demo/trigger')">🚨 Trigger incident</button>
+      <button class="danger" onclick="api('/demo/break')">💣 Break</button>
+      <button onclick="api('/demo/heal')">🚑 Heal</button>
       <button onclick="api('/demo/reset')">↺ Reset</button>
       <input id="token" type="password" placeholder="demo token" autocomplete="off" spellcheck="false"
              title="Required to run actions when the service is public (watching is open to all)"
@@ -122,7 +122,8 @@
 <script>
 const $ = s => document.querySelector(s);
 const tl = $('#timeline');
-let series = [];           // error-rate points
+let series = [];                  // error-rate points
+let badRev=null, goodRev=null;   // chosen by the DECISION (gcp revision names are opaque)
 
 // --- demo token (gates action endpoints when the service is public) ---
 const TOKEN_KEY = 'airbag_demo_token';
@@ -144,7 +145,7 @@ function setDot(id,on){ $(id).classList.toggle('on', !!on); }
 
 function addEvent(ev){
   const stage = ev.stage || '';
-  if(stage==='RUN_START'){ tl.innerHTML=''; series=[]; drawCurve(); $('#gate').className='badge pending'; $('#gate').textContent='PENDING'; $('#rate').textContent='—'; $('#decision').innerHTML='<span class="muted">analyzing…</span>'; }
+  if(stage==='RUN_START'){ tl.innerHTML=''; series=[]; badRev=goodRev=null; drawCurve(); $('#gate').className='badge pending'; $('#gate').textContent='PENDING'; $('#rate').textContent='—'; $('#decision').innerHTML='<span class="muted">analyzing…</span>'; }
   if(stage==='CONNECTED'){ setDot('#d-sse',true); setBackend(ev.backend); return; }
 
   const row = document.createElement('div');
@@ -154,7 +155,7 @@ function addEvent(ev){
   tl.appendChild(row); tl.scrollTop = tl.scrollHeight;
 
   if(stage==='TRIAGED'){ renderRevs(ev.revisions); pushRate(ev.error_rate); }
-  if(stage==='DECISION'){ renderDecision(ev); }
+  if(stage==='DECISION'){ badRev=ev.bad_revision||badRev; goodRev=ev.rollback_revision||goodRev; renderDecision(ev); }
   if(stage==='ROLLBACK_APPLIED'){ shiftTraffic(); }
   if(stage==='VERIFYING'){ pushRate(ev.error_rate); }
   if(stage==='MITIGATED'){ pushRate(0); verified(ev); }
@@ -188,11 +189,20 @@ function drawCurve(){
 function verified(ev){
   const g=$('#gate'); g.className='badge verified'; g.textContent='✓ VERIFIED RESOLVED';
 }
+function isBad(name, pct){
+  // names are opaque on gcp: prefer the DECISION's pick, else the serving revision during
+  // an incident (traffic>0), else the local "-bad" naming.
+  if(goodRev) return name!==goodRev;
+  if(badRev)  return name===badRev;
+  if(name.includes('bad')) return true;
+  if(name.includes('good')) return false;
+  return pct>0;
+}
 function renderRevs(revs){
   if(!revs) return;
   const el=$('#revs'); el.innerHTML='';
   revs.forEach(r=>{
-    const bad = r.name.includes('bad');
+    const bad = isBad(r.name, r.traffic_percent);
     const d=document.createElement('div');
     d.className='rev '+(bad?'bad':'good');
     d.dataset.name=r.name;
@@ -203,7 +213,8 @@ function renderRevs(revs){
 }
 function shiftTraffic(){
   document.querySelectorAll('.rev').forEach(d=>{
-    const good = !d.dataset.name.includes('bad');
+    const name=d.dataset.name;
+    const good = goodRev ? (name===goodRev) : !d.className.includes('bad');
     d.querySelector('.row span:last-child').textContent=(good?100:0)+'%';
     d.querySelector('.bar i').style.width=(good?100:0)+'%';
   });

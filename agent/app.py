@@ -21,7 +21,7 @@ import httpx
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, StreamingResponse
 
-from autosre import config, events
+from autosre import config, events, tools
 from autosre.state_machine import run_self_heal
 
 logging.basicConfig(level=logging.INFO)
@@ -75,53 +75,94 @@ def require_demo_token(request: Request) -> None:
         raise HTTPException(status_code=401, detail="invalid or missing demo token")
 
 
-# --- demo harness -----------------------------------------------------------
-def _target(path: str, method: str = "post"):
-    try:
-        with httpx.Client(timeout=3.0) as c:
-            return c.request(method, config.TARGET_BASE_URL.rstrip("/") + path)
-    except Exception as e:  # noqa: BLE001
-        log.warning("target call failed: %s", e)
-        return None
+# --- demo harness: repeatable Break → Heal → Reset (works on local + gcp) -----------
+def _burst(path: str, n: int) -> None:
+    """Generate real traffic (→ real 5xx) against the target so Cloud Logging/Monitoring
+    detect the fault. On gcp 'break' only shifts traffic; these are the failing user
+    requests a real incident would produce."""
+    base = config.TARGET_BASE_URL.rstrip("/")
+    with httpx.Client(timeout=5.0) as c:
+        for _ in range(n):
+            try:
+                c.get(base + path)
+            except Exception:  # noqa: BLE001
+                pass
 
 
-@app.post("/demo/inject", dependencies=[Depends(require_demo_token)])
-def demo_inject():
-    _target("/__fault/bug")
+def _break(background_tasks: BackgroundTasks) -> dict:
+    """Route the target to the bad revision (gcp) / toggle the KeyError (local), then make
+    the 5xx visible to monitoring."""
+    res = tools.break_target(config.TARGET_SERVICE, config.GCP_REGION)
+    if res.get("status") != "success":
+        events.publish({"stage": "ESCALATED", "msg": f"break failed: {res.get('error')}",
+                        "service": config.TARGET_SERVICE})
+        return res
     events.publish({"stage": "FAULT_INJECTED",
-                    "msg": "bad revision now raises KeyError on /api/orders → HTTP 500",
+                    "msg": f"bad revision {res.get('active_revision')} serving 100% — "
+                           f"KeyError on {config.PROBE_PATH} → HTTP 500",
                     "service": config.TARGET_SERVICE})
-    return {"status": "fault injected"}
+    if config.BACKEND == "gcp":
+        background_tasks.add_task(_burst, config.PROBE_PATH, config.DEMO_BURST_N)
+    return res
 
 
-@app.post("/demo/reset", dependencies=[Depends(require_demo_token)])
-def demo_reset():
-    _target("/__fault/off")
-    return {"status": "fault cleared"}
+@app.post("/demo/break", dependencies=[Depends(require_demo_token)])
+def demo_break(background_tasks: BackgroundTasks):
+    return _break(background_tasks)
 
 
-@app.post("/demo/trigger", dependencies=[Depends(require_demo_token)])
-def demo_trigger(background_tasks: BackgroundTasks):
+@app.post("/demo/heal", dependencies=[Depends(require_demo_token)])
+def demo_heal(background_tasks: BackgroundTasks):
     incident_id = f"inc-{uuid.uuid4().hex[:8]}"
     background_tasks.add_task(run_self_heal, incident_id, config.TARGET_SERVICE)
     return {"status": "accepted", "incident_id": incident_id}
 
 
+@app.post("/demo/reset", dependencies=[Depends(require_demo_token)])
+def demo_reset():
+    res = tools.reset_target(config.TARGET_SERVICE, config.GCP_REGION)
+    events.publish({"stage": "DONE",
+                    "msg": f"reset → healthy revision {res.get('active_revision')} serving 100%",
+                    "service": config.TARGET_SERVICE})
+    return res
+
+
 @app.post("/demo/run", dependencies=[Depends(require_demo_token)])
 def demo_run(background_tasks: BackgroundTasks):
-    """One-click demo: inject a fault, then trigger the self-heal a moment later."""
-    _target("/__fault/bug")
+    """One-click demo: break (route to bad revision + generate 5xx), then heal after a
+    short delay — gcp needs ~log-ingestion time before the agent can detect the 5xx."""
+    res = tools.break_target(config.TARGET_SERVICE, config.GCP_REGION)
+    if res.get("status") != "success":
+        events.publish({"stage": "ESCALATED", "msg": f"break failed: {res.get('error')}",
+                        "service": config.TARGET_SERVICE})
+        return res
     events.publish({"stage": "FAULT_INJECTED",
-                    "msg": "bad revision now raises KeyError on /api/orders → HTTP 500",
+                    "msg": f"bad revision {res.get('active_revision')} serving 100% — "
+                           f"KeyError on {config.PROBE_PATH} → HTTP 500",
                     "service": config.TARGET_SERVICE})
     incident_id = f"inc-{uuid.uuid4().hex[:8]}"
+    is_gcp = config.BACKEND == "gcp"
 
-    def delayed():
-        time.sleep(1.2)
+    def break_then_heal():
+        if is_gcp:
+            _burst(config.PROBE_PATH, config.DEMO_BURST_N)
+        time.sleep(config.DEMO_HEAL_DELAY_S if is_gcp else 1.2)
         run_self_heal(incident_id, config.TARGET_SERVICE)
 
-    background_tasks.add_task(delayed)
-    return {"status": "accepted", "incident_id": incident_id}
+    background_tasks.add_task(break_then_heal)
+    return {"status": "accepted", "incident_id": incident_id,
+            "broke_to": res.get("active_revision")}
+
+
+# legacy aliases (scripts/gcp-demo.sh + older docs)
+@app.post("/demo/inject", dependencies=[Depends(require_demo_token)])
+def demo_inject(background_tasks: BackgroundTasks):
+    return _break(background_tasks)
+
+
+@app.post("/demo/trigger", dependencies=[Depends(require_demo_token)])
+def demo_trigger(background_tasks: BackgroundTasks):
+    return demo_heal(background_tasks)
 
 
 # --- production webhooks -----------------------------------------------------

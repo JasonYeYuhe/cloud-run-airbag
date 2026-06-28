@@ -110,3 +110,54 @@ def restore_traffic_to_latest(service: str, region: str) -> dict:
         type_=run_v2.TrafficTargetAllocationType.TRAFFIC_TARGET_ALLOCATION_TYPE_LATEST,
         percent=100))
     return {"status": "success", "service": service, "active_revision": "LATEST"}
+
+
+# --- demo harness: drive break/reset by routing traffic between revisions -----------
+_FAULT_VALUES = {"bug", "http500", "delay_bomb"}
+
+
+def _revision_env(rev) -> dict:
+    """FAULT_MODE etc. baked into a revision's container env (skips secret refs)."""
+    env: dict = {}
+    for c in getattr(rev, "containers", []) or []:
+        for e in getattr(c, "env", []) or []:
+            if e.name:
+                env[e.name] = e.value
+    return env
+
+
+def _ready_revisions_newest_first(service: str, region: str):
+    from google.cloud import run_v2
+    revs = list(run_v2.RevisionsClient().list_revisions(parent=_service_path(service, region)))
+    ready = [r for r in revs if any(
+        c.type_ == "Ready" and c.state == run_v2.Condition.State.CONDITION_SUCCEEDED
+        for c in r.conditions)]
+    ready.sort(key=lambda r: r.create_time.isoformat() if r.create_time else "", reverse=True)
+    return ready
+
+
+def break_target(service: str, region: str) -> dict:
+    """Route 100% traffic to the bad revision. Prefer FAULT_MODE=bug (the KeyError the
+    fix-PR repairs) over any other fault revision, so the demo is the unified fault."""
+    ready = _ready_revisions_newest_first(service, region)
+    bug = next((r for r in ready if _revision_env(r).get("FAULT_MODE") == "bug"), None)
+    bad = bug or next((r for r in ready if _revision_env(r).get("FAULT_MODE") in _FAULT_VALUES), None)
+    if not bad:
+        return {"status": "error", "service": service,
+                "error": "no fault-carrying revision found; deploy one with "
+                         "FAULT_MODE=bug --no-traffic (see deploy.sh / scripts/gcp-demo.sh)"}
+    name = _short(bad.name)
+    rollback_traffic_to_revision(service, region, name)
+    return {"status": "success", "service": service, "active_revision": name,
+            "fault": _revision_env(bad).get("FAULT_MODE")}
+
+
+def reset_target(service: str, region: str) -> dict:
+    """Route 100% traffic to the newest healthy (no-fault) revision."""
+    ready = _ready_revisions_newest_first(service, region)
+    good = next((r for r in ready if _revision_env(r).get("FAULT_MODE") not in _FAULT_VALUES), None)
+    if not good:
+        return {"status": "error", "service": service, "error": "no healthy revision found"}
+    name = _short(good.name)
+    rollback_traffic_to_revision(service, region, name)
+    return {"status": "success", "service": service, "active_revision": name}

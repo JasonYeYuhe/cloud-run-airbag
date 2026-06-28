@@ -27,8 +27,11 @@ gcloud projects add-iam-policy-binding "$PROJECT" --member="serviceAccount:${COM
 gcloud iam service-accounts add-iam-policy-binding "$COMPUTE_SA" \
   --member="serviceAccount:${SA}" --role="roles/iam.serviceAccountUser" -q >/dev/null
 
-echo "== deploy target-app =="
-gcloud run deploy airbag-target --source "$ROOT/target-app" --region "$REGION" --allow-unauthenticated -q
+echo "== deploy target-app (healthy baseline; FAULT_MODE=off so a redeploy is never faulty) =="
+# Explicit FAULT_MODE=off: scripts/gcp-demo-setup.sh later flips the service spec to
+# FAULT_MODE=bug for the bad revision, so a plain redeploy must re-assert healthy.
+gcloud run deploy airbag-target --source "$ROOT/target-app" --region "$REGION" \
+  --allow-unauthenticated --update-env-vars FAULT_MODE=off -q
 TURL="$(gcloud run services describe airbag-target --region "$REGION" --format='value(status.url)')"
 
 echo "== demo token (gates /demo/* once public) -> Secret Manager =="
