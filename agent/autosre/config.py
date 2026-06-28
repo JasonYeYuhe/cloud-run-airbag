@@ -35,6 +35,11 @@ USE_MOCK = BACKEND == "mock"
 
 WEBHOOK_TOKEN = os.getenv("AIRBAG_WEBHOOK_TOKEN", "")
 SENTRY_SECRET = os.getenv("SENTRY_WEBHOOK_SECRET", "")
+# Shared token gating the /demo/* ACTION endpoints (inject/break/heal/trigger/run/reset).
+# Empty -> demo endpoints are open (convenient for the local demo). Set in prod so the
+# public dashboard can be watched read-only, but only an operator holding the token can
+# trigger Gemini + GitHub actions (prevents PR/cost spam once the service is public).
+DEMO_TOKEN = os.getenv("AIRBAG_DEMO_TOKEN", "")
 
 GCP_PROJECT = os.getenv("GOOGLE_CLOUD_PROJECT", "")
 GCP_REGION = os.getenv("GOOGLE_CLOUD_LOCATION", "asia-northeast1")

@@ -18,7 +18,7 @@ import uuid
 from pathlib import Path
 
 import httpx
-from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, StreamingResponse
 
 from autosre import config, events
@@ -63,6 +63,18 @@ async def events_stream(request: Request):
     return StreamingResponse(gen(), media_type="text/event-stream")
 
 
+# --- demo auth --------------------------------------------------------------
+def require_demo_token(request: Request) -> None:
+    """Gate the /demo/* ACTION endpoints behind a shared token (header preferred,
+    ?token= fallback for one-click deep links). When AIRBAG_DEMO_TOKEN is unset the
+    endpoints are open (local demo); the read-only dashboard + SSE are always public."""
+    if not config.DEMO_TOKEN:
+        return
+    supplied = request.headers.get("x-airbag-demo-token") or request.query_params.get("token", "")
+    if not (supplied and hmac.compare_digest(supplied, config.DEMO_TOKEN)):
+        raise HTTPException(status_code=401, detail="invalid or missing demo token")
+
+
 # --- demo harness -----------------------------------------------------------
 def _target(path: str, method: str = "post"):
     try:
@@ -73,7 +85,7 @@ def _target(path: str, method: str = "post"):
         return None
 
 
-@app.post("/demo/inject")
+@app.post("/demo/inject", dependencies=[Depends(require_demo_token)])
 def demo_inject():
     _target("/__fault/http500")
     events.publish({"stage": "FAULT_INJECTED", "msg": "bad revision now returns 5xx on /api/orders",
@@ -81,20 +93,20 @@ def demo_inject():
     return {"status": "fault injected"}
 
 
-@app.post("/demo/reset")
+@app.post("/demo/reset", dependencies=[Depends(require_demo_token)])
 def demo_reset():
     _target("/__fault/off")
     return {"status": "fault cleared"}
 
 
-@app.post("/demo/trigger")
+@app.post("/demo/trigger", dependencies=[Depends(require_demo_token)])
 def demo_trigger(background_tasks: BackgroundTasks):
     incident_id = f"inc-{uuid.uuid4().hex[:8]}"
     background_tasks.add_task(run_self_heal, incident_id, config.TARGET_SERVICE)
     return {"status": "accepted", "incident_id": incident_id}
 
 
-@app.post("/demo/run")
+@app.post("/demo/run", dependencies=[Depends(require_demo_token)])
 def demo_run(background_tasks: BackgroundTasks):
     """One-click demo: inject a fault, then trigger the self-heal a moment later."""
     _target("/__fault/http500")

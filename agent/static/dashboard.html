@@ -90,6 +90,9 @@
       <button class="danger" onclick="api('/demo/inject')">💣 Inject fault</button>
       <button onclick="api('/demo/trigger')">🚨 Trigger incident</button>
       <button onclick="api('/demo/reset')">↺ Reset</button>
+      <input id="token" type="password" placeholder="demo token" autocomplete="off" spellcheck="false"
+             title="Required to run actions when the service is public (watching is open to all)"
+             style="font:inherit;font-size:12px;color:var(--txt);background:#0c121a;border:1px solid var(--line);border-radius:9px;padding:9px 10px;width:120px;margin-left:auto"/>
     </div>
     <h2>Incident timeline · agent thought-chain</h2>
     <div id="timeline"></div>
@@ -119,7 +122,22 @@
 const $ = s => document.querySelector(s);
 const tl = $('#timeline');
 let series = [];           // error-rate points
-function api(path){ fetch(path,{method:'POST'}).catch(()=>{}); setTimeout(()=>{ if(!live) playScript(); }, 500); }
+
+// --- demo token (gates action endpoints when the service is public) ---
+const TOKEN_KEY = 'airbag_demo_token';
+function getToken(){ return localStorage.getItem(TOKEN_KEY) || ''; }
+function setToken(t){ if(t==null) return; localStorage.setItem(TOKEN_KEY, t.trim()); const f=$('#token'); if(f) f.value=t.trim(); }
+function api(path){
+  const headers = {}; const tok = getToken();
+  if(tok) headers['x-airbag-demo-token'] = tok;
+  fetch(path,{method:'POST',headers}).then(r=>{
+    if(r.status===401){
+      const t = prompt('This demo is protected. Enter the Airbag demo token to run actions:', getToken());
+      if(t){ setToken(t); api(path); }   // retry once with the new token
+    }
+  }).catch(()=>{});
+  setTimeout(()=>{ if(!live) playScript(); }, 500);
+}
 
 function setDot(id,on){ $(id).classList.toggle('on', !!on); }
 
@@ -203,6 +221,15 @@ const es = new EventSource('/events');
 es.onmessage = e => { try{ const d=JSON.parse(e.data); if(d.stage && d.stage!=='CONNECTED') live=true; addEvent(d); }catch(_){}}
 es.onerror = () => setDot('#d-sse',false);
 fetch('/health').then(r=>r.json()).then(j=>{ setBackend(j.backend); setDot('#d-gemini', j.gemini); }).catch(()=>{});
+
+// token field: hydrate from ?token= deep-link (then strip it) or localStorage; persist on edit
+(function initToken(){
+  const u = new URL(location.href);
+  if(u.searchParams.get('token')){ setToken(u.searchParams.get('token')); u.searchParams.delete('token'); history.replaceState(null,'',u); }
+  const f = $('#token'); if(!f) return;
+  f.value = getToken();
+  f.addEventListener('change', e => setToken(e.target.value));
+})();
 
 // ---- offline self-playing demo (no server needed; also a graceful fallback) ----
 const REVS=[{name:'airbag-target-00002-bad',ready:true,traffic_percent:100},
