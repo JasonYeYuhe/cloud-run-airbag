@@ -2,8 +2,9 @@
 
 Shapes hardened per code review (Codex + Gemini): real Condition.State enum compare,
 short revision names, region-scoped log filter, post-rollback verify window, business-
-path probe, update_mask on traffic updates. Still validate against a live project
-before the demo (docs/PLAN.md) — this path is untested until `gcloud auth` exists.
+path probe, update_mask on traffic updates. Verified end-to-end against the live project
+(airbag-hack-260628 / asia-northeast1): detect → rollback → prove recovery → fix PR →
+verify-and-undo, all on real Cloud Run.
 """
 from __future__ import annotations
 

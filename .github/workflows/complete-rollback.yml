@@ -22,7 +22,8 @@ on:
 
 jobs:
   deploy-and-close:
-    if: ${{ vars.AIRBAG_AGENT_URL != '' }}
+    # Gate on ALL required config so a partial setup stays a skipped (green) job, not a red one.
+    if: ${{ vars.AIRBAG_AGENT_URL != '' && vars.GCP_WIF_PROVIDER != '' && vars.GCP_DEPLOY_SA != '' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -35,17 +36,24 @@ jobs:
           workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
           service_account: ${{ vars.GCP_DEPLOY_SA }}
       - uses: google-github-actions/setup-gcloud@v2
-      - name: Deploy the fix to Cloud Run
+      - name: Deploy the fix to Cloud Run (NO traffic — Airbag verifies before shifting)
         id: deploy
         run: |
+          # --no-traffic: the new revision is created but the safe rolled-back revision keeps
+          # serving. Airbag (complete_rollback) shifts traffic to it only AFTER verifying it,
+          # and compensates back if it's unhealthy — traffic never moves to an unverified fix.
           gcloud run deploy "${{ vars.TARGET_SERVICE }}" --source target-app \
             --region "${{ vars.GCP_REGION }}" --allow-unauthenticated \
-            --update-env-vars FAULT_MODE=off -q
-          REV="$(gcloud run services describe "${{ vars.TARGET_SERVICE }}" \
+            --update-env-vars FAULT_MODE=off --no-traffic -q
+          # use the dispatch input if given, else the just-deployed revision (either/or — no concat)
+          REV="${{ github.event.inputs.revision }}"
+          [ -z "$REV" ] && REV="$(gcloud run services describe "${{ vars.TARGET_SERVICE }}" \
             --region "${{ vars.GCP_REGION }}" --format='value(status.latestCreatedRevisionName)')"
-          echo "revision=${{ github.event.inputs.revision || '' }}${REV}" >> "$GITHUB_OUTPUT"
+          echo "revision=$REV" >> "$GITHUB_OUTPUT"
       - name: Ask Airbag to verify the fix + undo the temporary rollback
         run: |
+          # /internal/complete-rollback is synchronous: 2xx = transaction CLOSED; non-2xx =
+          # compensated / manual intervention -> curl -f fails the job so the team is alerted.
           curl -fsS -X POST "${{ vars.AIRBAG_AGENT_URL }}/internal/complete-rollback" \
             -H "x-airbag-token: ${{ secrets.AIRBAG_WEBHOOK_TOKEN }}" \
             -H "content-type: application/json" \

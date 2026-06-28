@@ -34,15 +34,22 @@ gcloud run deploy airbag-target --source "$ROOT/target-app" --region "$REGION" \
   --allow-unauthenticated --update-env-vars FAULT_MODE=off -q
 TURL="$(gcloud run services describe airbag-target --region "$REGION" --format='value(status.url)')"
 
-echo "== demo token (gates /demo/* once public) -> Secret Manager =="
-# Low-sensitivity shared token so the public dashboard can be watched read-only but only
-# an operator can trigger Gemini/GitHub actions. Reuse agent/.env value or generate one.
+echo "== demo + webhook tokens -> Secret Manager (never hardcode in this public repo) =="
+# demo token: gates /demo/* once public (operator can trigger; public dashboard is watch-only).
+# webhook token: gates /alerts/* and /internal/complete-rollback (Cloud Monitoring + the fix CI).
+# Both are real secrets — reuse agent/.env values or generate, store in Secret Manager.
+mk_secret() {  # name, value
+  printf '%s' "$2" | gcloud secrets create "$1" --data-file=- 2>/dev/null \
+    || printf '%s' "$2" | gcloud secrets versions add "$1" --data-file=-
+  gcloud secrets add-iam-policy-binding "$1" --member="serviceAccount:${SA}" \
+    --role=roles/secretmanager.secretAccessor -q >/dev/null
+}
 DEMO_TOKEN="$(grep '^AIRBAG_DEMO_TOKEN=' "$ROOT/agent/.env" 2>/dev/null | cut -d= -f2-)"
 [ -z "$DEMO_TOKEN" ] && DEMO_TOKEN="$(openssl rand -hex 16)"
-printf '%s' "$DEMO_TOKEN" | gcloud secrets create airbag-demo-secret --data-file=- 2>/dev/null \
-  || printf '%s' "$DEMO_TOKEN" | gcloud secrets versions add airbag-demo-secret --data-file=-
-gcloud secrets add-iam-policy-binding airbag-demo-secret --member="serviceAccount:${SA}" \
-  --role=roles/secretmanager.secretAccessor -q >/dev/null
+WEBHOOK_TOKEN="$(grep '^AIRBAG_WEBHOOK_TOKEN=' "$ROOT/agent/.env" 2>/dev/null | cut -d= -f2-)"
+[ -z "$WEBHOOK_TOKEN" ] && WEBHOOK_TOKEN="$(openssl rand -hex 24)"
+mk_secret airbag-demo-secret "$DEMO_TOKEN"
+mk_secret airbag-webhook-secret "$WEBHOOK_TOKEN"
 
 echo "== gemini key -> Secret Manager =="
 if [ -f "$ROOT/agent/.env" ]; then
@@ -53,8 +60,8 @@ if [ -f "$ROOT/agent/.env" ]; then
     --role=roles/secretmanager.secretAccessor -q >/dev/null
 fi
 
-ENVS="AIRBAG_BACKEND=gcp,GOOGLE_CLOUD_PROJECT=${PROJECT},GOOGLE_CLOUD_LOCATION=${REGION},TARGET_SERVICE=airbag-target,TARGET_BASE_URL=${TURL},AIRBAG_WEBHOOK_TOKEN=airbag-demo-token,AIRBAG_VERIFY_INTERVAL_S=4,AIRBAG_VERIFY_ATTEMPTS=8"
-SECRETS="GEMINI_API_KEY=airbag-gemini-key:latest,AIRBAG_DEMO_TOKEN=airbag-demo-secret:latest"
+ENVS="AIRBAG_BACKEND=gcp,GOOGLE_CLOUD_PROJECT=${PROJECT},GOOGLE_CLOUD_LOCATION=${REGION},TARGET_SERVICE=airbag-target,TARGET_BASE_URL=${TURL},AIRBAG_VERIFY_INTERVAL_S=4,AIRBAG_VERIFY_ATTEMPTS=8"
+SECRETS="GEMINI_API_KEY=airbag-gemini-key:latest,AIRBAG_DEMO_TOKEN=airbag-demo-secret:latest,AIRBAG_WEBHOOK_TOKEN=airbag-webhook-secret:latest"
 
 # Optional fix-PR slow path: use a FINE-GRAINED, repo-scoped GitHub token (Contents +
 # Pull requests: write). Never put a broad classic token in this public service.
@@ -80,4 +87,6 @@ AURL="$(gcloud run services describe airbag-agent --region "$REGION" --format='v
 echo
 echo "Agent:           $AURL"
 echo "Target:          $TURL"
-echo "Operator link:   ${AURL}/?token=${DEMO_TOKEN}   (pre-fills the demo token; keep it private)"
+echo "Dashboard:       open $AURL and paste the demo token (in agent/.env, or Secret Manager"
+echo "                 airbag-demo-secret) into the token field — or use ${AURL}/?token=<demo-token>"
+# (token intentionally not printed here so it doesn't land in shared CI/terminal logs)

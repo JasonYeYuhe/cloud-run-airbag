@@ -116,6 +116,15 @@ def complete_rollback(service: str, fix_revision: str | None = None,
         run_events.append(ev)
 
     closed = False
+    # Cap compensation retries: after MAX failed undos, stop (traffic is already on the safe
+    # revision) and require a human — don't keep re-shifting traffic on every re-trigger.
+    if rec.get("attempts", 0) >= config.MAX_UNDO_ATTEMPTS:
+        emit("MANUAL_INTERVENTION",
+             f"giving up after {rec.get('attempts')} failed undo attempts — traffic stays on the "
+             f"safe revision {rec.get('rolled_back_to')}; needs a human")
+        pending.clear_pending(service)  # terminal: no further auto-undo
+        return {"status": "manual_intervention", "reason": "max attempts", "terminal": True,
+                "incident_id": incident_id, "events": run_events}
     try:
         emit("COMPLETE_ROLLBACK",
              f"fix reported (revision={fix_revision or 'auto'}, sha={git_sha or '—'}); "
@@ -144,28 +153,35 @@ def complete_rollback(service: str, fix_revision: str | None = None,
         # Compensating action: route back to the known-safe rolled-back revision.
         safe = rec.get("rolled_back_to")
         tools.rollback_traffic_to_revision(service, config.GCP_REGION, safe)
+        attempts = pending.bump_attempts(service)
         emit("MANUAL_INTERVENTION",
-             f"fix revision {candidate} failed verification — compensated: traffic back on "
-             f"safe revision {safe}")
-        return {"status": "compensated", "safe_revision": safe,
+             f"fix revision {candidate} failed verification (attempt {attempts}/"
+             f"{config.MAX_UNDO_ATTEMPTS}) — compensated: traffic back on safe revision {safe}")
+        return {"status": "compensated", "safe_revision": safe, "attempts": attempts,
                 "incident_id": incident_id, "events": run_events}
     finally:
         pending.end_complete(service, closed=closed)
 
 
 def _select_fix_revision(revs: dict, rec: dict, fix_revision: str | None) -> str | None:
-    """The fix is either the exact revision CI deployed, or the newest READY revision created
-    after the rollback that isn't the bad or the rolled-back-to revision."""
+    """The fix is either the exact revision CI deployed, or the newest READY revision that isn't
+    the bad or rolled-back-to revision — preferring one created after the rollback (clock-skew
+    tolerant), but falling back to the newest eligible so a legit fix is never falsely rejected
+    over a few seconds of skew (verification is the real safety gate either way)."""
     ready = {r["name"] for r in revs.get("revisions", []) if r.get("ready")}
     bad, safe = rec.get("bad_revision"), rec.get("rolled_back_to")
-    if fix_revision:
+    if fix_revision:  # CI told us exactly which revision is the fix
         return fix_revision if (fix_revision in ready and fix_revision not in (bad, safe)) else None
+    eligible = [r for r in revs.get("revisions", [])
+                if r.get("ready") and r["name"] not in (bad, safe)]
+    eligible.sort(key=lambda r: _epoch(r.get("create_time")), reverse=True)
     rollback_at = rec.get("rollback_at_epoch") or 0.0
-    cands = [r for r in revs.get("revisions", [])
-             if r.get("ready") and r["name"] not in (bad, safe)
-             and _epoch(r.get("create_time")) > rollback_at]
-    cands.sort(key=lambda r: _epoch(r.get("create_time")), reverse=True)
-    return cands[0]["name"] if cands else None
+    after = [r for r in eligible if _epoch(r.get("create_time")) > rollback_at - _SKEW_S]
+    chosen = after or eligible
+    return chosen[0]["name"] if chosen else None
+
+
+_SKEW_S = 120.0  # clock-skew tolerance for "created after the rollback"
 
 
 def _epoch(iso: str | None) -> float:

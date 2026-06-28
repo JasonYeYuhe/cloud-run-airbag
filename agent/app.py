@@ -18,8 +18,9 @@ import uuid
 from pathlib import Path
 
 import httpx
-from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, StreamingResponse
+from starlette.concurrency import run_in_threadpool
 
 from autosre import config, events, tools
 from autosre.state_machine import complete_rollback, run_self_heal
@@ -184,20 +185,24 @@ def require_internal_token(request: Request) -> None:
         raise HTTPException(status_code=401, detail="invalid token")
 
 
-@app.post("/internal/complete-rollback", status_code=202,
-          dependencies=[Depends(require_internal_token)])
-async def internal_complete_rollback(request: Request, background_tasks: BackgroundTasks):
-    """Called by the fix PR's GitHub Action after it deploys the fix. Body (all optional):
-    {service, revision, git_sha, pr_url}. Verifies the fix is healthy before restoring
-    traffic; compensates on failure. Idempotent (a duplicate call is a no-op)."""
+@app.post("/internal/complete-rollback", dependencies=[Depends(require_internal_token)])
+async def internal_complete_rollback(request: Request, response: Response):
+    """Called by the fix PR's GitHub Action after it deploys the fix (--no-traffic). Body (all
+    optional): {service, revision, git_sha, pr_url}. Verifies the fix is healthy BEFORE shifting
+    production traffic to it; compensates back to the safe revision on failure. Runs synchronously
+    so CI sees the real outcome: 2xx = CLOSED (or idempotent no-op); 422 = compensated / manual
+    intervention. Idempotent — a duplicate call while one is running, or after close, is a no-op."""
     try:
         body = await request.json()
     except Exception:  # noqa: BLE001
         body = {}
     service = body.get("service") or config.TARGET_SERVICE
-    background_tasks.add_task(complete_rollback, service, body.get("revision"),
-                             body.get("git_sha"), body.get("pr_url"))
-    return {"status": "accepted", "service": service}
+    result = await run_in_threadpool(complete_rollback, service, body.get("revision"),
+                                     body.get("git_sha"), body.get("pr_url"))
+    response.status_code = {"closed": 200, "noop": 200,
+                            "compensated": 422, "manual_intervention": 422}.get(
+                                result.get("status"), 200)
+    return result
 
 
 # --- production webhooks -----------------------------------------------------

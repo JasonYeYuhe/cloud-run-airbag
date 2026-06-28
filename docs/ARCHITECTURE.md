@@ -18,7 +18,7 @@ RECEIVED → TRIAGED → ADK(triage→decide) → DECISION
 ## Components
 | Concern | Tech | Notes |
 |---|---|---|
-| Webhook + orchestration | FastAPI on Cloud Run | 200-then-async; token/HMAC; idempotent |
+| Webhook + orchestration | FastAPI on Cloud Run | 202-then-async; token/HMAC; idempotent |
 | Decision brain | ADK 1.x `SequentialAgent` (triage→decide), runs at decision time; triage calls the Cloud Run/Monitoring tools via ADK function-calling; decide emits Gemini `responseSchema` | LLM only decides; never executes prod. Falls back to a direct Gemini call then a heuristic (`adk_brain.py`) |
 | Stop-the-bleeding | `google-cloud-run` `run_v2` traffic split | explicit revision, `.result()` the op |
 | Proof of recovery | Cloud Logging 5xx scan + synthetic **business-path** (`/api/orders`) probe | zero-traffic guard (probe, not `/healthz`, which can stay 200 during the fault) |

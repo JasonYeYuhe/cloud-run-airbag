@@ -11,7 +11,7 @@ Full unattended end-to-end loop is high-risk in ~12 days. Ship in this order; ev
 | 2 | **Before writing code**: manually `gcloud run services update-traffic SVC --to-revisions <good>=100` and watch 5xx drop. This is the foundation — make it go red→green once by hand. | low |
 | 3 | `rollback_traffic_to_revision` as a Python tool (`run_v2`: list → pick prior Ready → `update_service` 100% → `.result()`) | low |
 | 4 | PromQL alert policy on `run.googleapis.com/request_count` 5xx ratio (duration = 2×interval); trigger bad revision, confirm incident `open` | medium |
-| 5 | `webhook_tokenauth` channel → `/alerts` (200-then-async, token, idempotent) | medium |
+| 5 | `webhook_tokenauth` channel → `/alerts` (202-then-async, token, idempotent) | medium |
 | 6 | **Minimal autonomous loop**: alert `open` → rollback → persist "rolled back, pending revert". ← highest-impact, lowest-risk demo core | medium |
 | 7 | Wrap in ADK `SequentialAgent` + Gemini structured decision; `adk`-on-Cloud-Run deploy, min-instances≥1 | medium |
 | 8 | Close loop: on incident `closed`, re-check metrics (zero-traffic guard) → `--to-latest` revert | high |
@@ -47,6 +47,6 @@ Reproduce with `./deploy.sh`. Real deploy gotchas hit & fixed (all encoded in de
 - **`LATEST` traffic target** has `revision=''` → resolve it to the newest revision when reading traffic %.
 
 ## Still open (stretch)
-- [x] **Gemini fix-PR + CI loop** (the `FIX_PR` stage) — after rollback, Gemini reads the buggy file, opens a real fix PR, CI passes (e.g. PR #1). On the *deployed* agent, enable with a **fine-grained repo-scoped** GitHub token (not the broad classic token).
+- [x] **Gemini fix-PR + CI loop** (the `FIX_PR` stage) — after rollback, Gemini reads the buggy file, opens a real fix PR, CI passes (e.g. PR #3). Runs on the *deployed* agent with a **fine-grained repo-scoped** GitHub token (Secret Manager); idempotent (reuses an open `airbag/fix` PR).
 - [x] **Alert-driven autonomous trigger** — real Cloud Monitoring 5xx alert → webhook → agent self-heal, no human (`./infra/alert-setup.sh`). Verified.
 - [ ] Repeatable one-click cloud demo reset (currently `./scripts/gcp-demo.sh` re-breaks the target).

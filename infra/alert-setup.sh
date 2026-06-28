@@ -6,7 +6,10 @@ set -euo pipefail
 : "${PROJECT:?set PROJECT=your-gcp-project}"
 REGION="${REGION:-asia-northeast1}"
 SERVICE="${TARGET_SERVICE:-airbag-target}"
-TOKEN="${AIRBAG_WEBHOOK_TOKEN:-airbag-demo-token}"
+# Use the real webhook token (Secret Manager), NOT a hardcoded literal — the channel URL
+# embeds it and this token gates the heal trigger on a public service.
+TOKEN="${AIRBAG_WEBHOOK_TOKEN:-$(gcloud secrets versions access latest --secret=airbag-webhook-secret --project "$PROJECT" 2>/dev/null)}"
+: "${TOKEN:?no webhook token — run ./deploy.sh first (creates Secret Manager airbag-webhook-secret)}"
 export CLOUDSDK_CORE_DISABLE_PROMPTS=1
 gcloud components install beta -q >/dev/null 2>&1 || true
 

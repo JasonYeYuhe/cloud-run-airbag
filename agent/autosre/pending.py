@@ -9,7 +9,8 @@ from __future__ import annotations
 import threading
 
 _lock = threading.Lock()
-_pending: dict[str, dict] = {}  # service -> {incident_id, bad_revision, rolled_back_to, rollback_at_iso, pr_url}
+# service -> {incident_id, bad_revision, rolled_back_to, rollback_at_epoch(float), pr_url, attempts}
+_pending: dict[str, dict] = {}
 
 
 def set_pending(service: str, data: dict) -> None:
@@ -33,6 +34,16 @@ def try_begin_complete(service: str) -> dict | None:
             return None
         v["_completing"] = True
         return dict(v)
+
+
+def bump_attempts(service: str) -> int:
+    """Increment and return the failed-undo attempt count (caps unbounded compensation retries)."""
+    with _lock:
+        v = _pending.get(service)
+        if not v:
+            return 0
+        v["attempts"] = v.get("attempts", 0) + 1
+        return v["attempts"]
 
 
 def end_complete(service: str, *, closed: bool) -> None:

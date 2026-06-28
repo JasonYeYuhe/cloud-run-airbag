@@ -75,6 +75,8 @@ ERROR_RATE_THRESHOLD = float(os.getenv("AIRBAG_ERROR_RATE_THRESHOLD", "0.05"))
 # verify loop
 VERIFY_ATTEMPTS = int(os.getenv("AIRBAG_VERIFY_ATTEMPTS", "6"))
 VERIFY_INTERVAL_S = float(os.getenv("AIRBAG_VERIFY_INTERVAL_S", "2"))
+# P1 close-the-transaction: cap failed undo/compensation retries (then require a human)
+MAX_UNDO_ATTEMPTS = int(os.getenv("AIRBAG_MAX_UNDO_ATTEMPTS", "2"))
 
 # fix-PR slow path (optional). Empty token -> the FIX_PR stage is a no-op note.
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "")
