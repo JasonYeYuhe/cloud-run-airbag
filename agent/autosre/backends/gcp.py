@@ -31,16 +31,26 @@ def list_cloud_run_revisions(service: str, region: str) -> dict:
     from google.cloud import run_v2
 
     svc = _get_service(service, region)
-    traffic = {_short(t.revision): t.percent for t in svc.traffic_statuses if t.revision}
+    # Traffic can be pinned to an explicit revision OR to LATEST (revision='' on the
+    # status). LATEST means "the newest revision", so resolve it after sorting.
+    explicit: dict = {}
+    latest_percent = 0
+    for t in svc.traffic_statuses:
+        if t.revision:
+            explicit[_short(t.revision)] = t.percent
+        elif t.type_ == run_v2.TrafficTargetAllocationType.TRAFFIC_TARGET_ALLOCATION_TYPE_LATEST:
+            latest_percent += t.percent
     revs = []
     for r in run_v2.RevisionsClient().list_revisions(parent=_service_path(service, region)):
         name = _short(r.name)
         ready = any(c.type_ == "Ready" and c.state == run_v2.Condition.State.CONDITION_SUCCEEDED
                     for c in r.conditions)
         revs.append({"name": name, "ready": ready,
-                     "traffic_percent": traffic.get(name, 0),
+                     "traffic_percent": explicit.get(name, 0),
                      "create_time": r.create_time.isoformat() if r.create_time else None})
     revs.sort(key=lambda x: x.get("create_time") or "", reverse=True)
+    if latest_percent and revs:
+        revs[0]["traffic_percent"] += latest_percent  # LATEST == newest revision
     return {"service": service, "revisions": revs, "uri": svc.uri}
 
 
