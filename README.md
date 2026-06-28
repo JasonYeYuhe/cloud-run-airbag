@@ -51,6 +51,9 @@ The **deployed agent autonomously heals the deployed target** on real Cloud Run,
 | **Agent + dashboard** | https://airbag-agent-946577240607.asia-northeast1.run.app |
 | **Target (demo app)** | https://airbag-target-946577240607.asia-northeast1.run.app |
 
+![Airbag glassbox dashboard — the agent's thought-chain, proof-of-recovery curve, and the ADK/Gemini rollback decision](docs/dashboard.png)
+*The glassbox dashboard: the agent's thought-chain (detect → **ADK triage→decide** → rollback → verify → fix-PR), the 5xx error-rate dropping to 0 with the **✓ VERIFIED RESOLVED** gate, and the structured `gemini-adk` decision.*
+
 **Fully autonomous:** a real **Cloud Monitoring 5xx alert** fires on its own and triggers the heal with **no human in the loop** (verified — target rolled back ~3 min after the alert, triggered by Cloud Monitoring incident, not a button). Wire it with `./infra/alert-setup.sh`.
 
 **Dual-path heal:** after the rollback stops the bleeding, the slow path has **Gemini open a real fix PR** (root-cause) that passes CI — e.g. [PR #1](https://github.com/JasonYeYuhe/cloud-run-airbag/pull/1) fixed the planted `KeyError` (`amount`→`price`), `on: push` CI green. (Validated locally; on the deployed agent, enable with a fine-grained, repo-scoped token.)
