@@ -1,0 +1,857 @@
+{
+  "summary": "Verified web sweep of autonomous DevOps/SRE/code-fix AI agents + gap & differentiation analysis for the hackathon",
+  "agentCount": 10,
+  "logs": [
+    "Find 完成：收集到 76 条产品记录，去重并审计中",
+    "Verify 完成：去重后 42 个竞品，7 个空白点"
+  ],
+  "result": {
+    "landscape": [
+      {
+        "name": "Gemini Cloud Assist Investigations (+ Proactive Agents)",
+        "category": "GCP 原生 AI 根因调查 / 运维诊断",
+        "realAutonomy": "suggest-only",
+        "keyStrength": "与你们项目最直接竞争且可借力的 Google 原生能力。Gemini 3 加持，能从 Cloud Monitoring 告警一键触发，并行分析 Logging/Asset/Metrics/Errors，从基础设施信号关联到应用代码层产出排序根因+修复建议；Proactive Agents 可由告警/成本异常后台自动发起调查。是你们 demo 的『house platform』和评委心智锚点。",
+        "keyGap": "官方明确：调查『don\\'t modify or make any changes to your environment』，且『human-in-the-loop is currently required to verify the proposed mitigations』——不自动回滚、不改配置、不开 PR、不验证错误率清零。mitigation playbook 只是给人看的指令。2026-04-10 起创建/运行调查需 Premium Support 合同或经客户团队申请，门槛高。",
+        "marketingVsReality": "已核实(2026-06)：官方文档原话『these investigations don\\'t modify or make any changes』『a human-in-the-loop is currently required』。营销说『understand, diagnose and resolve』，实际止步诊断+建议，resolve 靠人。这正是你们闭环执行层的差异化主战场。",
+        "gcpRelation": "Google Cloud 原生，Gemini Cloud Assist 的一部分，深度集成 Cloud Logging/Monitoring/Cloud Run。是你们最重要的对照+建在其上的平台。",
+        "oneLiner": "GCP 原生、Gemini 驱动的根因调查工具，告警触发后做 RCA 并给修复建议，但绝不执行任何变更。"
+      },
+      {
+        "name": "Google Jules",
+        "category": "GCP 原生异步自治编码 agent",
+        "realAutonomy": "executes-actions",
+        "keyStrength": "与你们『开修复 PR 走真实 CI/CD』最接近的 Google 原生能力，必须重点对标。仓库克隆进 Google Cloud VM，Gemini 规划→改码→跑测试→开 PR；I/O 2026 转 GA，有 Jules API + GitHub 原生触发(issue 打标签)+ 并发任务。",
+        "keyGap": "聚焦『代码层』闭环，不触及生产运行时：不监控生产、不回滚 Cloud Run 版本、不读 Logging/Monitoring 验证错误率。触发是 issue/任务，不是 Cloud Monitoring 告警。这是你们 vs Jules 的清晰边界。",
+        "marketingVsReality": "重要更正(已核实)：CI Fixer 已是 Jules 官方功能(2026-02-19 官方 changelog: 『Jules now automatically receives and works on CI failures』，fix→commit→resubmit 闭环)，不再只是第三方报道——原始记录此处偏保守，pitch 时可引用官方。但这只是 CI 层自愈，仍非生产事故自愈。",
+        "gcpRelation": "Google 产品，VM 跑在 Google Cloud，模型用 Gemini。GCP 协赞赛事的可能评判基准。建议 demo 明确『Jules 修代码，我们修线上事故』。",
+        "oneLiner": "Google 原生异步编码 agent，issue→计划→改码→跑测试(含 CI 失败自愈)→开 PR，但不碰生产运行时。"
+      },
+      {
+        "name": "Agent Development Kit (ADK)",
+        "category": "GCP 原生开源 agent 框架(你们的搭建工具)",
+        "realAutonomy": "unknown",
+        "keyStrength": "题目必用，且完美贴合技术栈：开源、模型无关、原生多 agent 编排+evaluation、可直接部署 Cloud Run/GKE/Agent Engine。可用来组织『监控/回滚/PR/验证』多 agent 并对思考链做评估，Agent Garden 有样例可加速。",
+        "keyGap": "是框架不是成品，自治程度完全取决于你们怎么编排，本身不含任何 DevOps/事故自愈逻辑。这正是机会：用它搭出 Google 没有现成成品的『回滚执行+CI/CD 修复+监控验证闭环』。",
+        "marketingVsReality": "无营销夸大问题——它就是工具。Python 版下载超 700 万，成熟度足够。",
+        "gcpRelation": "Google Cloud 原生开源框架，与 Agent Engine/Garden 同属 Gemini Enterprise Agent Platform。满足『必用 ADK』评分项。",
+        "oneLiner": "Google 开源代码优先 agent 框架，多 agent 编排+部署 Cloud Run，是你们项目的核心脚手架。"
+      },
+      {
+        "name": "Sedai (Release Intelligence)",
+        "category": "自治云优化+发布可靠性(FinOps+SRE)",
+        "realAutonomy": "closed-loop-verify-rollback",
+        "keyStrength": "概念上与你们项目最接近的真闭环：autopilot 模式实际执行变更，对每次发布打分(Release Intelligence)，post-change 对照 latency/error 验证，回归即自动回滚。三模式(observe/approve/auto)是好的自治阶梯 UX 参考。",
+        "keyGap": "GCP/Cloud Run 覆盖薄于其 AWS/Lambda/EKS/BigQuery 老本行，Cloud Run 非一等公民。公开文档对 SLO-breach 触发阈值描述偏少。验证窗口绑定发布后≤5 天，而非独立生产告警在数小时后触发。企业销售制、无免费层。",
+        "marketingVsReality": "已核实(2026-06)：官方文档确有『post-change verification against latency & error rates, automatic rollback if metrics drift』，闭环真实存在；但触发主要绑定发布窗口而非任意时刻的独立告警，部分『autonomous』仍偏宣传。",
+        "gcpRelation": "云中立(AWS/Azure/GCP)，非 Google 产品、不用 Gemini/ADK。自治运维空间的竞品而非 GCP 原生工具。",
+        "oneLiner": "『自驾云』平台，给每次发布打分并在回归时自动回滚，但 Cloud Run 支持薄、绑发布窗口。"
+      },
+      {
+        "name": "Microsoft Azure SRE Agent",
+        "category": "云厂商原生自治 SRE agent",
+        "realAutonomy": "closed-loop-verify-rollback",
+        "keyStrength": "你们设计最相关的『先验技术』：GA(2026-03-10)，多层事故调查→关联 telemetry+GitHub 部署→提出缓解→经 permission gate 在 guardrail 内执行；可调自治(Review→Autonomous)、执行前权限门评估每个 tool call、agent hooks、40+ MCP 连接器(含 GCP Stackdriver)。微软内部 1300+ agent、缓解 35000+ 事故。",
+        "keyGap": "默认 Review(审批门控)，全自动 Autonomous 是 opt-in。Azure 资源中心(App Service/AKS/Functions)，不是 Cloud Run 故事，执行靠 Azure-CLI/runbook。",
+        "marketingVsReality": "已核实(2026-06)：官方确认有 Review(approval-gated)与 Autonomous 两种 run mode，permission gate 真实存在。营销『autonomous』成立但默认仍人审，闭环是配置项不是默认。",
+        "gcpRelation": "你们想法的 Azure 版直接对标，可经 Stackdriver MCP 读 GCP。你们的边界优势：原生 Cloud Run + Gemini + ADK + 透明思考链 dashboard。",
+        "oneLiner": "Azure 原生数字 SRE，从告警到验证恢复，可调自治但默认审批门控、绑 Azure 资源。"
+      },
+      {
+        "name": "Datadog Bits AI SRE",
+        "category": "可观测性原生 AI SRE agent",
+        "realAutonomy": "closed-loop-verify-rollback",
+        "keyStrength": "依托最大可观测性平台=无与伦比的数据接入(telemetry/RUM/DB/code/profiler)，自验证假设。2026 重大升级：Action Catalog 有 Trigger/Get/List Investigation，调查可触发自动 remediation；问题变更识别后提供『one-click rollback to last trusted configuration』；Infrastructure Operations 在你定义的 guardrail 内可自动修复。GA 2025-12-02。",
+        "keyGap": "remediation 仍需你在 Action Catalog/workflow 里接线，并非开箱即用的『回滚任意部署并重验错误率归零』。最佳自治要求你身处 Datadog 生态。回滚是配置级 one-click，非完全无人。",
+        "marketingVsReality": "重要更正(已核实 2026-06)：原始记录低估了它——现已有 one-click rollback + guardrail 内自动 remediation，比纯调查强。但仍是『执行你预接的动作』，非自主对未知事故推理出回滚。",
+        "gcpRelation": "经 Stackdriver 集成 GCP，是竞品非 GCP 产品。你们差异化：显式 verify+rollback 闭环 + Gemini 透明思考链 dashboard。",
+        "oneLiner": "Datadog 内 24/7 on-call agent，自验证根因并可一键回滚到上次可信配置、在 guardrail 内自动修复。"
+      },
+      {
+        "name": "Harness AI (CD + AI 部署验证)",
+        "category": "CD 平台 + AI 金丝雀验证 + 自动回滚",
+        "realAutonomy": "closed-loop-verify-rollback",
+        "keyStrength": "最贴近生产的真闭环之一：连接可观测性，ML 把金丝雀 error rate/latency/日志对照基线，回归即自动回滚(deploy→verify→rollback)。2026 Q1 加 AI 验证去配置负担，AIDA 做对话 RCA。Gartner DevSecOps Leader 2026。",
+        "keyGap": "验证/回滚绑在部署窗口(金丝雀分析)，不是由数小时后独立生产告警触发；常被配成人审 failure strategy，全自动是配置非默认。重型企业平台，2 周小团队难落地。验的是『对基线的指标方差』而非显式证明错误率归零。",
+        "marketingVsReality": "已核实(2026-06)：官方确有 AI-Powered Continuous Verification + automatic rollback，闭环真实(案例 MTTR 降 40-60%)。营销诚实，但『独立告警触发』这点它不覆盖——这是你们的缝隙。",
+        "gcpRelation": "可部署 GKE/Cloud Run 并消费 Cloud Monitoring 作指标源，但 AI/验证是 Harness 自有非 Gemini。Partner-to 而非 built-on GCP。",
+        "oneLiner": "CD 平台，AI 把金丝雀指标对基线比对、回归自动回滚，但绑部署窗口、非告警触发、过重。"
+      },
+      {
+        "name": "Argo Rollouts / Flagger",
+        "category": "K8s 渐进式交付控制器(金丝雀+自动回滚, 开源)",
+        "realAutonomy": "closed-loop-verify-rollback",
+        "keyStrength": "久经考验的 OSS 闭环原语：基于步进金丝雀/控制循环，向 Prometheus/Datadog/Cloud Monitoring 等查 KPI，自动 promote 或 rollback。免费可自托管，是可借鉴/可引用的『先验技术』而非竞品。Flagger 对未改动 Deployment 更省心。",
+        "keyGap": "回滚是部署窗口内 analysis-driven，不由稍后的外部事故告警触发；K8s/GKE 原生而非 Cloud Run。无 AI 推理、无 PR 修复路径、无人读的『思考链』，纯指标阈值规则，阈值要自己定。",
+        "marketingVsReality": "无夸大——OSS 工具如实声明能力。是『指标门控回滚』的成熟范式，适合在 pitch 里作 prior art 引用。",
+        "gcpRelation": "跑在 GKE、可用 Cloud Monitoring 作指标源；CNCF 中立、无 Gemini。",
+        "oneLiner": "K8s 金丝雀控制器，按指标分析自动 promote/rollback，但绑部署窗口、限 K8s、无 AI 推理。"
+      },
+      {
+        "name": "LaunchDarkly Guarded Rollouts",
+        "category": "特性开关发布门控+指标守护自动回滚",
+        "realAutonomy": "closed-loop-verify-rollback",
+        "keyStrength": "flag 层轻量闭环：渐进放量时监控指标，回归或样本比失配即自动回滚，开启后无需人工。2026-01 加序贯检验提升统计严谨。AI Configs+Guardian 把同样门控用于模型/prompt 发布。比整套 CD 平台易采用。",
+        "keyGap": "回滚=翻 flag，只保护 LaunchDarkly flag 后的代码路径，无法回滚任意 Cloud Run revision 或下线坏容器。验证是它自有指标管线，不是你们 Logging/Monitoring 错误率归零检查。不生成代码修复/PR，是控制面护栏非诊断 agent。",
+        "marketingVsReality": "诚实——明确是 flag 层守护而非全栈自愈。",
+        "gcpRelation": "云中立 flag 平台，可摄入 GCP 指标但无 Gemini/Google 依赖。",
+        "oneLiner": "特性开关渐进发布，指标回归时自动翻回 flag，但只护 flag 后路径、不回滚 Cloud Run 版本。"
+      },
+      {
+        "name": "Resolve.ai",
+        "category": "Agentic AI SRE / 生产工程师",
+        "realAutonomy": "executes-actions",
+        "keyStrength": "最深的『生产工程师』agent：同时理解源码+遥测+基础设施，能生成 kubectl/脚本/PR 并执行回滚/改配置等修复。重金融资($150M+, ~$10亿估值，前 Splunk/OTel 创始人)，有具名大客户(Coinbase RCA 快 73%、DoorDash 快 87%、Salesforce、MongoDB)。是执行深度上要追的标杆。",
+        "keyGap": "营销目标『auto-resolve 80%』偏理想；生产实践多跑在人审的辅助模式，真正无人值守的闭环自动回滚+验证仍门控在审批后而非默认。无公开自助定价。",
+        "marketingVsReality": "宣称『resolve/auto-resolve』，现实为生产安全多人审；闭环执行存在但默认 gated。",
+        "gcpRelation": "云中立(AWS/K8s/GitHub)，无 Gemini/GCP 绑定。你们『自治发布/自愈』的直接概念竞品。",
+        "oneLiner": "重金融资的 AI SRE，理解码+遥测+基础设施并能执行回滚/改配置/PR，但生产多跑人审模式。"
+      },
+      {
+        "name": "Komodor (Klaudia AI)",
+        "category": "K8s 自治 AI SRE",
+        "realAutonomy": "executes-actions",
+        "keyStrength": "K8s 上真分级自治：低幻觉 RCA、一键修复+自治自愈、『suggests or executes remediation automatically』，MTTR 到秒级。2026 多 agent 扩展框架(50+ 专用 agent)+真实采用(Nebius)。",
+        "keyGap": "公开材料未清楚说明验证机制或失败自动回滚，也没讲清自治护栏/审批配置，故『autonomous self-healing』的真闭环 verify+rollback 待验证。K8s 范围(非 Cloud Run revision)。",
+        "marketingVsReality": "『autonomous self-healing』宣称强，但缺公开的『修复失败即回滚』与错误率验证证据，真实度需打折。",
+        "gcpRelation": "任意 K8s(含 GKE)，无 Gemini 集成。你们差异化：Cloud Run revision 回滚+显式 Logging/Monitoring 验证+Gemini 思考链 UI。",
+        "oneLiner": "K8s 自治 SRE，能建议或自动执行修复达秒级 MTTR，但验证/回滚机制未公开、限 K8s。"
+      },
+      {
+        "name": "Sentry Seer (Autofix)",
+        "category": "AI 调试 / 生产根因+autofix agent",
+        "realAutonomy": "executes-actions",
+        "keyStrength": "与你们『生产故障→自治修复 PR』那半最接近的现成品：由真实生产 issue 触发(可对 14 天内 10+ events 且高可修分的 issue 自动跑)，做 RCA→生成代码修复→开 PR/MR。Sentry MCP 可接本地编码 agent。2026-01 改扁平不限量定价。",
+        "keyGap": "止步于『PR 起草』，受用户配置『root cause/plan/PR 后停』与人审限制。关键：文档显示无验证回路——不监控修复是否压降错误率、不回滚、无闭环验证、不自治 revert Cloud Run。",
+        "marketingVsReality": "已核实(2026-06)：Seer 主线是 RCA+autofix→PR，未见生产验证/回滚回路。这正是你们『验证错误率清零+回滚』要填的缝。(注:2026-06 报过 MCP 注入漏洞。)",
+        "gcpRelation": "云中立(GitHub/GitLab)，无 GCP/Gemini，但其 MCP 可喂 Gemini/ADK agent。你们 incident→PR 路径最强直接对照。",
+        "oneLiner": "由生产 error 触发做 RCA 并开修复 PR，但止步 PR、无错误率验证/回滚闭环。"
+      },
+      {
+        "name": "Charlie Labs (Charlie + Daemons)",
+        "category": "常驻自治工程 agent",
+        "realAutonomy": "executes-actions",
+        "keyStrength": "评审/PR 类工具里与你们事故自愈论题最贴合：Bug-Triage Daemon 读 Sentry 影响数据发根因评论，Codebase-Maintainer Daemon 对合并/安全公告反应并开带测试的升级 PR；Charlie V2 是能从部分失败恢复并跟进到 merge 的持久运行时。",
+        "keyGap": "Daemon 止步 PR 门(deny-rule 拦 merge、人审)；未明确确认开 PR 前 CI 已验证为绿，无生产错误率清零验证、无自治 Cloud Run 回滚。Sentry 触发非 Cloud Monitoring 触发，TypeScript 中心。",
+        "marketingVsReality": "宣称『always-on/自治』，实际止于 PR 门，CI 绿是政策而非已证实。",
+        "gcpRelation": "云中立(GitHub/Linear/Slack/Sentry)，无 GCP/Gemini。最接近的『告警(Sentry)→分析→修复 PR』模式可研究对标。",
+        "oneLiner": "常驻 Daemon 读 Sentry 错误做根因并开带测试的修复 PR，但止步 PR 门、Sentry 触发、不碰生产回滚。"
+      },
+      {
+        "name": "PagerDuty Advance (SRE Agent)",
+        "category": "Agentic 事故管理套件",
+        "realAutonomy": "executes-actions",
+        "keyStrength": "坐在每个人已在的 on-call/事故工作流中心。审批后自动执行 remediation；『Agentic Cloud Operations』把 PagerDuty 桥接到 AWS DevOps Agent 与 Azure SRE Agent 铺向自愈基础设施。客户称解决快至 50%。",
+        "keyGap": "动作执行审批门控，大量自愈委派给它编排的云厂商 agent 而非自己执行。『autonomous』偏编排/生态打法，原生 verify+rollback 闭环是新兴非已证核心。",
+        "marketingVsReality": "宣称端到端自治，实为审批门控+委派云厂商 agent 的编排。",
+        "gcpRelation": "深度 AWS+Azure agent 集成，Google Cloud 等价物未突出——若你们瞄准 GCP 即是缺口/机会。",
+        "oneLiner": "事故管理中枢，审批后执行修复并编排 AWS/Azure 云 agent 自愈，但 GCP 缺位、自治偏编排。"
+      },
+      {
+        "name": "Robusta HolmesGPT",
+        "category": "开源 AI SRE agent",
+        "realAutonomy": "executes-actions",
+        "keyStrength": "免费开源(CNCF Sandbox)、BYO-LLM(可插 Gemini)、尊重 K8s RBAC、不拿你数据训练。能超越建议——开 PR 修复所见。对 hackathon 是极佳的 build-on/参考。",
+        "keyGap": "动作能力(开 PR)真实但有界，依赖结构化 runbook+RBAC，不原生做『改完→验错误率清零→自动回滚』闭环。自托管/DIY，自治要你自己组装，诊断质量取决于所选 LLM。",
+        "marketingVsReality": "诚实开源，能力如实；闭环要你自己接。",
+        "gcpRelation": "云原生/K8s(含 GKE)，BYO-LLM 可插 Gemini，是 ADK/Gemini 构建最可复用的参考。",
+        "oneLiner": "开源 agentic SRE，agentic loop 做根因并能开 PR，但无 verify+rollback 闭环、需自组装。"
+      },
+      {
+        "name": "Parity (YC S24)",
+        "category": "K8s on-call AI SRE",
+        "realAutonomy": "executes-actions",
+        "keyStrength": "聚焦 K8s on-call：告警(如 503 升高)即形成假设→取集群数据证伪→triage+RCA→建议修复，可自动执行预定义 runbook。VPC 内只读运行(安全)。",
+        "keyGap": "主要只读调查+建议，自治动作限于预定义 runbook，非通用码/配置/回滚修复。无真正闭环 verify+auto-rollback。早期 YC、K8s 范围。",
+        "marketingVsReality": "宣称『first responder 自治』，实为只读调查+runbook 执行。",
+        "gcpRelation": "K8s 中心(含 GKE)，无 Gemini/GCP 集成。你们在 Cloud Run 的 execute-and-verify 闭环更强。",
+        "oneLiner": "K8s on-call AI SRE，告警即调查并可跑预定义 runbook，但只读为主、无 verify+rollback 闭环。"
+      },
+      {
+        "name": "BigPanda",
+        "category": "Agentic AIOps / ITOps 平台",
+        "realAutonomy": "executes-actions",
+        "keyStrength": "成熟企业 ITOps/ITSM，强事件关联/降噪；L1 Agent 目标自治解决事故，可秒级触发自动 runbook、建/改工单。大型 ITIL 环境受信。",
+        "keyGap": "偏 ITOps/工单而非码/部署。自治 runbook 执行与 L1 自解部分是 roadmap，今日真自治偏建议+通知+工单，非应用部署的码回滚/验证回路。",
+        "marketingVsReality": "『agentic 自治』部分仍是路线图(『toward』『eventual runbook execution』)。",
+        "gcpRelation": "云中立企业 ITOps，无 Gemini/GCP，海拔不同(告警关联/ITSM)，对 Cloud Run 式发布自愈弱。",
+        "oneLiner": "成熟 AIOps 平台，强关联降噪并可触发 runbook，但偏工单/ITOps、部署级自治多为路线图。"
+      },
+      {
+        "name": "Cleric",
+        "category": "自学习 AI SRE(调查)",
+        "realAutonomy": "suggest-only",
+        "keyStrength": "强自治调查+运营记忆(自学习、置信分、知识图谱)。Gartner Cool Vendor 2025，BlaBlaCar 生产使用。默认只读姿态对企业有吸引力。",
+        "keyGap": "明确默认只读：不改动、不开 PR、不跑修复脚本——『Cleric 是诊断医生，工程师开车修』。无闭环验证/回滚。种子轮小($9.8M)。",
+        "marketingVsReality": "诚实——明确定位诊断而非动作。你们的自愈+回滚+验证正是它留的缺口。",
+        "gcpRelation": "集成 Datadog/Grafana，无 Gemini/GCP。",
+        "oneLiner": "自学习 AI SRE，自治调查+知识图谱+置信分，但默认只读、只诊断不修。"
+      },
+      {
+        "name": "Traversal",
+        "category": "因果 ML AI SRE(根因)",
+        "realAutonomy": "suggest-only",
+        "keyStrength": "差异化因果 ML(相关 vs 因果)，证据+置信分，扩展到 100T 日志/10B 指标。真实客户(American Express RCA 准 82%、MTTR 降 32%；PepsiCo)。只读部署是安全卖点。",
+        "keyGap": "设计上『no agents, sidecars, or writes to production』——只调查/诊断，无修复执行、回滚、验证回路。产出是根因而非已应用的修复。",
+        "marketingVsReality": "诚实——明确只读纯 RCA。把 act-and-verify 全留给人(你们差异化)。",
+        "gcpRelation": "混合/自带可观测栈，只读 API，无 Gemini/GCP。",
+        "oneLiner": "因果 ML 驱动 RCA，并行因果搜索锁定 breaking commit，但只读、纯诊断、不写生产。"
+      },
+      {
+        "name": "NeuBird Hawkeye",
+        "category": "企业 AI SRE / 自治事故解决",
+        "realAutonomy": "suggest-only",
+        "keyStrength": "企业级：SOC-2、SaaS 或 VPC 内部署、广栈集成、Datadog+AWS Marketplace 上架、免费自助试用(2025-12)。称 MTTR 降至多 90%。",
+        "keyGap": "尽管打『Autonomous Incident Resolution』，实证能力是自治诊断+推荐纠正动作，默认不清楚地执行修复+闭环验证/回滚。『resolution』主要=RCA+建议。",
+        "marketingVsReality": "品牌『autonomous resolution』，真实自治是调查——你们 verify+rollback 填的缺。",
+        "gcpRelation": "多云(含 Azure/AWS)、Datadog 原生，无 Gemini/GCP。",
+        "oneLiner": "企业 AI SRE，事故即时调查并给纠正建议，但『resolution』实为 RCA+建议、不闭环执行。"
+      },
+      {
+        "name": "Flip AI",
+        "category": "DevOps LLM / 事故上下文智能",
+        "realAutonomy": "suggest-only",
+        "keyStrength": "自训 DevOps LLM(非 GPT 套壳)，<1 分钟 RCA，不改栈即插现有可观测性，学历史事故/部落知识，一天内上手。",
+        "keyGap": "核心价值是上下文 RCA+解释而非动作。公开材料几无自治修复执行、无回滚、无验证回路——是喂人或下游自动化的情报/triage 层。",
+        "marketingVsReality": "诚实定位情报层；不闭环。",
+        "gcpRelation": "可观测栈无关，无 Gemini/GCP。",
+        "oneLiner": "自训 DevOps LLM 做秒级 RCA 解释，但只产情报、不执行、不闭环。"
+      },
+      {
+        "name": "Causely",
+        "category": "因果推理 AIOps 层",
+        "realAutonomy": "suggest-only",
+        "keyStrength": "犀利论点:『别让 agent 凭猜行动，让它基于具名已验证根因行动』。因果模型(非 LLM 猜)给高信任机理诊断+既定修复路径——正是自治修复需要的安全底座。",
+        "keyGap": "今日识别具名根因+推荐动作；实际修复执行在外部(『insights 送外部系统发起 workflow』)。『autonomous remediation』是理想/赋能框架，Causely 自身是推理层非执行器，无原生 verify+rollback。",
+        "marketingVsReality": "诚实——明确自己是推理层。『行动前先具名验证根因』是你们 pitch 可引用的设计原则，也是你们闭环可填的缺。",
+        "gcpRelation": "可观测无关，无 Gemini/GCP。",
+        "oneLiner": "因果推理层产出具名已验证根因+修复路径，但执行靠外部系统、自身不闭环。"
+      },
+      {
+        "name": "Devin (Cognition)",
+        "category": "自治软件工程师",
+        "realAutonomy": "executes-actions",
+        "keyStrength": "真长程：起 sandbox VM、协调子 agent，从任务到 PR(含自跑测试/调试回路)。强企业牵引(Mercedes、Goldman、NASA)+巨额融资，可接入事故/工单流。",
+        "keyGap": "非开箱事故自愈品：无内建 监控→回滚→验错误率 回路。硬任务真自治解决率不高(SWE-bench ~14% 历史端到端)。ACU 计费对 2 周 hackathon 偏贵。开 PR 但不确认生产错误率清零。",
+        "marketingVsReality": "营销长程自治，硬任务真实解决率有限；sandbox 测试≠生产验证。",
+        "gcpRelation": "厂商中立，非 Google/Gemini，与 Jules 竞争，无 GCP 绑定。",
+        "oneLiner": "云端自治工程师，任务→sandbox 编码→测试→PR，但无监控/回滚/生产验证回路、计费贵。"
+      },
+      {
+        "name": "GitHub Copilot coding agent + Autofix",
+        "category": "自治编码 agent + 安全 autofix",
+        "realAutonomy": "executes-actions",
+        "keyStrength": "最接近主流的『alert→fix PR』：可对安全告警点『Assign Copilot』~30s 得 PR，在真实 GitHub Actions 跑触发真 CI，模型可选。是你们 incident→PR→CI 路径最强现成对照。",
+        "keyGap": "触发是代码扫描告警或 issue，非生产运行时告警(Cloud Monitoring/错误率)。文档强调人审 diff，不声称 agent 验证修复已解决问题或自迭代 CI 到绿；无回滚/验错误率回路。",
+        "marketingVsReality": "Autofix 是建议+PR，验证留给人；无生产验证。",
+        "gcpRelation": "MS/GitHub 生态，非 Gemini/GCP。是要超越的对标，非 GCP 参赛的构件。",
+        "oneLiner": "把安全告警/issue 派给 Copilot 在真 CI 里改码开 PR，但触发非生产告警、无验证/回滚回路。"
+      },
+      {
+        "name": "Sweep AI",
+        "category": "自治 bug 修复 / issue→PR",
+        "realAutonomy": "executes-actions",
+        "keyStrength": "专为 issue→PR 自治，多语言，托管或自托管，会迭代 PR 评论。是『自然语言故障描述→PR』模式的便宜样例。",
+        "keyGap": "由书面 issue 驱动非实时告警；无监控集成、无 Cloud Run 回滚、无生产验证。已重转 IDE 自动补全产品，bug-bot 占比变小。止步 PR。",
+        "marketingVsReality": "重心已转 IDE 助手，自治 bug-bot 现为次要。",
+        "gcpRelation": "厂商中立，BYO-LLM，无 GCP/Gemini。",
+        "oneLiner": "把 issue/Jira ticket 变 PR 的『初级工程师』，但 issue 驱动、无监控/回滚/生产验证、止步 PR。"
+      },
+      {
+        "name": "CodeRabbit",
+        "category": "AI 代码评审(含 Autofix agent)",
+        "realAutonomy": "executes-actions",
+        "keyStrength": "PR 评审市场领头(13M+ PR、8k+ 付费)，一键修复；2026 Autofix agent 写修复并提交到分支，加多仓下游破坏分析+Issue Planner。免费层可用。",
+        "keyGap": "核心是评审非事故响应：反应于已开 PR 非生产告警；无 Cloud Run 回滚、无错误率验证。Autofix 早期(2026-04)、Pro-only、明确不自动 merge，人留环中、无闭环 verify/rollback。",
+        "marketingVsReality": "Autofix 真写修复但不自动 merge，无生产验证。",
+        "gcpRelation": "厂商中立，无 GCP/Gemini。",
+        "oneLiner": "PR 评审领头羊，Autofix 写修复提交分支，但 PR 触发、不自动 merge、无生产回滚/验证。"
+      },
+      {
+        "name": "Qodo (ex CodiumAI)",
+        "category": "AI 代码评审+测试生成(多 agent)",
+        "realAutonomy": "executes-actions",
+        "keyStrength": "多 agent 评审(自报 60.1% F1)，强测试生成+深代码库上下文，企业客户(Nvidia/Walmart/Red Hat)。可在 PR 内建议并应用修复，有自托管血统(PR-Agent)。",
+        "keyGap": "定位评审+测试非故障触发修复；无生产监控触发、无 Cloud Run 回滚、无验错误率回路。自治集中在评审/评论与测试/修复建议，人 merge。",
+        "marketingVsReality": "诚实定位评审/测试，非事故自愈。",
+        "gcpRelation": "厂商中立，无 GCP/Gemini。",
+        "oneLiner": "多 agent PR 评审+测试生成，可在 PR 内应用修复，但非故障触发、无生产回滚/验证。"
+      },
+      {
+        "name": "Ellipsis (YC W24)",
+        "category": "AI 评审 + PR 内修复 agent",
+        "realAutonomy": "executes-actions",
+        "keyStrength": "超越建议：在私有 AWS VPC 实际执行生成代码以返回已测修复，@提及即委派得 PR。平价 $20/dev/mo 不限量，SOC 2 Type I。是『评审发现问题→agent 产已测修复』好模型。",
+        "keyGap": "触发是 PR 或 @提及非生产告警；仅 GitHub；无监控集成、无 Cloud Run 回滚、无部署后错误率验证。『已测』在其 sandbox 验非对生产指标。",
+        "marketingVsReality": "诚实——sandbox 测试非生产验证。",
+        "gcpRelation": "厂商中立，跑 AWS，无 GCP/Gemini。",
+        "oneLiner": "评审发现问题即在 VPC 执行并返回已测修复 PR，但 PR/@触发、sandbox 验证、无生产回滚。"
+      },
+      {
+        "name": "Graphite Agent (ex Diamond)",
+        "category": "AI 评审 + PR 工作流(stacking/merge queue)",
+        "realAutonomy": "executes-actions",
+        "keyStrength": "评审+PR 生命周期动作结合(对话式应用修复、更新 PR、merge queue、stacking)，$40 Team 不限量 AI 评审。merge-queue+agent 比纯评审更接近『发出修复』。",
+        "keyGap": "触发是已开 PR 非生产告警；无监控/Cloud Run 回滚、无错误率验证。修复动作是开发者在 PR 内对话发起，非自治『故障→修→验』管线。",
+        "marketingVsReality": "改名自 Diamond，注意旧营销；自治是 merge 编排非自愈。",
+        "gcpRelation": "厂商中立，无 GCP/Gemini。",
+        "oneLiner": "评审+merge queue+对话式应用修复，但 PR 触发、开发者发起、无生产回滚/验证。"
+      },
+      {
+        "name": "Greptile",
+        "category": "AI 代码评审(全代码库上下文)",
+        "realAutonomy": "suggest-only",
+        "keyStrength": "全仓索引语义代码图(非仅 diff)，自报最高 bug 捕获率(82%)。其 MCP server 有意思：你们的 agent 可查 Greptile 让生成的修复 PR 符合团队规范。",
+        "keyGap": "本质是留评论/建议的评审器，不自治开/提交修复 PR，无事故触发、无回滚、无验证回路。误报比 CodeRabbit 高，无 SAST。",
+        "marketingVsReality": "诚实评审器定位。",
+        "gcpRelation": "厂商中立，其 MCP 可作 Gemini/ADK agent 的上下文源。",
+        "oneLiner": "全代码库语义图驱动的 PR 评审，bug 捕获率高，但只评论建议、无修复执行/回滚/验证。"
+      },
+      {
+        "name": "Korbit AI",
+        "category": "AI 评审 + 开发者 mentoring",
+        "realAutonomy": "suggest-only",
+        "keyStrength": "擅解释问题+教练式指导(mentor 框架)，可测的评审时间下降，简单按席定价。",
+        "keyGap": "识别问题+指导修复，但不像竞品那样自治生成/提交修复 PR；无事故触发、无回滚、无验证回路。本组里『自治修复』最弱。",
+        "marketingVsReality": "明确偏评审/指导而非动作。",
+        "gcpRelation": "厂商中立，无 GCP/Gemini。",
+        "oneLiner": "导师式 PR 评审+修复指导，但只建议、自治修复最弱、无回滚/验证。"
+      },
+      {
+        "name": "Codegen",
+        "category": "团队级自治软件工程 agent",
+        "realAutonomy": "executes-actions",
+        "keyStrength": "为团队级自治执行而建：sandbox 跑(防 agent 致生产事故)、并行 agent、审计轨迹，可 merge PR、解工单。便宜个人层($9.99/mo)。是安全自治 PR 管线的架构参考。",
+        "keyGap": "工单/任务驱动非告警驱动；无原生生产监控触发、无 Cloud Run 回滚、无验错误率回路。营销跑在已验证生产可靠性数据之前；sandbox 测试≠生产验证。",
+        "marketingVsReality": "营销『merge/debug/规模化』超前于独立验证数据。",
+        "gcpRelation": "厂商中立，BYO-LLM，无 GCP/Gemini。",
+        "oneLiner": "团队级自治工程 agent，sandbox 编码并能 merge PR，但工单驱动、无生产监控/回滚/验证。"
+      },
+      {
+        "name": "Sourcegraph Amp",
+        "category": "自治编码 agent(CLI/IDE)+ agentic 评审",
+        "realAutonomy": "executes-actions",
+        "keyStrength": "借 Sourcegraph 索引强代码库上下文+大仓多步自治编辑，跑前沿模型(如 Claude Opus)。Amp Free 免费($10/天 API 上限)便宜试。",
+        "keyGap": "开发者唤起的 agent(CLI/IDE)非无人值守事故响应：无监控触发、无 Cloud Run 回滚、无生产错误率验证；『验证』是本地语法/测试非生产指标。频繁改名(Cody→Amp)。",
+        "marketingVsReality": "本地语法/测试验证≠生产验证。",
+        "gcpRelation": "厂商中立，无 GCP/Gemini。",
+        "oneLiner": "大仓上下文自治编码 agent，但开发者唤起、本地验证、无监控/回滚/生产验证。"
+      },
+      {
+        "name": "GitLab Duo Agent Platform",
+        "category": "Agentic DevSecOps 助手(RCA+修复)",
+        "realAutonomy": "suggest-only",
+        "keyStrength": "CI/CD 失败 RCA 叙事最佳：把崩溃溯到 null 变量、高亮日志行、引入的 commit——正是你们 dashboard 想展示的『思考链』。Security Analyst Agent 18.8 GA(2026-01)。",
+        "keyGap": "对 pipeline RCA 是分析+准备/推荐变更，不自治 merge 或回滚生产；GitLab 围墙内辅助。无生产服务监控→Cloud Run 回滚→错误率验证回路。",
+        "marketingVsReality": "诚实——pipeline 是推荐而非自治执行。其 RCA 叙事是好的 UI 借鉴。",
+        "gcpRelation": "与 Google DevOps 栈竞争，非 Gemini/GCP 产品。",
+        "oneLiner": "GitLab 内 CI/CD 失败 RCA 叙事强并准备修复，但只推荐、围墙内、无生产回滚/验证。"
+      },
+      {
+        "name": "CircleCI Chunk",
+        "category": "自治 CI 验证 / flaky 修复 agent",
+        "realAutonomy": "executes-actions",
+        "keyStrength": "2026 最强『autonomous validation』框架之一：根因解释+具体改动+通过重跑验证 flake 已消除再开 PR——CI 层 diagnose-fix-verify 闭环。beta 对 ~90% 分析的 flaky 开 PR。",
+        "keyGap": "回路止于 PR 人审/merge，merge/部署步非自治；验证是重跑测试稳定性非生产错误率清零。范围是 CI 验证非生产监控/Cloud Run 回滚。",
+        "marketingVsReality": "闭环真实但限于 CI 层 flaky，非生产事故。这是『闭环 verify』模式可借鉴的样板。",
+        "gcpRelation": "CI 平台，无 GCP/Gemini。",
+        "oneLiner": "诊断 flaky 测试、改码并经重跑验证再开 PR 的 CI 验证 agent，但限 CI 层、止步 PR、非生产。"
+      },
+      {
+        "name": "Datadog Test Optimization + Bits AI Dev Agent",
+        "category": "flaky 测试管理 + AI 修复 agent(可观测集成)",
+        "realAutonomy": "executes-actions",
+        "keyStrength": "最接近自带验证的自愈测试回路：Bits AI Dev Agent 后台自治生成修复，对历史 flaky 数据用现有 CI 逻辑内部验证，打包成『Attempt to Fix』PR 带诊断+验证摘要。自动重试+隔离自动解除是真执行动作。可选 auto-push。深 Datadog 可观测绑定，架构上类你们监控驱动概念。",
+        "keyGap": "verify-and-act 限于测试 flaky 而非生产事故。默认草稿 PR 人审(全自动 merge opt-in)。无 Cloud Run revision 回滚；验证对测试历史非生产错误率清零。",
+        "marketingVsReality": "闭环真实但 scoped to flaky 测试。『后台自治生成→内部验证→PR』是你们流程的好参照。",
+        "gcpRelation": "Datadog 监控 GCP 工作负载、竞 Cloud Monitoring，无 Gemini/Google 依赖。",
+        "oneLiner": "后台自治修 flaky 测试并对历史数据内部验证后开 PR，但限测试层、无生产回滚/错误率验证。"
+      },
+      {
+        "name": "Trunk / Aviator / Mergify / BuildPulse (CI 门控类)",
+        "category": "flaky 测试管理 + Merge queue(发布门控)",
+        "realAutonomy": "executes-actions",
+        "keyStrength": "在『隔离/合并门控』动作上真闭环：自动隔离 flaky 测试使其不阻塞 merge queue(Trunk/BuildPulse)，乐观/并行/批量 merge queue 保持 main 绿(Aviator/Mergify)，bisection 自动隔离真坏 PR，CI 自动重试(Mergify)。处理 agent 生成 PR 洪流的成熟门控。",
+        "keyGap": "全是 pre-merge 门控；明确无生产回滚(把坏码挡在 main 外而非撤销部署)。隔离是风险化跳过测试非修复，无生产监控/错误率清零验证。",
+        "marketingVsReality": "诚实——是 merge/CI 门控，flaky『自愈』实为 retry/quarantine/report。",
+        "gcpRelation": "GitHub/CI 中心 SaaS，无 GCP/Gemini。",
+        "oneLiner": "merge queue + flaky 自动隔离保 main 绿，但纯 pre-merge 门控、无生产回滚/错误率验证。"
+      },
+      {
+        "name": "Shoreline.io (被 NVIDIA 收购)",
+        "category": "事故自动化 / 自动修复 runbook",
+        "realAutonomy": "closed-loop-verify-rollback",
+        "keyStrength": "少数真『条件触发自动修复』之一：Op Packs/runbook 在条件满足时自动执行，多云实时控制——真自愈已知/重复问题而非仅建议。收购前成熟($57M 融资)。",
+        "keyGap": "2024 被 NVIDIA 收购并吸收，不再独立可购，前景不明。自动化针对已知预写 runbook 条件，非新事故推理。诊断智能弱于新 LLM agent。",
+        "marketingVsReality": "已实质 NVIDIA 内化，不再独立产品。展示了你们想要的 auto-execute 模式，但规则/runbook 制非 Gemini 推理(你们的边)。",
+        "gcpRelation": "曾支持 GCP，今 NVIDIA 内部。",
+        "oneLiner": "条件触发自动跑 runbook 自愈已知问题的成熟平台，但已被 NVIDIA 收购吸收、规则制非推理。"
+      },
+      {
+        "name": "Google Antigravity (2.0)",
+        "category": "GCP 原生 Agentic 开发平台/IDE",
+        "realAutonomy": "closed-loop-verify-rollback",
+        "keyStrength": "最有借鉴价值一点:用浏览器+测试自验证，把产出成截图/录屏 Artifacts 让人核验——正是你们 dashboard『可视化思考链+验证』的成熟范式，可借设计语言。多 agent 编排+后台定时+SDK，Code Assist 个人线已并入它。public preview 个人免费。",
+        "keyGap": "面向开发者『从想法到可上线应用』的本地/桌面 agentic IDE，验证是 app 功能层(浏览器点测/跑测试)，不是生产事故响应：不接 Cloud Monitoring 告警、不回滚 Cloud Run 版本、不读生产 Logging 验错误率。",
+        "marketingVsReality": "诚实——是构建+功能验证平台。别去正面做通用 agentic IDE，专注 DevOps 事故自愈垂直闭环。",
+        "gcpRelation": "Google 产品，默认 Gemini 3 Pro。其 Artifacts 验证范式值得借鉴。",
+        "oneLiner": "Google agentic 开发平台，agent 用浏览器/测试自验证并产 Artifacts，但验的是 app 功能、非生产事故。"
+      },
+      {
+        "name": "Gemini Code Assist - Agent Mode",
+        "category": "GCP 原生 IDE 内编码 agent",
+        "realAutonomy": "executes-actions",
+        "keyStrength": "IDE 内 agent：分析代码库、出计划、多文件改+跑终端命令，比纯补全强，和你们『开修复 PR』代码生成环节重叠。",
+        "keyGap": "IDE 内交互工具，需开发者在场逐步批准，非异步/无人值守；未覆盖自动跑 CI/修 CI/开 PR 闭环。重要：2026-06-18 起个人/AI Pro/Ultra 层停服并入 Antigravity——这条线正被取代，选型别押它。",
+        "marketingVsReality": "正被 Antigravity 取代，个人线已迁移，选型风险。",
+        "gcpRelation": "Google 原生，正并入 Antigravity。",
+        "oneLiner": "IDE 内 agent 改多文件+跑命令，但需在场审批、无 CI/PR 闭环、个人线已迁 Antigravity。"
+      },
+      {
+        "name": "Sedai/Cast AI/ScaleOps/Turbonomic 等(资源优化执行类)",
+        "category": "自治云资源/成本优化(执行类，非事故自愈)",
+        "realAutonomy": "executes-actions",
+        "keyStrength": "真执行基础设施变更：右调 pod CPU/内存、换节点、bin-pack、调 autoscaling(Cast AI/ScaleOps K8s 原生，ScaleOps 用 in-place resize 无重启)；Turbonomic 是少数成熟企业级闭环执行器(策略驱动可选全自动)。",
+        "keyGap": "范围是持续优化/成本，非『验错误率→回滚』事故回路；K8s/VM 为主无 Cloud Run 故事。执行是 scale/resize/place 而非检测坏发布并 revert。多为规则+分析非 LLM/agent 原生。",
+        "marketingVsReality": "执行真实但属优化域，非事故自愈；与你们海拔不同。",
+        "gcpRelation": "多云(含 GKE)，非 Google 产品，无 Gemini/ADK。",
+        "oneLiner": "自治执行资源右调/换节点优化成本，但属优化域、非事故自愈、无错误率验证/回滚、限 K8s。"
+      },
+      {
+        "name": "FinOps 承诺自动化类(Antimetal/Pump/Vantage/Densify/nOps)",
+        "category": "云成本/承诺自动化(FinOps，与事故自愈无关)",
+        "realAutonomy": "executes-actions",
+        "keyStrength": "在承诺/财务层真自治执行：自动买卖 RI/Savings Plans 匹配用量(Antimetal/Vantage/nOps)，group-buying 折扣(Pump)。Vantage FinOps Agent 在 Slack 对话执行已批准承诺购买，『Autonomous vs Owner Approval』模式+审计是你们 dashboard 审批/动作/日志的好 UX 参考。Densify 把右调建议产成 PR 走 CI/CD(类你们开 PR 路径)。",
+        "keyGap": "自治部分多在承诺/市场层；右调多 recommend-only。多 AWS-only(Antimetal/Pump/nOps)。与可靠性/回滚完全无关。",
+        "marketingVsReality": "『autonomous production』多为前瞻营销，shipped 的是成本/承诺管理。",
+        "gcpRelation": "多 AWS-only 或多云可视化，无 Gemini/ADK。仅作审批 UX/PR-into-CI 模式参考。",
+        "oneLiner": "自治管理 RI/Savings Plan 承诺省成本，但属 FinOps、与事故自愈无关，多 AWS-only。"
+      }
+    ],
+    "patternsToLearn": [
+      "执行前权限门(permission gate)逐 tool-call 评估 + 可调自治阶梯(observe→approve→autonomous):Azure SRE Agent 和 Sedai 都用三档模式,Vantage 用『Autonomous vs Owner Approval Required』。你们应做成可配置档位,demo 时默认人审、一键切全自动,既安全又能展示真闭环——这是评委信任的关键。",
+      "修复后对基线做指标验证、回归即自动回滚(deploy→verify→rollback):Harness AI CV(对 error rate/latency/日志比基线,回归自动 rollback)、Sedai Release Intelligence(post-change 对照 latency/error)、Argo Rollouts/Flagger(AnalysisRun 查 KPI 自动 promote/rollback)。你们要把这套用在 Cloud Run revision 上,且明确『验证错误率归零』而非仅『方差未恶化』,这是更强的成功判据。",
+      "提交前/CI 内自我纠错闭环:Jules CI Fixer(官方 2026-02-19:收 CI 失败→分析→修→重 push)、CircleCI Chunk(重跑验证 flake 已消除再开 PR)、Datadog Bits AI Dev Agent(对历史数据内部验证后才打包 PR)。你们的修复 PR 在合并前应自跑真 CI 并自迭代到绿,demo 里展示『PR 第一次 CI 红→agent 自修→绿』极有说服力。",
+      "GitOps 审计与安全边界:Robusta HolmesGPT 尊重 K8s RBAC、不拿数据训练;Azure permission gate 可强制策略/阻断;Codegen sandbox 隔离防 agent 致生产事故;每个动作留 audit trail。你们的回滚/PR 动作要全程可审计、有 RBAC 边界、危险操作可拦截,并把审计轨迹展示在 dashboard。",
+      "具名/已验证根因再行动(don\\'t act on a guess):Causely 的核心论点——基于具名机理化根因而非 LLM 猜测行动;Traversal 用因果 ML 给证据+置信分。你们的回滚/修复决策前应展示带证据与置信度的根因,而非黑箱直接动手,这同时支撑 dashboard 的可解释性。",
+      "跨信号关联(logs+metrics+traces+部署事件+代码):Gemini Cloud Assist(infra 信号→应用代码)、Datadog Bits、GitLab Duo(崩溃→null 变量→引入 commit)。你们要把 Cloud Logging 错误、Cloud Monitoring 指标、Cloud Run 部署/revision 历史、代码 diff 关联起来定位『哪次发布引入故障』,据此决定回滚目标 revision。",
+      "可视化思考链 + 产出 Artifacts 供人核验:Google Antigravity 用截图/浏览器录屏 Artifacts 让人验收,Cleric/Traversal 用置信分。你们 Next.js dashboard 应把每步推理、所查信号、所采动作、验证前后错误率曲线成可核验的时间线 Artifact——这正是题目要求且评委爱看的。",
+      "跨产品 agent 编排作为铺路:PagerDuty 把事故流桥接到 AWS/Azure 云 agent。提示——GCP 侧缺这种『事故中枢→Google 云 agent 自愈』编排,你们可定位为 GCP 上这块的填补者。"
+    ],
+    "whitespace": [
+      "『独立生产告警(部署数小时后)触发的 Cloud Run revision 自动回滚 + 用 Cloud Logging/Monitoring 验证错误率归零』这一精确闭环没人做好:Harness/Sedai/Argo/Flagger/LaunchDarkly 的自动回滚全部绑在『部署/金丝雀窗口内』,由发布时分析驱动;一旦发布窗口过去、几小时后才暴露的生产故障,它们都不再自动回滚。这是你们最干净、最可防守的差异化主战场。",
+      "Google 原生栈在『执行层』有明确空洞:已核实 Gemini Cloud Assist 官方原文『don\\'t modify or make any changes』『human-in-the-loop is currently required』,纯诊断+建议,且 2026-04-10 起需 Premium Support 才能用调查。Google 自家没有『告警→自治回滚 Cloud Run+验证』的成品。用 ADK+Gemini 在 Cloud Run 上把这层补齐,既填 Google 空白又满足必用 ADK/Gemini 评分项。",
+      "『运行时事故自愈』与『代码层修复』之间的鸿沟无人跨接:Jules/Devin/Sentry Seer/Charlie 等止步于开 PR(代码层),不监控生产、不回滚线上版本、不验证错误率;而 SRE 类(Cleric/Traversal/Flip)只诊断不改代码。把两端缝起来——监控发现故障→(快路)回滚 revision 止血→(慢路)开修复 PR 走真 CI/CD→监控验证错误率清零——这种『止血+根治双路径』端到端无人值守,目前没有一个产品完整覆盖。",
+      "『证明错误率清零』作为成功判据,而非『指标方差未恶化』:现有闭环(Harness/Sedai)验的是相对基线的方差/回归,语义弱;你们用 Cloud Logging/Monitoring 显式证明『错误率回到零/恢复 SLO』作为回滚成功的硬门槛,是更强、更直观、demo 更有冲击力的判据,目前少有产品如此明确。",
+      "真正端到端无人值守的『默认全自动』几乎无人敢做:几乎所有有执行力的产品(Resolve.ai/Azure SRE/Datadog Bits/PagerDuty/Sedai)默认都是人审门控,『全自动』是 opt-in。Hackathon 场景下你们可以把『带验证与自动回滚兜底的真·无人值守闭环』做成默认并安全演示——因为有『回滚兜底+错误率验证』,全自动反而可被信任。这个『敢全自动且有兜底』的姿态本身就是差异化叙事。",
+      "Cloud Run revision 维度的回滚目标选择:多数自愈/回滚工具是 K8s(ReplicaSet)或 flag 维度,没有针对 Cloud Run『把流量切回上一个健康 revision』并结合部署历史定位『哪次 revision 引入故障』的成品。这个 Cloud Run 专属粒度是你们可独占的具体技术点。",
+      "『止血动作(回滚)』与『根治动作(修复 PR)』的协同编排无人做:回滚先止血,同时异步开 PR 根治,PR 合并部署后再验证可撤销临时回滚——这种快慢双路径+状态机协同,是 ADK 多 agent 编排的天然用武之地,且现有任何单一产品都没有把『临时回滚』和『永久修复』作为一个事务闭环来管。"
+    ],
+    "differentiationByLens": [
+      {
+        "lens": "tech-novelty",
+        "angles": [
+          {
+            "title": "止血/根治双路径事务编排（Rollback-then-Fix State Machine）",
+            "pitch": "用 ADK 多 agent 把『回滚止血』和『修复 PR 根治』编排成一个可撤销的分布式事务：先秒级切回健康 revision 止血，并行异步开 PR 走真 CI，PR 部署验证通过后再撤销临时回滚——一个事务两套补偿动作。",
+            "whyNovel": "分析里明确：现有任何单一产品都没把『临时回滚』和『永久修复』作为一个事务闭环管理。Jules/Devin/Sentry Seer 止步开 PR 不碰生产；Harness/Sedai/Argo 只在发布窗口内回滚、不开修复 PR；Azure SRE/Resolve.ai 执行但不把两路径作为带补偿的状态机协同。这是『运行时自愈』与『代码层修复』之间无人跨接的鸿沟。",
+            "feasibility2w": "medium",
+            "judgeAppeal": "high",
+            "demoHook": "现场注入坏发布→3 秒内看到流量切回上一 revision、错误率曲线掉头向下（止血）；同一时间线上 PR 自动开出、CI 由红转绿、合并部署→agent 自动撤销临时回滚回到新版本。一个事务、两个补偿动作、双曲线，全程在 dashboard 状态机上点亮。这是没有任何竞品能同屏演示的画面。"
+          },
+          {
+            "title": "『错误率归零』作为硬验证门（Zero-Error Proof Gate，非方差未恶化）",
+            "pitch": "回滚/修复成功的判据不是『相对基线方差没变差』，而是用 Cloud Logging/Monitoring 显式证明错误率回到零、SLO 恢复——一个二值化、可核验、demo 一眼看懂的成功门槛，未达标就继续行动或升级。",
+            "whyNovel": "分析直接点名：Harness/Sedai 验的是对基线的方差/回归，语义弱；少有产品明确把『错误率清零』作为回滚成功硬门槛。Argo/Flagger 是阈值方差规则。把『证明问题消失』而非『指标没恶化』作为闭环终止条件，是更强判据，且现有闭环产品都没这么做。",
+            "feasibility2w": "high",
+            "judgeAppeal": "high",
+            "demoHook": "dashboard 上一条粗红的 error-rate 曲线，verification gate 是一条 y=0 的目标线；agent 动作后曲线必须实际压到 0 并维持 N 分钟，门才变绿打勾。对比叙事：『别人证明指标没更糟，我们证明故障真的没了。』评委一眼能判断成败。"
+          },
+          {
+            "title": "Cloud Run revision 粒度的『定位坏发布并切回』",
+            "pitch": "关联 Cloud Run 部署/revision 历史 + Cloud Logging 错误 + Monitoring 指标 + 代码 diff，用 Gemini 推理定位『是哪一次 revision 引入了故障』，再把 100% 流量精确切回上一个健康 revision——Cloud Run 专属粒度，不是 K8s ReplicaSet 也不是 feature flag。",
+            "whyNovel": "分析指出这是『可独占的具体技术点』：多数自愈/回滚工具是 K8s(ReplicaSet) 或 flag 维度，没有针对 Cloud Run『切回上一健康 revision』并结合部署历史定位引入故障 revision 的成品。Sedai 自承 Cloud Run 非一等公民。这同时满足『必用 Cloud Run』评分项。",
+            "feasibility2w": "high",
+            "judgeAppeal": "medium",
+            "demoHook": "展示一条 Cloud Run revision 时间线（rev-005 健康→rev-006 坏），Gemini 把 spike 关联到 rev-006 的具体 commit diff 并高亮引入故障的代码行，然后一条命令把 traffic 100% 切回 rev-005，控制台流量切分实时变化。把『关联→定位→切回』三步可视化。"
+          },
+          {
+            "title": "『敢默认全自动』+ 回滚兜底信任模型（可调自治阶梯）",
+            "pitch": "做成 observe→approve→autonomous 可配置档位，但 demo 默认开『全自动』——底气来自每个危险动作都有回滚兜底+错误率验证，且执行前过逐 tool-call 权限门、全程审计轨迹上 dashboard。一键在人审与无人值守间切换。",
+            "whyNovel": "分析强调：几乎所有有执行力的产品(Resolve.ai/Azure SRE/Datadog Bits/PagerDuty/Sedai)默认都是人审门控，全自动是 opt-in，没人敢默认全自动。我们因为有『回滚兜底+错误率验证』这个安全网，全自动反而可被信任——这个『敢全自动且有兜底』的姿态本身就是差异化叙事，也是评委信任的关键。",
+            "feasibility2w": "high",
+            "judgeAppeal": "high",
+            "demoHook": "开场就在全自动模式无人干预下跑完整闭环（故障→止血→修复→验证），全程人不点一下；然后一键切到 approve 模式，展示同一个 permission gate 弹出逐动作审批+审计日志。先震撼后安心：『默认全自动，因为有兜底，也随时能拉回人审。』"
+          },
+          {
+            "title": "带证据与置信度的『具名根因』再行动 + 可核验思考链 Artifact",
+            "pitch": "借 Causely『别凭猜行动』原则：回滚/修复前先用 Gemini 跨信号(logs+metrics+traces+部署事件+diff)产出带证据链和置信分的具名根因，把每步推理、所查信号、所采动作、验证前后曲线成 Next.js dashboard 上的可核验时间线 Artifact。",
+            "whyNovel": "分析里这是两个能力的缝合：suggest-only 阵营(Causely/Traversal/Cleric)有具名根因+置信分但拒绝执行；execute 阵营动手但常是黑箱直接动手。把『带证据置信的具名根因』作为执行前置门、再真正执行，是两端都缺的组合。Antigravity 的 Artifacts 验证范式可借鉴但它只验 app 功能、不碰生产事故。",
+            "feasibility2w": "medium",
+            "judgeAppeal": "high",
+            "demoHook": "dashboard 时间线逐帧点亮：Gemini 把 error spike→某 null 变量→引入它的 commit 关联起来，旁边显示置信度 0.92 和支撑证据（日志行+指标+diff）；只有置信度过阈值才解锁『执行回滚』按钮。把黑箱变成可核验的玻璃箱，评委能逐步审计 agent 为什么这么决定。"
+          }
+        ]
+      },
+      {
+        "lens": "google-judge",
+        "angles": [
+          {
+            "title": "The Closing Half: 把 Gemini Cloud Assist 的诊断接上执行+验证闭环",
+            "pitch": "不重造 RCA，而是消费 Gemini Cloud Assist Investigations 的 mitigation playbook，把 Google 官方明说『不执行、需人审』的那一半补成『自治回滚 Cloud Run + 用 Logging/Monitoring 验证错误率归零』。",
+            "whyNovel": "直接站在 Gemini Cloud Assist 之上而非平行竞争：官方文档原话『don't modify or make any changes』『human-in-the-loop is currently required』，执行层是 Google 自己留的空洞。区别于 Jules（只碰代码层、不接生产告警、不回滚 revision）。把 Google 的『诊断医生』接上你们的『手术执行+术后复查』。",
+            "feasibility2w": "high",
+            "judgeAppeal": "high",
+            "whyNovel_secondary": "",
+            "demoHook": "Split-screen：左边播 Gemini Cloud Assist 产出的 mitigation playbook（Google 原生 UI，评委一眼认得），右边你们的 ADK agent 读取它、自动执行回滚、然后 Monitoring 错误率曲线从尖峰跌回 0。一句话点题：『Google 给到这里就停了，我们接着把它做完。』",
+            "demoHook_note": ""
+          },
+          {
+            "title": "止血+根治双路径状态机（Fast rollback ∥ Slow PR）作为一个事务",
+            "pitch": "告警一触发，ADK 编排两条路并行：快路立即回滚 Cloud Run 到上一个健康 revision 止血，慢路异步开修复 PR 走真 CI/CD；PR 合并部署且 Monitoring 验证错误率清零后，自动撤销临时回滚——整个过程是一个可回溯的事务状态机。",
+            "whyNovel": "现有产品要么只止血（Argo/Flagger/LaunchDarkly 回滚，无修复）要么只根治（Jules/Sentry Seer/Devin 开 PR，不碰生产、不验证）。没有任何单一产品把『临时回滚』和『永久修复』当成一个协同事务来管——这正是 ADK 多 agent 编排的天然杀手级用例，也是评分项『必用 ADK』的最强正当理由。",
+            "feasibility2w": "medium",
+            "judgeAppeal": "high",
+            "demoHook": "Dashboard 上一条时间线分叉成两条 lane：t+0s 回滚止血（错误率立刻降）、t+90s PR 自修 CI 转绿、t+5m 新版本部署、t+6m 验证通过自动『拆掉止血带』恢复到修复版。评委看到的是一台有状态机的机器，不是一个聊天框。",
+            "demoHook_secondary": ""
+          },
+          {
+            "title": "『错误率归零』作为硬成功判据，而非『指标方差未恶化』",
+            "pitch": "回滚/修复成功与否，用 Cloud Logging 错误日志 + Cloud Monitoring SLO 显式证明『错误率回到 0 / SLO 恢复』作为不可绕过的门槛，验证不通过就再回滚或升级，绝不声称『搞定了』。",
+            "whyNovel": "Harness/Sedai/Argo 验的都是『相对基线的方差/回归未恶化』，语义弱且绑在部署窗口内。你们用『显式证明归零』这一更强判据，且能在部署数小时后的独立告警时触发——这恰是 whitespace 里最干净、最可防守的那条缝。Google 自家 Cloud Assist 根本不做任何验证回路。",
+            "feasibility2w": "high",
+            "judgeAppeal": "high",
+            "demoHook": "一个醒目的『验证门』组件：实时 Monitoring 查询，错误率 > 0 时红色 PENDING、归零瞬间翻绿 VERIFIED RESOLVED，并标注查询了哪条 Logging filter / 哪个 SLO。配一句『没有归零，agent 不敢说自己赢了』。",
+            "demoHook_extra": ""
+          },
+          {
+            "title": "Cloud Run revision 粒度的『哪次发布引入故障』归因 + 精准切流回滚",
+            "pitch": "关联 Cloud Run 部署/revision 历史 + Logging 错误起始时间 + 代码 diff，让 Gemini 定位到『就是这个 revision 引入的』，再把流量精准切回上一个健康 revision——这是 Cloud Run 专属粒度，不是 K8s ReplicaSet 也不是 feature flag。",
+            "whyNovel": "几乎所有自愈/回滚工具都是 K8s（ReplicaSet）或 flag 维度（LaunchDarkly/Argo/Flagger/Komodor 全是 K8s）。没人针对 Cloud Run『切流回上个健康 revision』并结合 revision 时间轴做归因。这个技术点是你们可独占的、且天然最大化 Cloud Run 深度集成（直击协赞方关切）。",
+            "feasibility2w": "high",
+            "judgeAppeal": "high",
+            "demoHook": "时间轴上把 4 个 Cloud Run revision 排开，Gemini 用证据高亮『rev-7 部署后 3 小时错误率才爆，breaking commit 是 abc123』，然后一键把 traffic split 从 rev-7 切回 rev-6，traffic 百分比动画肉眼可见地迁移。展示的是对 Cloud Run 原生对象的真实操作。",
+            "demoHook_v2": ""
+          },
+          {
+            "title": "默认全自动、但有『回滚兜底 + 错误率验证』才敢全自动的可调自治阶梯",
+            "pitch": "做成 observe→approve→autonomous 三档可配置，demo 默认人审、一键切全自动；敢把全自动设为可信默认，正是因为有『回滚兜底 + 显式错误率验证 + 逐 tool-call 权限门 + 审计轨迹』四重安全网。",
+            "whyNovel": "几乎所有有执行力的产品（Resolve.ai/Azure SRE/Datadog Bits/PagerDuty/Sedai）默认都是人审门控，全自动是 opt-in 且不敢真无人值守。你们用『有兜底所以敢全自动』把别人不敢做的姿态变成可安全演示的差异化叙事，同时把 Azure permission gate 那套安全范式搬到 GCP 侧（GCP 现在缺这块）。",
+            "feasibility2w": "medium",
+            "judgeAppeal": "high",
+            "demoHook": "顶部一个三档滑杆现场从 Approve 拖到 Autonomous，紧接着注入故障——agent 全程无人点击地走完回滚→验证；每个危险动作旁弹出 permission gate『已通过 RBAC 检查』的审计气泡。台词：『我们敢默认全自动，因为最坏情况也只是再回滚一次。』",
+            "demoHook_full": ""
+          },
+          {
+            "title": "可核验的 Gemini 思考链 Artifact 时间线（借鉴 Antigravity，但锚定生产证据）",
+            "pitch": "Next.js dashboard 把每步推理、所查的 Logging/Monitoring 信号、所采动作、回滚前后错误率曲线，连同带证据+置信度的『具名根因』，渲染成一条可回放、可核验的 Artifact 时间线，而不是黑箱直接动手。",
+            "whyNovel": "借鉴 Google Antigravity 的 Artifacts 验证范式与 Causely『行动前先具名验证根因(don't act on a guess)』原则，但把它从『app 功能验证』搬到『生产事故证据』——Antigravity 验的是浏览器点测，你们验的是真实生产错误率。这把『可解释性』从 PPT 口号变成评委能逐帧核验的产物，且天然展示 Gemini 推理深度。",
+            "feasibility2w": "medium",
+            "judgeAppeal": "high",
+            "demoHook": "故障注入后，时间线逐帧长出来：①Gemini 关联三类信号 → ②带 82% 置信度的具名根因卡片 → ③决策回滚（附理由） → ④回滚前/后错误率双曲线叠放 → ⑤VERIFIED。评委可以点任意一帧回看『当时 agent 看到了什么、为什么这么决定』。",
+            "demoHook_final": ""
+          }
+        ]
+      },
+      {
+        "lens": "feasible-demo",
+        "angles": [
+          {
+            "title": "延迟炸弹回滚:发布数小时后才爆的故障,自动切回上一个健康 Cloud Run revision",
+            "pitch": "金丝雀窗口早过了才暴露的生产故障,我们用独立 Cloud Monitoring 告警触发、自动把流量切回上一个健康 revision,并用 Cloud Logging 证明错误率真的归零——而不是'方差没恶化'。",
+            "whyNovel": "这是 whitespace 里最干净的主战场:Harness/Sedai/Argo/Flagger/LaunchDarkly 的自动回滚全部绑死在'部署/金丝雀窗口内',窗口一过就不再自动回滚。Google 原生侧 Gemini Cloud Assist 官方明确'不做任何变更、需 human-in-the-loop',Jules 只碰代码层不碰生产 revision。'独立告警 → Cloud Run revision 回滚 → 错误率归零验证'这条精确闭环目前无人完整覆盖。",
+            "feasibility2w": "high",
+            "judgeAppeal": "high",
+            "demoHook": "现场部署一个埋了 bug 的 v2(比如某路由必崩),让金丝雀'假装通过'、流量全量;等 1-2 分钟把它做成'数小时后才爆'的剧情,错误率曲线在大屏上飙红;agent 无人干预地自动 `gcloud run services update-traffic` 切回 v1,大屏错误率曲线肉眼可见跌回零。整套用 ADK 单 agent + Cloud Run Admin API 即可,2 周稳。"
+          },
+          {
+            "title": "止血+根治双路径状态机:回滚先止血,同时异步开修复 PR 走真 CI,PR 上线验证通过再撤销临时回滚",
+            "pitch": "一次事故触发两条路:快路立刻回滚止血,慢路 Gemini 生成修复 PR 走真实 GitHub Actions/Cloud Build CI;等修复版部署且监控验证错误率归零,才自动撤销临时回滚——把'临时回滚'和'永久修复'当成一个事务来管。",
+            "whyNovel": "whitespace 直指此缝:Jules/Devin/Sentry Seer/Charlie 等止步于开 PR、不回滚不验证;SRE 类(Cleric/Traversal/Flip)只诊断不改代码。没有一个产品把'快慢双路径 + 临时回滚可被永久修复撤销'作为一个协同状态机端到端覆盖。这正是 ADK 多 agent 编排的天然用武之地,也是对标 Jules('Jules 修代码,我们修线上事故')最锋利的一句话。",
+            "feasibility2w": "medium",
+            "judgeAppeal": "high",
+            "demoHook": "大屏左右分屏:左边'止血路径'秒级回滚、错误率掉回零;右边'根治路径'实时滚动 Gemini 的修复推理→提交 PR→GitHub Actions 跑 CI 由红转绿→合并部署→监控复验→自动解除临时回滚。难点在 PR 真能修好那个 bug,建议把故障设计成单文件可定位的明显 bug(如错误的环境变量/边界条件),并预演 CI 通路。"
+          },
+          {
+            "title": "CI 自我纠错:修复 PR 第一次 CI 红 → agent 读日志自修 → 第二次绿,全程无人",
+            "pitch": "修复 PR 合并前自己跑真 CI,第一次故意没过,agent 读 CI 失败日志、迭代修改、重新 push,直到 CI 变绿才进入部署——把'自愈'的可信度做到 commit 之前。",
+            "whyNovel": "对标 Jules CI Fixer(官方 2026-02-19)、CircleCI Chunk、Datadog Bits AI Dev Agent 这条'提交前自纠错'成熟范式,但把它接进生产事故自愈的端到端闭环里,而非孤立的 CI/flaky 层。这是把已被验证可行的模式低风险移植进你们叙事,既蹭了'已核实可行'的可信度,又服务于事故主线。",
+            "feasibility2w": "high",
+            "judgeAppeal": "medium",
+            "demoHook": "大屏 CI 状态徽章从红→绿的那一刻最抓眼:展示'第一次 CI 红 → agent 贴出它读到的报错 → 改 diff → 重 push → 绿'。这一段几乎可独立预演、确定性高,是兜底的稳妥加分项,即便双路径主线临场抖动也能救场。"
+          },
+          {
+            "title": "默认全自动 + 回滚兜底:敢做无人值守,因为错误率验证和自动回滚是安全网",
+            "pitch": "几乎所有有执行力的竞品默认都人审门控、全自动是 opt-in;我们反过来——默认真·无人值守,因为有'回滚兜底 + 错误率归零验证'双保险,全自动反而可被信任,并提供 observe→approve→autonomous 一键切换的自治阶梯。",
+            "whyNovel": "whitespace 明确:Resolve.ai/Azure SRE/Datadog Bits/PagerDuty/Sedai 全部默认人审,没人敢把'带验证与回滚兜底的真无人值守'做成默认。这个'敢全自动且有兜底'的姿态本身就是差异化叙事,且呼应评委最看重的'真闭环'信任问题;自治阶梯参考 Azure/Sedai/Vantage 的三档模式。",
+            "feasibility2w": "high",
+            "judgeAppeal": "high",
+            "demoHook": "开场就把模式切到'Autonomous',然后当众搞挂生产,全程双手离开键盘看 agent 自己救活——'no human touched this'。再用一个滑块现场演示三档自治(只观察/需审批/全自动)切换,强化'安全可调'。叙事冲击力极强且实现成本几乎为零(就是个门控开关)。"
+          },
+          {
+            "title": "可核验思考链时间线:每步根因带证据+置信度,验证前后错误率曲线成 Artifact",
+            "pitch": "Next.js dashboard 把 agent 的每步推理、所查的 logs/metrics/revision 历史、所采动作、回滚前后错误率曲线串成一条可核验的时间线 Artifact——'基于具名已验证根因行动,而非黑箱猜测就动手'。",
+            "whyNovel": "借鉴 Google Antigravity 的 Artifacts 验收范式 + Causely'别凭猜行动'/Traversal 置信分 + GitLab Duo 的崩溃→null变量→commit 叙事,但聚焦在 Cloud Run 生产事故自愈这条垂直线上,把'跨信号关联(Cloud Logging 错误 + Monitoring 指标 + revision 历史 + 代码 diff)→定位哪次发布引入故障'可视化。这是题目明确要求('可视化思考链')且评委最爱看的部分。",
+            "feasibility2w": "medium",
+            "judgeAppeal": "high",
+            "demoHook": "大屏中央一条流式时间线随 agent 推进逐格点亮:'检测到 5xx 飙升'→'关联到 14:32 的 revision-v2 部署'→'置信度 0.92:这次发布引入'→'决定回滚'→'验证:错误率 8.1%→0%'。配一张 before/after 错误率双曲线对照图,结尾可导出成一份事故报告 Artifact 交给评委核验。前端工作量是主要成本,但视觉回报最高。"
+          },
+          {
+            "title": "故障注入剧本台:一键'搞挂'生产,把 demo 的混沌做成可控可复现的舞台",
+            "pitch": "内置一组故障注入按钮(部署坏 revision、注入 5xx、拉高延迟、爆内存),让'故意搞挂→无人值守自愈'成为可复现、可现场点的舞台,而不是祈祷生产恰好出事。",
+            "whyNovel": "不是对标某个竞品的功能,而是把 hackathon demo 最大的风险——'怎么可控地制造真实故障'——产品化。结合 Argo/Flagger 那种成熟的'指标门控'作为 prior art 引用,但把触发源做成你们可控的混沌注入,确保现场每次都打得响。这是让前面所有差异化点能稳定演出的基础设施。",
+            "feasibility2w": "high",
+            "judgeAppeal": "medium",
+            "demoHook": "评委席现场点'注入故障'按钮,亲手把生产搞挂,然后看 agent 自己救回来——互动感拉满、可复现、零临场玄学。实现就是几个往 Cloud Run 推坏 revision 或返回 5xx 的小端点,几乎零风险,是保障整场 demo 不翻车的稳压器。"
+          }
+        ]
+      }
+    ],
+    "rawFinderCounts": [
+      {
+        "finder": "ai-sre",
+        "n": 16
+      },
+      {
+        "finder": "code-agents",
+        "n": 14
+      },
+      {
+        "finder": "cicd-heal",
+        "n": 11
+      },
+      {
+        "finder": "finops",
+        "n": 10
+      },
+      {
+        "finder": "google-native",
+        "n": 10
+      },
+      {
+        "finder": "oss-chaos-db-jp",
+        "n": 15
+      }
+    ]
+  },
+  "workflowProgress": [
+    {
+      "type": "workflow_phase",
+      "index": 1,
+      "title": "Find"
+    },
+    {
+      "type": "workflow_phase",
+      "index": 2,
+      "title": "Verify"
+    },
+    {
+      "type": "workflow_phase",
+      "index": 3,
+      "title": "Gaps"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 1,
+      "label": "find:ai-sre",
+      "phaseIndex": 1,
+      "phaseTitle": "Find",
+      "agentId": "a15c7abe3ff0c311b",
+      "model": "claude-opus-4-8",
+      "state": "done",
+      "startedAt": 1782571600849,
+      "queuedAt": 1782571600823,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "promptPreview": "比赛背景：DevOps × AI Agent Hackathon 2026（Google Cloud Japan 协赞）。我们计划做一个\"自治发布/事故自愈\" DevOps AI Agent：监控发现生产故障→自主回滚 Cloud Run 版本或开修复 PR 走真实 CI/CD→用 Cloud Logging/Monitoring 验证错误率清零→Next.js Dashboard 可视化思考链。必用 Gemini + ADK + Cloud Run。团队小、约 2 周。今天 2026-06-27。\n\n搜索并盘点 2026 年市面上的 **AI SRE / 事故响应 / 自动修复(auto-remediation)** 产品。覆盖至少：Cleric, Resolve.ai, Traversal, Parity, Neubird/Hawkeye, Flip AI, Shoreline, Ro…",
+      "lastProgressAt": 1782571847779,
+      "tokens": 61241,
+      "toolCalls": 26,
+      "durationMs": 246929,
+      "resultPreview": "{\"products\":[{\"name\":\"Resolve.ai (Resolve AI)\",\"vendor\":\"Resolve AI, Inc.\",\"category\":\"Agentic AI SRE / production engineer\",\"oneLiner\":\"Agentic AI SRE that triages, investigates and resolves production incidents by reasoning over observability, logs, code and cloud infra; can recommend AND execute rollbacks, config changes, kubectl commands and remediation PRs using AWS/K8s/GitHub/Slack like a hu…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 2,
+      "label": "find:code-agents",
+      "phaseIndex": 1,
+      "phaseTitle": "Find",
+      "agentId": "a456d802f7fcc5bf8",
+      "model": "claude-opus-4-8",
+      "state": "done",
+      "startedAt": 1782571600853,
+      "queuedAt": 1782571600824,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "promptPreview": "比赛背景：DevOps × AI Agent Hackathon 2026（Google Cloud Japan 协赞）。我们计划做一个\"自治发布/事故自愈\" DevOps AI Agent：监控发现生产故障→自主回滚 Cloud Run 版本或开修复 PR 走真实 CI/CD→用 Cloud Logging/Monitoring 验证错误率清零→Next.js Dashboard 可视化思考链。必用 Gemini + ADK + Cloud Run。团队小、约 2 周。今天 2026-06-27。\n\n搜索并盘点 2026 年的 **自治编码 / PR 自动修复 / AI 代码评审** agent。覆盖至少：Devin(Cognition), Google Jules, GitHub Copilot coding agent + Copilot Autofix, Sweep, CodeRa…",
+      "lastProgressAt": 1782571810687,
+      "tokens": 50971,
+      "toolCalls": 20,
+      "durationMs": 209834,
+      "resultPreview": "{\"products\":[{\"name\":\"Devin (Cognition)\",\"vendor\":\"Cognition Labs\",\"category\":\"Autonomous software engineer\",\"oneLiner\":\"Cloud autonomous engineer that takes a task/issue, plans, codes in a sandboxed VM with shell+browser+editor, runs tests, debugs, and opens a PR; sold by consumption (ACU) not seats.\",\"autonomyLevel\":\"executes-actions\",\"strength\":\"Genuinely long-horizon: spawns sandboxed VMs, coo…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 3,
+      "label": "find:cicd-heal",
+      "phaseIndex": 1,
+      "phaseTitle": "Find",
+      "agentId": "a8a42dcad8993f0e8",
+      "model": "claude-opus-4-8",
+      "state": "done",
+      "startedAt": 1782571600854,
+      "queuedAt": 1782571600824,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "promptPreview": "比赛背景：DevOps × AI Agent Hackathon 2026（Google Cloud Japan 协赞）。我们计划做一个\"自治发布/事故自愈\" DevOps AI Agent：监控发现生产故障→自主回滚 Cloud Run 版本或开修复 PR 走真实 CI/CD→用 Cloud Logging/Monitoring 验证错误率清零→Next.js Dashboard 可视化思考链。必用 Gemini + ADK + Cloud Run。团队小、约 2 周。今天 2026-06-27。\n\n搜索并盘点 2026 年的 **CI/CD 自愈 / flaky 测试管理 / 合并自动化 / 发布守门** 产品。覆盖至少：Trunk.io(含 Flaky Tests + Merge Queue), Aviator, Mergify, BuildPulse, Harness AI(含 A…",
+      "lastProgressAt": 1782571799354,
+      "tokens": 45145,
+      "toolCalls": 16,
+      "durationMs": 198500,
+      "resultPreview": "{\"products\":[{\"name\":\"Trunk Flaky Tests + Merge Queue\",\"vendor\":\"Trunk.io\",\"category\":\"Flaky test management + Merge queue (release gating)\",\"oneLiner\":\"Detects flaky tests from CI history, auto-quarantines them so they can't fail the merge queue, and runs an optimistic/parallel merge queue that keeps main green.\",\"autonomyLevel\":\"executes-actions\",\"strength\":\"Genuinely closed-loop on the quaranti…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 4,
+      "label": "find:finops",
+      "phaseIndex": 1,
+      "phaseTitle": "Find",
+      "agentId": "adc1a50daab745832",
+      "model": "claude-opus-4-8",
+      "state": "done",
+      "startedAt": 1782571600854,
+      "queuedAt": 1782571600824,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "promptPreview": "比赛背景：DevOps × AI Agent Hackathon 2026（Google Cloud Japan 协赞）。我们计划做一个\"自治发布/事故自愈\" DevOps AI Agent：监控发现生产故障→自主回滚 Cloud Run 版本或开修复 PR 走真实 CI/CD→用 Cloud Logging/Monitoring 验证错误率清零→Next.js Dashboard 可视化思考链。必用 Gemini + ADK + Cloud Run。团队小、约 2 周。今天 2026-06-27。\n\n搜索并盘点 2026 年的 **自治云成本(FinOps) + 可靠性自动优化** 产品，尤其能自动改配置/自动 right-size 的。覆盖至少：Sedai, Cast AI, Antimetal, Pump, Vantage, Densify, Kubecost。判定是只给建议还是真的…",
+      "lastProgressAt": 1782571767392,
+      "tokens": 45466,
+      "toolCalls": 16,
+      "durationMs": 166538,
+      "resultPreview": "{\"products\":[{\"name\":\"Sedai\",\"vendor\":\"Sedai\",\"category\":\"Autonomous cloud optimization + release/reliability (FinOps + SRE)\",\"oneLiner\":\"'Self-driving cloud' that autonomously right-sizes, tunes autoscaling, picks instance types, and optimizes serverless/K8s/BigQuery against live SLOs; also scores each release and auto-rolls-back bad deploys.\",\"autonomyLevel\":\"closed-loop-verify-rollback\",\"streng…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 5,
+      "label": "find:google-native",
+      "phaseIndex": 1,
+      "phaseTitle": "Find",
+      "agentId": "a1b1c83258816f8dd",
+      "model": "claude-opus-4-8",
+      "state": "done",
+      "startedAt": 1782571600855,
+      "queuedAt": 1782571600824,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "promptPreview": "比赛背景：DevOps × AI Agent Hackathon 2026（Google Cloud Japan 协赞）。我们计划做一个\"自治发布/事故自愈\" DevOps AI Agent：监控发现生产故障→自主回滚 Cloud Run 版本或开修复 PR 走真实 CI/CD→用 Cloud Logging/Monitoring 验证错误率清零→Next.js Dashboard 可视化思考链。必用 Gemini + ADK + Cloud Run。团队小、约 2 周。今天 2026-06-27。\n\n重点任务：搜索 2026 年 **Google Cloud 自家的自治 DevOps/AI 能力**，因为评委是 Google。覆盖并尽量找官方文档：Gemini Cloud Assist 及 **Cloud Assist Investigations**(自动根因调查), Gemini C…",
+      "lastProgressAt": 1782571802085,
+      "tokens": 48856,
+      "toolCalls": 20,
+      "durationMs": 201230,
+      "resultPreview": "{\"products\":[{\"name\":\"Gemini Cloud Assist Investigations\",\"vendor\":\"Google Cloud\",\"category\":\"AI 根因调查 / 自治运维诊断\",\"oneLiner\":\"对生产故障做自动根因调查(RCA):并行分析 Cloud Logging、Cloud Asset Inventory、Metrics、Errors、Log Themes，产出排序后的 Observations 和概率性根因 + 修复建议。Next '26 起接入 Gemini 3，能从基础设施信号一路关联到应用代码层。\",\"autonomyLevel\":\"suggest-only\",\"strength\":\"这是与你们项目最直接竞争/可借力的 Google 原生能力。能从 Cloud Monitoring 告警一键触发(带 resource lab…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 6,
+      "label": "find:oss-chaos-db-jp",
+      "phaseIndex": 1,
+      "phaseTitle": "Find",
+      "agentId": "a82ebe7c77e649761",
+      "model": "claude-opus-4-8",
+      "state": "done",
+      "startedAt": 1782571600855,
+      "queuedAt": 1782571600824,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "promptPreview": "比赛背景：DevOps × AI Agent Hackathon 2026（Google Cloud Japan 协赞）。我们计划做一个\"自治发布/事故自愈\" DevOps AI Agent：监控发现生产故障→自主回滚 Cloud Run 版本或开修复 PR 走真实 CI/CD→用 Cloud Logging/Monitoring 验证错误率清零→Next.js Dashboard 可视化思考链。必用 Gemini + ADK + Cloud Run。团队小、约 2 周。今天 2026-06-27。\n\n搜索并盘点：(1) **开源 AI-DevOps agent**（HolmesGPT, k8sgpt, kubectl-ai, Opslane, k8s 相关）；(2) **AI 混沌工程**（Gremlin, Steadybit, Harness Chaos）；(3) **数据库迁移安全*…",
+      "lastProgressAt": 1782571820236,
+      "tokens": 49651,
+      "toolCalls": 18,
+      "durationMs": 219381,
+      "resultPreview": "{\"products\":[{\"name\":\"HolmesGPT\",\"vendor\":\"Robusta.dev (CNCF Sandbox; major contributions from Microsoft)\",\"category\":\"Open-source AI-DevOps / SRE agent\",\"oneLiner\":\"Agentic SRE that investigates production incidents by iteratively fetching observability data (logs, metrics, K8s state, 25+ toolsets) and an LLM reasons to a root cause, posting findings to Slack.\",\"autonomyLevel\":\"suggest-only\",\"str…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 7,
+      "label": "audit+dedup",
+      "phaseIndex": 2,
+      "phaseTitle": "Verify",
+      "agentId": "a9ab53dede9236687",
+      "model": "claude-opus-4-8",
+      "state": "done",
+      "startedAt": 1782571847816,
+      "queuedAt": 1782571847790,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "promptPreview": "比赛背景：DevOps × AI Agent Hackathon 2026（Google Cloud Japan 协赞）。我们计划做一个\"自治发布/事故自愈\" DevOps AI Agent：监控发现生产故障→自主回滚 Cloud Run 版本或开修复 PR 走真实 CI/CD→用 Cloud Logging/Monitoring 验证错误率清零→Next.js Dashboard 可视化思考链。必用 Gemini + ADK + Cloud Run。团队小、约 2 周。今天 2026-06-27。\n\n这是 6 路搜索汇总的竞品原始记录(JSON)：\n[\n {\n  \"name\": \"Resolve.ai (Resolve AI)\",\n  \"vendor\": \"Resolve AI, Inc.\",\n  \"category\": \"Agentic AI SRE / production engi…",
+      "lastProgressAt": 1782572232923,
+      "tokens": 76837,
+      "toolCalls": 9,
+      "durationMs": 385107,
+      "resultPreview": "{\"landscape\":[{\"name\":\"Gemini Cloud Assist Investigations (+ Proactive Agents)\",\"category\":\"GCP 原生 AI 根因调查 / 运维诊断\",\"realAutonomy\":\"suggest-only\",\"keyStrength\":\"与你们项目最直接竞争且可借力的 Google 原生能力。Gemini 3 加持，能从 Cloud Monitoring 告警一键触发，并行分析 Logging/Asset/Metrics/Errors，从基础设施信号关联到应用代码层产出排序根因+修复建议；Proactive Agents 可由告警/成本异常后台自动发起调查。是你们 demo 的『house platform』和评委心智锚点。\",\"keyGap\":\"官方明确：调查『don\\\\'t modify or make …"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 8,
+      "label": "gap:tech-novelty",
+      "phaseIndex": 3,
+      "phaseTitle": "Gaps",
+      "agentId": "a7ab421c662446a9a",
+      "model": "claude-opus-4-8",
+      "state": "done",
+      "startedAt": 1782572232943,
+      "queuedAt": 1782572232930,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "promptPreview": "比赛背景：DevOps × AI Agent Hackathon 2026（Google Cloud Japan 协赞）。我们计划做一个\"自治发布/事故自愈\" DevOps AI Agent：监控发现生产故障→自主回滚 Cloud Run 版本或开修复 PR 走真实 CI/CD→用 Cloud Logging/Monitoring 验证错误率清零→Next.js Dashboard 可视化思考链。必用 Gemini + ADK + Cloud Run。团队小、约 2 周。今天 2026-06-27。\n\n竞品与空白分析(JSON)：\n{\"landscape\":[{\"name\":\"Gemini Cloud Assist Investigations (+ Proactive Agents)\",\"category\":\"GCP 原生 AI 根因调查 / 运维诊断\",\"realAutonomy\":\"…",
+      "lastProgressAt": 1782572290233,
+      "tokens": 43824,
+      "toolCalls": 1,
+      "durationMs": 57289,
+      "resultPreview": "{\"angles\":[{\"title\":\"止血/根治双路径事务编排（Rollback-then-Fix State Machine）\",\"pitch\":\"用 ADK 多 agent 把『回滚止血』和『修复 PR 根治』编排成一个可撤销的分布式事务：先秒级切回健康 revision 止血，并行异步开 PR 走真 CI，PR 部署验证通过后再撤销临时回滚——一个事务两套补偿动作。\",\"whyNovel\":\"分析里明确：现有任何单一产品都没把『临时回滚』和『永久修复』作为一个事务闭环管理。Jules/Devin/Sentry Seer 止步开 PR 不碰生产；Harness/Sedai/Argo 只在发布窗口内回滚、不开修复 PR；Azure SRE/Resolve.ai 执行但不把两路径作为带补偿的状态机协同。这是『运行时自愈』与『代码层修复』之间无人跨接的鸿沟。\",\"feasibility2…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 9,
+      "label": "gap:google-judge",
+      "phaseIndex": 3,
+      "phaseTitle": "Gaps",
+      "agentId": "a0d4962213ce639ef",
+      "model": "claude-opus-4-8",
+      "state": "done",
+      "startedAt": 1782572232944,
+      "queuedAt": 1782572232930,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "lastToolSummary": "structured_output_call",
+      "promptPreview": "比赛背景：DevOps × AI Agent Hackathon 2026（Google Cloud Japan 协赞）。我们计划做一个\"自治发布/事故自愈\" DevOps AI Agent：监控发现生产故障→自主回滚 Cloud Run 版本或开修复 PR 走真实 CI/CD→用 Cloud Logging/Monitoring 验证错误率清零→Next.js Dashboard 可视化思考链。必用 Gemini + ADK + Cloud Run。团队小、约 2 周。今天 2026-06-27。\n\n竞品与空白分析(JSON)：\n{\"landscape\":[{\"name\":\"Gemini Cloud Assist Investigations (+ Proactive Agents)\",\"category\":\"GCP 原生 AI 根因调查 / 运维诊断\",\"realAutonomy\":\"…",
+      "lastProgressAt": 1782572295713,
+      "tokens": 43871,
+      "toolCalls": 1,
+      "durationMs": 62769,
+      "resultPreview": "{\"title\":\"structured_output_call\",\"angles\":[{\"title\":\"The Closing Half: 把 Gemini Cloud Assist 的诊断接上执行+验证闭环\",\"pitch\":\"不重造 RCA，而是消费 Gemini Cloud Assist Investigations 的 mitigation playbook，把 Google 官方明说『不执行、需人审』的那一半补成『自治回滚 Cloud Run + 用 Logging/Monitoring 验证错误率归零』。\",\"whyNovel\":\"直接站在 Gemini Cloud Assist 之上而非平行竞争：官方文档原话『don't modify or make any changes』『human-in-the-loop is currently required』，执行层是 Go…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 10,
+      "label": "gap:feasible-demo",
+      "phaseIndex": 3,
+      "phaseTitle": "Gaps",
+      "agentId": "a40bd9f1a015401d3",
+      "model": "claude-opus-4-8",
+      "state": "done",
+      "startedAt": 1782572232945,
+      "queuedAt": 1782572232930,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "promptPreview": "比赛背景：DevOps × AI Agent Hackathon 2026（Google Cloud Japan 协赞）。我们计划做一个\"自治发布/事故自愈\" DevOps AI Agent：监控发现生产故障→自主回滚 Cloud Run 版本或开修复 PR 走真实 CI/CD→用 Cloud Logging/Monitoring 验证错误率清零→Next.js Dashboard 可视化思考链。必用 Gemini + ADK + Cloud Run。团队小、约 2 周。今天 2026-06-27。\n\n竞品与空白分析(JSON)：\n{\"landscape\":[{\"name\":\"Gemini Cloud Assist Investigations (+ Proactive Agents)\",\"category\":\"GCP 原生 AI 根因调查 / 运维诊断\",\"realAutonomy\":\"…",
+      "lastProgressAt": 1782572295338,
+      "tokens": 43833,
+      "toolCalls": 1,
+      "durationMs": 62393,
+      "resultPreview": "{\"angles\":[{\"title\":\"延迟炸弹回滚:发布数小时后才爆的故障,自动切回上一个健康 Cloud Run revision\",\"pitch\":\"金丝雀窗口早过了才暴露的生产故障,我们用独立 Cloud Monitoring 告警触发、自动把流量切回上一个健康 revision,并用 Cloud Logging 证明错误率真的归零——而不是'方差没恶化'。\",\"whyNovel\":\"这是 whitespace 里最干净的主战场:Harness/Sedai/Argo/Flagger/LaunchDarkly 的自动回滚全部绑死在'部署/金丝雀窗口内',窗口一过就不再自动回滚。Google 原生侧 Gemini Cloud Assist 官方明确'不做任何变更、需 human-in-the-loop',Jules 只碰代码层不碰生产 revision。'独立告警 → Cloud R…"
+    }
+  ],
+  "totalTokens": 509695,
+  "totalToolCalls": 128
+}

@@ -1,0 +1,1150 @@
+{
+  "summary": "Track A: docs-grounded technical feasibility for the self-heal agent (ADK/Cloud Run/Gemini/CI). Track B: market & user validation.",
+  "agentCount": 8,
+  "logs": [
+    "TechDocs 完成:20 个技术组件已核验",
+    "Market 完成:23 条洞见、11 条定价"
+  ],
+  "result": {
+    "techComponents": [
+      {
+        "topic": "版本现状与最关键风险:ADK 2.0(2026-05)是重大破坏性升级,新项目用哪个版本",
+        "recommendation": "用 Python。但务必先做版本决策。google-adk 在 PyPI 当前最新是 2.3.0(2026-06-18),2.0.0 于 2026-05-19 转 stable。2.0 把执行模型整体改成 graph-based Workflow Runtime:BaseAgent 现在 subclass BaseNode,classic 的 _run_async_impl() 等方法覆盖会被『静默忽略』;手动 context.session.events.append() 不再生效;1.x 与 2.0 的 session/memory/eval 存储 schema 不兼容(混用会丢数据)。对你们这种『距 7/10 仅 ~12 天、团队小』的黑客松项目,我的明确建议是先锁 1.x:`pip install \"google-adk~=1.0\"`,因为网上 95% 的教程/sample/codelab/StackOverflow 都还是 1.x 写法(LlmAgent + tools + Runner),迁移成本和 2.0 新坑会吃掉你宝贵的 12 天。等 demo 稳了赛后再评估迁 2.0。注意 LlmAgent/SequentialAgent/ParallelAgent/LoopAgent 这些类名在 2.0 里仍然存在(作为 'template workflows'),所以本报告下面给的骨架在 1.x 上 100% 可用,在 2.0 上类名也在、但执行语义有变,需按 2.0 迁移指南调整。",
+        "riskLevel": "high",
+        "keyApisOrCommands": [
+          "pip install \"google-adk~=1.0\"  (锁 1.x,推荐给 hackathon)",
+          "pip install google-adk  (=2.3.0, graph-based,新但生态资料少)",
+          "Python 3.10+ 必需(2.0 部分文档提到 3.11+)",
+          "官方文档域名已从 google.github.io/adk-docs 301 跳到 adk.dev"
+        ],
+        "minimalCodeOrCommand": "# requirements.txt (hackathon 稳妥版)\ngoogle-adk~=1.0\ngoogle-cloud-aiplatform[adk,agent_engines]\n\n# 验证版本\npython -c \"import google.adk, importlib.metadata as m; print(m.version('google-adk'))\"",
+        "gotchas": [
+          "最大坑:跟着随便一篇博客 pip install google-adk 会装到 2.3.0,代码语义和绝大多数教程对不上,排查浪费时间",
+          "1.x 数据库/session 与 2.0 不可互通,中途升级=丢历史 session",
+          "文档老链接 google.github.io/adk-docs 会 301 到 adk.dev,WebFetch/脚本里写死老链接会拿到重定向页"
+        ],
+        "sourceUrls": [
+          "https://pypi.org/project/google-adk/",
+          "https://adk.dev/2.0/",
+          "https://github.com/google/adk-docs/blob/main/docs/2.0/index.md",
+          "https://dev.to/peytongreen_dev/google-adk-20-is-now-stable-workflow-runtimes-breaking-changes-and-how-to-migrate-4ah8"
+        ]
+      },
+      {
+        "topic": "① 语言支持:Python / Java / TypeScript / Go / Kotlin 哪个最成熟",
+        "recommendation": "Python 最成熟,且你们项目应当用 Python——理由:(a) ADK 起家就是 adk-python,版本节奏最快、sample 最全(adk-samples 几乎全是 Python),Gemini/Vertex SDK、Cloud Logging/Monitoring 客户端、Agent Engine 部署 SDK 都以 Python 一等公民支持;(b) Java 有官方 API reference 和 builder 模式(LlmAgent.builder()...build()),属第二梯队,适合已有 JVM 栈团队;(c) TypeScript(@google/adk)、Go(llmagent.New(...))、Kotlin 都已有 get-started,但生态/sample 明显更薄。对『自治 DevOps 自愈 Agent + 真 CI/CD + Cloud Run』,Python 让你能直接复用 google-cloud-run / google-cloud-logging / google-cloud-monitoring 客户端做回滚和『证明错误率归零』,粘合成本最低。",
+        "riskLevel": "low",
+        "keyApisOrCommands": [
+          "Python: from google.adk import Agent / from google.adk.agents import LlmAgent",
+          "Java: LlmAgent.builder()...build()",
+          "TypeScript: import { LlmAgent } from '@google/adk'",
+          "Go: llmagent.New(llmagent.Config{...})"
+        ],
+        "minimalCodeOrCommand": "from google.adk.agents import LlmAgent\nroot_agent = LlmAgent(model=\"gemini-2.5-flash\", name=\"root\", instruction=\"...\")",
+        "gotchas": [
+          "非 Python 语言的 evaluation / Agent Engine 部署工具链不如 Python 完整,临近 deadline 别选小众语言踩兼容坑",
+          "TS/Go/Kotlin 的第三方教程少,出问题基本只能啃官方 docs"
+        ],
+        "sourceUrls": [
+          "https://adk.dev/",
+          "https://adk.dev/agents/llm-agents/",
+          "https://github.com/google/adk-samples",
+          "https://adk.dev/get-started/typescript/"
+        ]
+      },
+      {
+        "topic": "② Agent 类型与编排:LlmAgent + Sequential/Parallel/Loop Workflow agents + multi-agent",
+        "recommendation": "用 LlmAgent 做需要推理/工具调用的『大脑』节点;用三种确定性 Workflow agents 做编排骨架,它们都吃 sub_agents 列表:SequentialAgent(严格顺序,适合你的『止血→开 PR→等 CI→验证→撤销回滚』主流水线)、ParallelAgent(并发独立子任务再聚合,如同时拉 Logging+Monitoring 指标)、LoopAgent(反复 refine,子 agent 串行+回到开头,靠内部 LLM 决定调用内置 exit_loop 工具退出——非常契合你『轮询错误率直到归零或超时』)。需要自定义编排逻辑时写 Custom Agent(继承 BaseAgent,override _run_async_impl,注意这正是 2.0 会破坏的地方)。multi-agent 通过把 agents 互相作为 sub_agents 组合 + LLM 驱动的动态路由(agent transfer)实现。",
+        "riskLevel": "low",
+        "keyApisOrCommands": [
+          "from google.adk.agents import LlmAgent, SequentialAgent, ParallelAgent, LoopAgent, BaseAgent",
+          "SequentialAgent(name=..., sub_agents=[...])",
+          "ParallelAgent(name=..., sub_agents=[...])",
+          "LoopAgent(name=..., sub_agents=[...], max_iterations=N)",
+          "内置工具 exit_loop 用于跳出 LoopAgent"
+        ],
+        "minimalCodeOrCommand": "from google.adk.agents import LlmAgent, SequentialAgent, LoopAgent\n\ntriage = LlmAgent(model=\"gemini-2.5-flash\", name=\"triage\", instruction=\"判断是否需回滚\", tools=[get_error_rate])\nrollback = LlmAgent(model=\"gemini-2.5-flash\", name=\"rollback\", instruction=\"切流量回上一健康 revision\", tools=[shift_traffic])\nverify_loop = LoopAgent(name=\"verify\", sub_agents=[LlmAgent(model=\"gemini-2.5-flash\", name=\"check\", tools=[get_error_rate, exit_loop])], max_iterations=10)\n\nroot_agent = SequentialAgent(name=\"self_heal\", sub_agents=[triage, rollback, verify_loop])",
+        "gotchas": [
+          "LoopAgent 不会自己停,必须让子 agent 能调用 exit_loop 内置工具,否则只能靠 max_iterations 兜底",
+          "ParallelAgent 子 agent 共享同一 session.state,并发写同一个 state key 会相互覆盖——给每个并行分支用不同 output_key",
+          "Custom Agent override _run_async_impl 在 ADK 2.0 会被 graph 引擎静默忽略;若用 2.0 必须改用回调/节点 yield 事件"
+        ],
+        "sourceUrls": [
+          "https://adk.dev/get-started/about/",
+          "https://google.github.io/adk-docs/agents/workflow-agents/parallel-agents/",
+          "https://adk.dev/agents/workflow-agents/sequential-agents/",
+          "https://google.github.io/adk-docs/agents/custom-agents/"
+        ]
+      },
+      {
+        "topic": "③ Tool calling:如何定义工具(对你的回滚/查指标/开 PR 动作至关重要)",
+        "recommendation": "最省事:直接把普通 Python 函数放进 agent 的 tools=[...] 列表,ADK 自动把它包成 FunctionTool。规则:每个参数都要 type hint;docstring 是发给 LLM 的工具描述,必须写清用途并在 Args 段逐个说明参数;返回 dict(强烈建议带 'status' 键:success/error/pending,非 dict 会被自动包成 {'result': value})。需要读写会话/落盘 artifact/控制流程时,给函数加一个 tool_context: ToolContext 参数(ADK 自动注入,LLM 看不到它)。你的关键动作(Cloud Run 流量切换、查 Logging/Monitoring 错误率、用 ADK/Gemini 开修复 PR)都做成这样的 FunctionTool,内部调对应 Google Cloud / GitHub 客户端。",
+        "riskLevel": "medium",
+        "keyApisOrCommands": [
+          "from google.adk.tools import FunctionTool  (一般无需手动包,直接传函数即可)",
+          "from google.adk.tools import ToolContext",
+          "返回值:dict,建议含 {'status': 'success'|'error', ...}",
+          "内置工具如 google_search、code_executor、exit_loop"
+        ],
+        "minimalCodeOrCommand": "from google.adk.tools import ToolContext\n\ndef shift_traffic_to_revision(service: str, revision: str, tool_context: ToolContext) -> dict:\n    \"\"\"Cloud Run 流量切回指定 revision 以止血。\n\n    Args:\n        service (str): Cloud Run 服务名。\n        revision (str): 目标(上一个健康)revision 名。\n    \"\"\"\n    # 调 run_v2 / gcloud 把 100% 流量指向 revision\n    tool_context.state[\"temp:rolled_back_to\"] = revision  # 记下来便于稍后撤销\n    return {\"status\": \"success\", \"service\": service, \"active_revision\": revision}\n\n# 直接挂到 agent\n# LlmAgent(model=\"gemini-2.5-flash\", name=\"rollback\", tools=[shift_traffic_to_revision])",
+        "gotchas": [
+          "docstring 写得含糊 / 漏写某个参数 → LLM 不会调用或乱填参数,这是最常见 fail",
+          "返回非 dict 会被静默包成 {'result': ...},下游 agent 读 key 时会对不上",
+          "ADK 2.0 用 @WorkflowNode / @node 模式重构了工具/节点定义,@tool 风格被取代;留在 1.x 就用上面普通函数写法最稳",
+          "工具内别写大而全的 except Exception 吞异常——2.0 会因此禁用自动重试且吞掉 Human-in-the-Loop 中断"
+        ],
+        "sourceUrls": [
+          "https://adk.dev/tools-custom/function-tools/",
+          "https://adk.dev/tools/",
+          "https://github.com/google/adk-python"
+        ]
+      },
+      {
+        "topic": "④ 部署目标:Cloud Run vs Vertex AI Agent Engine,各自步骤",
+        "recommendation": "你项目明确要求『必用 Cloud Run』,所以主部署走 Cloud Run,用一行 `adk deploy cloud_run`。两者取舍:Cloud Run = 你自管容器/扩缩/网络,可 --with_ui 带调试 UI,session 需自己接 DatabaseSessionService(Postgres/Cloud SQL)做持久化,完全契合你『被告警 webhook 触发、独立于部署窗口运行』的需求;Vertex AI Agent Engine(2026 文档里也叫 Agent Runtime)= 全托管,自带 session/memory(VertexAiSessionService + Memory Bank),省运维但更黑盒、且不是你赛题指定目标。建议:Cloud Run 跑自愈 Agent 本体,Agent Engine 只在想要托管 Memory Bank 时可选搭配。",
+        "riskLevel": "medium",
+        "keyApisOrCommands": [
+          "adk deploy cloud_run --project=$PROJECT --region=$REGION <AGENT_PATH>",
+          "可选 flags: --service_name, --app_name, --with_ui, --port(默认 8000)",
+          "替代:gcloud run deploy <SVC> --source . --region ... (需自带 Dockerfile + main.py/FastAPI)",
+          "Agent Engine: vertexai.init(project, location, staging_bucket=...) + agent_engines.create(...) / reasoning_engines.AdkApp 包装",
+          "pip install google-cloud-aiplatform[adk,agent_engines]"
+        ],
+        "minimalCodeOrCommand": "# 目录结构(adk deploy 要求)\n# my_agent/\n#   __init__.py        # from . import agent\n#   agent.py           # 必须定义变量名 root_agent\n#   requirements.txt\n\n# Cloud Run 一键部署\nadk deploy cloud_run \\\n  --project=$GOOGLE_CLOUD_PROJECT \\\n  --region=$GOOGLE_CLOUD_LOCATION \\\n  --service_name=self-heal-agent \\\n  --with_ui \\\n  ./my_agent\n\n# 让 session 落库(否则实例重启/多实例丢 session)\n# 设环境变量 SESSION_SERVICE_URI,例如:\n#   postgresql+asyncpg://user:pass@/db?host=/cloudsql/INSTANCE\n#   或本地试验 sqlite+aiosqlite:///./sessions.db",
+        "gotchas": [
+          "agent 变量名必须叫 root_agent,且 __init__.py 要 import agent 模块,否则 adk deploy 找不到",
+          "Cloud Run 默认 InMemorySessionService:多实例/冷启动会丢 session——生产务必配 SESSION_SERVICE_URI 指向 Cloud SQL,并装对应 async 驱动(asyncpg)",
+          "你的 Agent 被告警异步触发、要长时间轮询验证错误率:注意 Cloud Run 请求超时上限与最小实例数(min-instances>=1 防冷启动错过告警)",
+          "Agent Engine 文档链接 2026 已改名/重定向到 Agent Runtime,老 URL 会 301"
+        ],
+        "sourceUrls": [
+          "https://adk.dev/deploy/cloud-run/",
+          "https://adk.dev/deploy/agent-runtime/",
+          "https://docs.cloud.google.com/vertex-ai/generative-ai/docs/agent-engine/deploy"
+        ]
+      },
+      {
+        "topic": "⑤ Evaluation:如何做(给你的自愈闭环做回归测试)",
+        "recommendation": "两条路并用:(1) 命令行快速跑 `adk eval <AGENT__init__路径> <evalset文件>`;(2) 接进 pytest:`from google.adk.evaluation.agent_evaluator import AgentEvaluator` 后 `await AgentEvaluator.evaluate(...)`,产出标准 pass/fail,可进 CI。数据有两种:.test.json(单会话,快速单测)和 .evalset.json(多会话、多轮,集成测试,适合模拟你完整的『告警→回滚→PR→验证→撤销』长链路)。默认两条内置指标:tool_trajectory_avg_score(默认阈值 1.0,要求工具调用轨迹 100% 匹配——正好用来断言『确实先回滚再开 PR』顺序没乱)和 response_match_score(默认 0.8)。还有 final_response_match_v2、rubric_based_final_response_quality_v1 等。`adk web` 的 Eval Tab 可交互式造 case。",
+        "riskLevel": "low",
+        "keyApisOrCommands": [
+          "adk eval <AGENT_MODULE_FILE_PATH> <EVAL_SET_FILE_PATH> [--config_file_path=...] [--print_detailed_results]",
+          "支持 file.json:eval_1,eval_2 只跑指定 case",
+          "from google.adk.evaluation.agent_evaluator import AgentEvaluator",
+          "await AgentEvaluator.evaluate(agent_module=..., eval_dataset_file_path_or_dir=...)",
+          "指标:tool_trajectory_avg_score(默认1.0)、response_match_score(默认0.8)、final_response_match_v2"
+        ],
+        "minimalCodeOrCommand": "# pytest 集成\nimport pytest\nfrom google.adk.evaluation.agent_evaluator import AgentEvaluator\n\n@pytest.mark.asyncio\nasync def test_self_heal_flow():\n    await AgentEvaluator.evaluate(\n        agent_module=\"my_agent\",\n        eval_dataset_file_path_or_dir=\"tests/incident.evalset.json\",\n    )\n\n# CLI\n# adk eval my_agent/__init__.py tests/incident.evalset.json --print_detailed_results",
+        "gotchas": [
+          "tool_trajectory 默认阈值 1.0 很严:工具调用顺序/参数稍有不同就 fail,给非确定性的 LLM 步骤要在 test_config.json 调低阈值",
+          "ADK 1.x 与 2.0 的 eval 数据存储 schema 不兼容,跨版本别复用 evalset",
+          "1.x 老 *.test.json 迁新 schema 用 AgentEvaluator.migrate_eval_data_to_new_schema"
+        ],
+        "sourceUrls": [
+          "https://adk.dev/evaluate/",
+          "https://github.com/google/adk-python/blob/v1.22.0/src/google/adk/evaluation/agent_evaluator.py",
+          "https://google.github.io/adk-docs/evaluate/"
+        ]
+      },
+      {
+        "topic": "⑥ Sessions / Memory / State + Runner(贯穿你的『止血→验证→撤销』要记住临时回滚状态)",
+        "recommendation": "三层分清:Session = 一次告警事件的完整交互线程(事件序列);State(session.state,dict)= 当前这条线程的临时数据,用前缀控制作用域:无前缀=本 session;app: = 全应用共享;user: = 跨该用户的所有 session;temp: = 仅本次调用、不持久化(适合存『我临时把流量回滚到了 rev-123』这种待撤销标记)。Memory = 跨 session 可搜索的长期知识库(查历史事故)。SessionService 选型:InMemorySessionService(本地开发,重启即丢)→ DatabaseSessionService(Cloud SQL/Postgres/SQLite,生产首选,需 async 驱动如 sqlite+aiosqlite / asyncpg)→ VertexAiSessionService(用 Agent Engine 时)。MemoryService:InMemoryMemoryService / VertexAiMemoryBankService(Memory Bank,自动抽取有意义记忆)。Runner 把 agent 和 session/memory 服务粘起来,跑 runner.run_async() 驱动 think-act 循环。",
+        "riskLevel": "medium",
+        "keyApisOrCommands": [
+          "from google.adk.runners import Runner",
+          "from google.adk.sessions import InMemorySessionService, DatabaseSessionService, VertexAiSessionService",
+          "from google.adk.memory import InMemoryMemoryService, VertexAiMemoryBankService",
+          "State 前缀:无 / app: / user: / temp:",
+          "runner.run_async(user_id=..., session_id=..., new_message=...)",
+          "session_service.create_session(app_name=..., user_id=..., session_id=...)"
+        ],
+        "minimalCodeOrCommand": "import asyncio\nfrom google.adk.runners import Runner\nfrom google.adk.sessions import InMemorySessionService\nfrom google.genai import types\n\nsession_service = InMemorySessionService()\nrunner = Runner(agent=root_agent, app_name=\"self_heal\", session_service=session_service)\n\nasync def main():\n    await session_service.create_session(app_name=\"self_heal\", user_id=\"alert-bot\", session_id=\"inc-001\")\n    msg = types.Content(role=\"user\", parts=[types.Part(text=\"prod 5xx 飙升,处理\")])\n    async for event in runner.run_async(user_id=\"alert-bot\", session_id=\"inc-001\", new_message=msg):\n        if event.is_final_response():\n            print(event.content.parts[0].text)\n\nasyncio.run(main())\n# 生产换成 DatabaseSessionService(db_url=\"postgresql+asyncpg://...\") 即可持久化,撤销回滚时从 state 读回 temp:rolled_back_to",
+        "gotchas": [
+          "InMemorySessionService 在 Cloud Run 冷启动/多实例下丢 session——你的告警可能触发新实例,务必上 DatabaseSessionService",
+          "temp: 前缀的 state 不会持久化:跨 Runner 调用要保留的『回滚标记』要用普通或 user: 前缀,别用 temp:",
+          "DatabaseSessionService 必须用异步驱动(sqlite+aiosqlite / asyncpg / aiomysql),用同步驱动会报错",
+          "ADK 1.x↔2.0 的 session/state schema 不兼容,2.0 Event 新增 node_info/output 字段,自定义 BaseSessionService 表结构需扩列"
+        ],
+        "sourceUrls": [
+          "https://google.github.io/adk-docs/sessions/session/",
+          "https://google.github.io/adk-docs/sessions/state/",
+          "https://adk.dev/sessions/memory/",
+          "https://cloud.google.com/blog/topics/developers-practitioners/remember-this-agent-state-and-memory-with-adk"
+        ]
+      },
+      {
+        "topic": "① 列 revision 历史(CLI)— 用于自愈闭环里枚举候选回滚目标",
+        "recommendation": "用 `gcloud run revisions list --service SERVICE --region REGION` 列出某服务的所有 revision。加 `--format` 自定义输出,这是程序化止血决策的关键:`gcloud run revisions list --service SERVICE --region REGION --format='value(metadata.name, metadata.creationTimestamp)' --sort-by='~metadata.creationTimestamp'`(按创建时间倒序,最新在前)。查单个 revision 详情用 `gcloud run revisions describe REVISION --region REGION --format yaml`。Agent 实现里:list 拿到有序 revision 名 + 创建时间戳,当前正在 100% 接流的那个是故障嫌疑,上一个 Ready 的就是回滚目标。",
+        "riskLevel": "low",
+        "keyApisOrCommands": [
+          "gcloud run revisions list --service SERVICE --region REGION",
+          "gcloud run revisions list --service SERVICE --region REGION --format='value(metadata.name,metadata.creationTimestamp)' --sort-by='~metadata.creationTimestamp'",
+          "gcloud run revisions describe REVISION --region REGION --format yaml"
+        ],
+        "minimalCodeOrCommand": "gcloud run revisions list --service my-svc --region us-central1 \\\n  --format='value(metadata.name,metadata.creationTimestamp)' \\\n  --sort-by='~metadata.creationTimestamp'",
+        "gotchas": [
+          "revision 列表里不直接标“当前接 100% 流量的是哪个”;要接流量信息得看 service 本身(`gcloud run services describe SERVICE --format='value(status.traffic)'` 或 Admin API 的 trafficStatuses)。revisions list 只给 revision 清单。",
+          "`--sort-by` 用 `~` 前缀表示降序;字段名走的是 Knative/v1 风格的 `metadata.creationTimestamp`(gcloud 输出投影),不是 v2 REST 的 `createTime`。",
+          "跨所有服务列 revision 用 `--service -`(连字符)。"
+        ],
+        "sourceUrls": [
+          "https://docs.cloud.google.com/run/docs/managing/revisions",
+          "https://docs.cloud.google.com/sdk/gcloud/reference/run/revisions/list"
+        ]
+      },
+      {
+        "topic": "② 把 100% 流量切回上一个 revision(CLI 止血主路径)",
+        "recommendation": "自愈止血的核心命令:`gcloud run services update-traffic SERVICE --to-revisions REVISION=100 --region REGION`,把全部流量定向到指定的上一个健康 revision。REVISION 必须是 `gcloud run revisions list` 返回的精确 revision 名(如 `my-svc-00007-abc`)。这是 Cloud Run 官方推荐的 rollback 方式,且与“部署窗口”解耦——任何时刻都能切,正适合“部署窗口外告警也能止血”的需求。切回后用同一命令 `--to-latest` 或再次 `--to-revisions NEWREV=100` 即可在修复 PR 部署验证后撤销临时回滚。生产环境务必加 `--region` 显式指定区域,避免交互式提示卡住自动化。",
+        "riskLevel": "low",
+        "keyApisOrCommands": [
+          "gcloud run services update-traffic SERVICE --to-revisions REVISION=100 --region REGION",
+          "gcloud run services update-traffic SERVICE --to-latest --region REGION",
+          "gcloud run services update-traffic SERVICE --to-revisions REV_A=90,REV_B=10 --region REGION",
+          "--async(返回不等待收敛)"
+        ],
+        "minimalCodeOrCommand": "# 止血:100% 切回上一个健康 revision\ngcloud run services update-traffic my-svc \\\n  --to-revisions my-svc-00006-prev=100 \\\n  --region us-central1\n\n# 撤销回滚:修复 revision 验证通过后切回 latest\ngcloud run services update-traffic my-svc --to-latest --region us-central1",
+        "gotchas": [
+          "`--to-latest` / `--to-revisions` / `--to-tags` 三者互斥,一条命令只能用一个。",
+          "update-traffic 只重新分配流量,不创建/删除 revision;被切走流量的故障 revision 仍在,可保留做取证。",
+          "若服务部署时用了 `--no-traffic`,新 revision 不会自动接流量——这恰好可做蓝绿:先 `--tag` 部署不接流量,验证后再 update-traffic 迁移。",
+          "REVISION=PERCENTAGE 的 PERCENTAGE 必须是 0–100 的整数;多目标时百分比之和需为 100。",
+          "自动化里强烈建议 `--region`(或设 `gcloud config set run/region`)+ 非交互,否则会弹区域选择提示。"
+        ],
+        "sourceUrls": [
+          "https://docs.cloud.google.com/run/docs/rollouts-rollbacks-traffic-migration",
+          "https://docs.cloud.google.com/sdk/gcloud/reference/run/services/update-traffic"
+        ]
+      },
+      {
+        "topic": "③ Cloud Run Admin API v2 程序化做回滚/列 revision(Agent 应直接走 REST/客户端库,而非 shell out gcloud)",
+        "recommendation": "Base URL `https://run.googleapis.com`,OAuth scope `https://www.googleapis.com/auth/cloud-platform`。\n\n回滚 = PATCH service 的 traffic 字段:\n`PATCH https://run.googleapis.com/v2/{service.name}`,path 参数 `service.name` 形如 `projects/{project}/locations/{location}/services/{serviceId}`;query 用 `updateMask=traffic` 只改流量。请求体 Service 对象的 `traffic` 是 TrafficTarget 数组,回滚到指定 revision 用:`{\"type\":\"TRAFFIC_TARGET_ALLOCATION_TYPE_REVISION\",\"revision\":\"my-svc-00006-prev\",\"percent\":100}`。返回长跑 Operation,需轮询其完成。\n\n列 revision = `GET https://run.googleapis.com/v2/{parent}/revisions`,`parent`=`projects/{project}/locations/{location}/services/{service}`(service 用 `-` 可跨服务);支持 `pageSize`/`pageToken`。\n\n读单个 service 看当前接流情况 = `GET https://run.googleapis.com/v2/{name}`(看返回的 `trafficStatuses`/`traffic`)。建议用官方客户端库(Python `google-cloud-run` 的 `ServicesClient.update_service` + `TrafficTarget(type_=..., revision=..., percent=100)`,Go `run/apiv2`)而非裸 HTTP,省掉 Operation 轮询样板。",
+        "riskLevel": "medium",
+        "keyApisOrCommands": [
+          "PATCH https://run.googleapis.com/v2/{service.name}?updateMask=traffic",
+          "GET https://run.googleapis.com/v2/{parent}/revisions  (parent=projects/*/locations/*/services/*)",
+          "GET https://run.googleapis.com/v2/{name}  (取 service 当前 traffic/trafficStatuses)",
+          "TrafficTarget{ type, revision, percent, tag }",
+          "enum TrafficTargetAllocationType: TRAFFIC_TARGET_ALLOCATION_TYPE_REVISION (2) / _LATEST (1) / _UNSPECIFIED (0)",
+          "scope: https://www.googleapis.com/auth/cloud-platform",
+          "IAM: run.services.update / run.revisions.list"
+        ],
+        "minimalCodeOrCommand": "# REST 回滚(止血):整段流量切回上一个 revision\ncurl -X PATCH \\\n  \"https://run.googleapis.com/v2/projects/PROJECT/locations/us-central1/services/my-svc?updateMask=traffic\" \\\n  -H \"Authorization: Bearer $(gcloud auth print-access-token)\" \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\"traffic\":[{\"type\":\"TRAFFIC_TARGET_ALLOCATION_TYPE_REVISION\",\"revision\":\"my-svc-00006-prev\",\"percent\":100}]}'\n# -> 返回 Operation,需轮询 operations.get 直到 done\n\n# Python 客户端(推荐,省 Operation 轮询)\nfrom google.cloud import run_v2\nc = run_v2.ServicesClient()\nsvc = c.get_service(name=\"projects/PROJECT/locations/us-central1/services/my-svc\")\nsvc.traffic = [run_v2.TrafficTarget(\n    type_=run_v2.TrafficTargetAllocationType.TRAFFIC_TARGET_ALLOCATION_TYPE_REVISION,\n    revision=\"my-svc-00006-prev\", percent=100)]\nc.update_service(service=svc).result()  # 阻塞等 Operation 完成",
+        "gotchas": [
+          "PATCH 一定带 `updateMask=traffic`,否则按字段语义可能触发更广更新甚至新建 revision;只想改流量就只 mask traffic。",
+          "REST 字段是驼峰(`type`,`revision`,`percent`,`tag`);客户端库属性可能带下划线(Python 是 `type_`,因为 `type` 是关键字)。",
+          "REVISION 类型必须同时给 `type=...REVISION` 且填 `revision`;若给 `...LATEST` 则忽略 revision、永远跟随最新就地——止血时要的是钉死具体旧 revision,务必用 REVISION 而非 LATEST。",
+          "PATCH 返回的是长跑 Operation,不是即时生效;自动化要轮询 Operation 或用客户端库的 `.result()` 等待,否则后续“验证错误率归零”可能在流量还没切完时就跑了。",
+          "并发安全:多个自愈触发可能同时 PATCH 同一 service。可用 `etag`(读 service 拿到的)做乐观并发控制,避免互相覆盖流量配置。",
+          "与 gcloud 的 Knative 风格 v1 API(apis/serving.knative.dev/v1)不要混用;v2 是当前 GA 的原生 Admin API,字段模型不同。"
+        ],
+        "sourceUrls": [
+          "https://docs.cloud.google.com/run/docs/reference/rest",
+          "https://docs.cloud.google.com/run/docs/reference/rest/v2/projects.locations.services/patch",
+          "https://docs.cloud.google.com/run/docs/reference/rest/v2/projects.locations.services.revisions/list",
+          "https://docs.cloud.google.com/python/docs/reference/run/latest/google.cloud.run_v2.types.TrafficTarget",
+          "https://docs.cloud.google.com/run/docs/reference/cloud-run-admin-api-overview"
+        ]
+      },
+      {
+        "topic": "④ 从部署历史定位“哪次 revision 引入故障”(部署时间 vs 错误起始时间关联)",
+        "recommendation": "Cloud Run 没有现成的“哪个 revision 引入了故障”的单一 API——这是你 Agent 要自己算的关联逻辑。做法:(a) 用 Admin API v2 `revisions.list` 拿每个 Revision 的 `createTime`(RFC3339 Timestamp,Output only;`updateTime`/`deleteTime` 同类),按 createTime 排序得到部署时间线;v2 Service 上 `latestCreatedRevision`/`latestReadyRevision` 指明最新创建/最新就绪的 revision。(b) 用 Cloud Monitoring 找错误率指标(如 `run.googleapis.com/request_count` 按 `response_code_class=\"5xx\"` 过滤)的告警/突变起始时间 = 错误起始 T_err。(c) 关联:在所有 revision 里,找 createTime ≤ T_err 且为该时刻正在接流量的那个 revision——即“最后一次在错误起始前生效的部署”就是嫌疑 revision;它的上一个 Ready revision 就是回滚目标。(d) 交叉验证可查 Cloud Logging 的部署/Operation 审计日志(`protoPayload.methodName` 含 `Services.ReplaceService`/`UpdateService`)拿到精确部署事件时刻,与 T_err 对齐。Cloud Run 监控指标本身是按 revision 维度打标的(metric label `revision_name`),所以也可直接看“错误是否只集中在某个 revision_name 上”,这是最强信号——若 5xx 几乎全来自最新 revision_name 而旧的干净,定位即成立。",
+        "riskLevel": "medium",
+        "keyApisOrCommands": [
+          "Revision.createTime / updateTime / deleteTime (RFC3339 Timestamp, output only)",
+          "Service.latestCreatedRevision / latestReadyRevision / trafficStatuses",
+          "Monitoring metric: run.googleapis.com/request_count,label response_code_class=5xx,label revision_name",
+          "Logging audit: protoPayload.methodName=~'Services.(ReplaceService|UpdateService|CreateService)' resource.type='cloud_run_revision'",
+          "gcloud run services describe SERVICE --format='value(status.latestCreatedRevisionName,status.traffic)'"
+        ],
+        "minimalCodeOrCommand": "# 1) 部署时间线(每个 revision 的创建时间)\ngcloud run revisions list --service my-svc --region us-central1 \\\n  --format='value(metadata.name,metadata.creationTimestamp)' \\\n  --sort-by='~metadata.creationTimestamp'\n\n# 2) 按 revision 维度看 5xx 是否集中在最新 revision(最强定位信号)\n#    Monitoring: metric run.googleapis.com/request_count\n#    filter: resource.label.service_name=my-svc, metric.label.response_code_class=\"5xx\"\n#    group by: metric.label.revision_name\n\n# 3) 取部署审计事件时刻与错误起始对齐\ngcloud logging read \\\n  'resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"my-svc\" AND protoPayload.methodName:\"ervice\"' \\\n  --format='value(timestamp,protoPayload.methodName,protoPayload.response.metadata.name)' --limit=20",
+        "gotchas": [
+          "不要只靠“createTime 最近的 revision”就判定有罪——可能新 revision 部署后用 --no-traffic 没接流量,真正接流量的还是旧的。必须结合 trafficStatuses / 按 revision_name 分组的错误指标确认‘正在接流量且错误集中’。",
+          "v2 REST 的时间字段是 `createTime`(驼峰、RFC3339);而 gcloud 投影里是 `metadata.creationTimestamp`(Knative 风格)。同一时间不同字段名,别在代码里写错路径。",
+          "错误起始 T_err 的精度依赖告警/指标采样窗口(request_count 通常 60s 粒度),与部署时刻做关联时留出几分钟容差,避免边界误判。",
+          "若一次部署同时改了流量切分(蓝绿渐进 rollout),‘引入故障的 revision’可能只承接了部分流量,5xx 比例需按 revision_name 归一化(5xx 数 / 该 revision 请求数)再比较,否则低流量 revision 的高错误率会被绝对值掩盖。",
+          "审计日志要确保项目已开启 Admin Activity / Data Access 审计日志;Admin Activity 默认开,部署这类写操作能查到。"
+        ],
+        "sourceUrls": [
+          "https://docs.cloud.google.com/run/docs/reference/rest/v2/projects.locations.services.revisions",
+          "https://docs.cloud.google.com/run/docs/reference/rest/v2/projects.locations.services",
+          "https://docs.cloud.google.com/run/docs/monitoring",
+          "https://docs.cloud.google.com/run/docs/logging"
+        ]
+      },
+      {
+        "topic": "Gemini structured output (responseSchema / responseMimeType) 驱动状态机决策",
+        "recommendation": "用 classic generateContent v1beta 的 generationConfig 把决策结果约束成枚举 JSON,作为状态机的输入。设 responseMimeType='application/json' + responseSchema(用 OpenAPI-subset Schema,顶层 OBJECT,字段含 enum 的 action),让 Gemini 输出形如 {\"action\":\"ROLLBACK\",\"target_revision\":\"...\",\"confidence\":0.9,\"reason\":\"...\"} 的强类型决策。关键技巧:用 STRING+enum 字段把下一个状态/动作锁进有限集合(DIAGNOSE/ROLLBACK/OPEN_PR/VERIFY/REVERT_ROLLBACK/NOOP),这样状态机不必解析自由文本;再用 propertyOrdering 固定字段顺序提升稳定性。ADK 里把这套 generationConfig 直接挂到 LlmAgent 的 generate_content_config(ADK 透传到 Gemini),或用 output_schema(Pydantic)让 ADK 替你设 responseSchema。注意:2026-06 的官方文档首页已切到新的 'Interactions API'(response_format.schema, model=gemini-3.x),但你要的状态机驱动用经典 generateContent 更稳、ADK 支持最成熟——两套别混。HACKATHON 取舍:决策用 structured output(确定性高、好测),只在'诊断/写修复说明'这种开放步骤里放开。",
+        "riskLevel": "low",
+        "keyApisOrCommands": [
+          "POST https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+          "generationConfig.responseMimeType = \"application/json\"",
+          "generationConfig.responseSchema (type: OBJECT/STRING/ARRAY/.. + enum)",
+          "propertyOrdering",
+          "ADK: LlmAgent(generate_content_config=...) 或 output_schema=PydanticModel",
+          "models: gemini-2.5-flash / gemini-2.0-flash (经典 API); gemini-3.x (新 Interactions API)"
+        ],
+        "minimalCodeOrCommand": "curl -X POST \"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent\" \\\n -H \"x-goog-api-key: $GEMINI_API_KEY\" -H 'Content-Type: application/json' -d '{\n  \"contents\":[{\"parts\":[{\"text\":\"Alert fired outside deploy window. Error rate 7%. Decide next action.\"}]}],\n  \"generationConfig\":{\n    \"response_mime_type\":\"application/json\",\n    \"response_schema\":{\n      \"type\":\"OBJECT\",\n      \"properties\":{\n        \"action\":{\"type\":\"STRING\",\"enum\":[\"DIAGNOSE\",\"ROLLBACK\",\"OPEN_PR\",\"VERIFY\",\"REVERT_ROLLBACK\",\"NOOP\"]},\n        \"target_revision\":{\"type\":\"STRING\"},\n        \"confidence\":{\"type\":\"NUMBER\"},\n        \"reason\":{\"type\":\"STRING\"}\n      },\n      \"required\":[\"action\",\"reason\"],\n      \"propertyOrdering\":[\"action\",\"target_revision\",\"confidence\",\"reason\"]\n    }\n  }\n}'",
+        "gotchas": [
+          "官方文档首页(2026-06-22 更新)已主推新 Interactions API,字段是 response_format:{type:'text',mime_type:'application/json',schema:...} 且默认示例用 gemini-3.x;经典 generateContent 仍用 generationConfig.responseSchema/responseMimeType——别把两套字段名混用,否则 400。",
+          "responseSchema 是 OpenAPI 3.0 子集,不是完整 JSON Schema:类型用大写 STRING/OBJECT/ARRAY/NUMBER/INTEGER/BOOLEAN;过深/过大 schema 会被拒,property 名尽量短、少嵌套。",
+          "structured output 与 function calling 互斥语义:同一次调用里别既要严格 JSON 又指望模型同时发 functionCall;状态机决策用前者,真去'执行副作用'用后者(见下一条)。",
+          "流式 + structured output 需聚合完整再 parse;别在 partial chunk 上解析。"
+        ],
+        "sourceUrls": [
+          "https://ai.google.dev/gemini-api/docs/structured-output",
+          "https://ai.google.dev/api/generate-content"
+        ]
+      },
+      {
+        "topic": "Gemini function calling(tool_config / functionCallingConfig mode ANY)执行止血/回滚动作",
+        "recommendation": "把每个真实运维动作声明成 functionDeclaration(rollback_traffic、open_fix_pr、check_error_rate、revert_rollback),由你的执行层真正调用 gcloud/Cloud Run Admin API/GitHub,再把结果以 functionResponse 回灌形成多轮闭环。要让状态机的某一步'必须产出一个动作调用'时,设 toolConfig.functionCallingConfig.mode='ANY' 且用 allowedFunctionNames 收窄到当前状态允许的函数(例如止血阶段只允许 rollback_traffic),这等于用模型层强约束状态转移。默认 mode='AUTO' 适合诊断阶段(模型可选择直接回话或调函数);mode='NONE' 用于纯总结。ADK 直接把这些函数注册为 tools,FunctionTool 自动处理 functionCall/functionResponse 往返与(Gemini-3 的)thought signature。强烈建议:止血/回滚这类不可逆动作前加人确认或 confidence 阈值闸门,别让 mode=ANY 形成自动循环。",
+        "riskLevel": "medium",
+        "keyApisOrCommands": [
+          "tools[].functionDeclarations[] {name, description, parameters(OBJECT+enum)}",
+          "toolConfig.functionCallingConfig.mode = AUTO|ANY|NONE",
+          "toolConfig.functionCallingConfig.allowedFunctionNames = [...]",
+          "response part: functionCall{name,args}; next turn part: functionResponse{name,response}",
+          "ADK: FunctionTool / LlmAgent(tools=[...]) ; 并行 & 组合式 function calling"
+        ],
+        "minimalCodeOrCommand": "{\n  \"tools\":[{\"function_declarations\":[\n    {\"name\":\"rollback_traffic\",\"description\":\"Shift 100% Cloud Run traffic to last healthy revision\",\n     \"parameters\":{\"type\":\"OBJECT\",\"properties\":{\"service\":{\"type\":\"STRING\"},\"to_revision\":{\"type\":\"STRING\"}},\"required\":[\"service\",\"to_revision\"]}}\n  ]}],\n  \"tool_config\":{\"function_calling_config\":{\"mode\":\"ANY\",\"allowed_function_names\":[\"rollback_traffic\"]}}\n}",
+        "gotchas": [
+          "mode=ANY 下模型每轮都被迫调函数,论坛有'无限工具调用循环'报告;务必在执行层用状态机+迭代上限/allowedFunctionNames 收窄,或调用后切回 AUTO/NONE。",
+          "ANY 模式对过大/过深 schema 会拒绝:缩短属性名、降嵌套、减少函数数量。",
+          "Gemini-3 系列引入 thought signatures,跨轮要回传;用官方 SDK/ADK 会自动处理,手写 REST 别丢字段。",
+          "function calling 不等于真执行——模型只产出 name+args,真正 gcloud/API 调用与鉴权(回滚权限)在你自己的执行层,这是安全边界所在。"
+        ],
+        "sourceUrls": [
+          "https://ai.google.dev/gemini-api/docs/function-calling",
+          "https://ai.google.dev/api/generate-content",
+          "https://ai.google.dev/gemini-api/docs/tools"
+        ]
+      },
+      {
+        "topic": "用 log-based metric 计 Cloud Run 错误(可选,备用信号)",
+        "recommendation": "如果你想从日志侧而不是请求计数侧度量错误,创建一个 counter 型 log-based metric,filter 锁定 cloud_run_revision 资源 + severity>=ERROR(或匹配 5xx 的 httpRequest.status>=500)。生成的指标类型名是 logging.googleapis.com/user/METRIC_ID,可在 Monitoring 里像普通指标一样告警。优先级建议:错误率主信号用 Cloud Run 内建的 run.googleapis.com/request_count + response_code_class(见下一条,无需自己造指标、延迟更低),log-based metric 作为'特定异常字符串/堆栈'的补充信号更划算。",
+        "riskLevel": "low",
+        "keyApisOrCommands": [
+          "gcloud logging metrics create",
+          "--log-filter",
+          "metric type: logging.googleapis.com/user/<METRIC_ID>",
+          "filter: resource.type=\"cloud_run_revision\" AND severity>=ERROR",
+          "REST: projects.metrics.create"
+        ],
+        "minimalCodeOrCommand": "gcloud logging metrics create cloudrun_error_count \\\n  --description=\"Cloud Run ERROR+ log entries\" \\\n  --log-filter='resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"my-svc\" AND severity>=ERROR'\n# 或匹配 5xx:\n# --log-filter='resource.type=\"cloud_run_revision\" AND httpRequest.status>=500'",
+        "gotchas": [
+          "log-based metric 只对'创建之后'写入的日志生效,不回溯历史。",
+          "filter ≤ 20000 字符;建议总带 resource.type 以缩小范围、降成本。",
+          "counter 指标用于计数;若要分布(如延迟分位)用 distribution metric + value extractor。",
+          "log-based metric 从日志摄取到可告警有分钟级延迟,止血场景把它当辅助、别当唯一触发源。"
+        ],
+        "sourceUrls": [
+          "https://docs.cloud.google.com/logging/docs/logs-based-metrics/counter-metrics",
+          "https://cloud.google.com/logging/docs/logs-based-metrics",
+          "https://cloud.google.com/logging/docs/logs-based-metrics/distribution-metrics"
+        ]
+      },
+      {
+        "topic": "用 PromQL 测 Cloud Run 错误率(5xx/total)并做主告警",
+        "recommendation": "主信号:对 Cloud Run 内建指标 run.googleapis.com/request_count 按 response_code_class 标签算 5xx 比率。PromQL 里 Google 指标名转换规则=第一个 '/' 换 ':'、其余特殊字符(含 '.'、'/')换 '_',所以 run.googleapis.com/request_count → run_googleapis_com:request_count。比率表达式 = sum(rate(5xx[5m])) / sum(rate(all[5m]))。建好 conditionPrometheusQueryLanguage 的 alertPolicy:query 写比率、duration 设为评估间隔的≥2 倍(比率类指标官方明确要求,否则易误报)。归零判定:同一条 policy 的 incident.state 从 open 变 closed(比率回落到阈值下并持续 duration)即视为错误率归零——你的撤销回滚步骤就监听这个 closed。",
+        "riskLevel": "medium",
+        "keyApisOrCommands": [
+          "metric: run.googleapis.com/request_count, label response_code_class (2xx/4xx/5xx)",
+          "PromQL 名: run_googleapis_com:request_count",
+          "conditionPrometheusQueryLanguage {query, duration, evaluationInterval}",
+          "rate()/sum() 比率;duration ≥ 2× evaluationInterval",
+          "projects.alertPolicies.create"
+        ],
+        "minimalCodeOrCommand": "# Alert policy condition (REST/JSON)\n{\n  \"displayName\":\"Cloud Run 5xx error rate > 1%\",\n  \"conditions\":[{\n    \"displayName\":\"5xx ratio high\",\n    \"conditionPrometheusQueryLanguage\":{\n      \"query\":\"sum(rate(run_googleapis_com:request_count{response_code_class=\\\"5xx\\\"}[5m])) / sum(rate(run_googleapis_com:request_count[5m])) > 0.01\",\n      \"duration\":\"120s\",\n      \"evaluationInterval\":\"60s\"\n    }\n  }],\n  \"combiner\":\"OR\",\n  \"enabled\":true,\n  \"notificationChannels\":[\"projects/PROJECT/notificationChannels/CHANNEL_ID\"]\n}",
+        "gotchas": [
+          "PromQL 只支持指标名精确匹配,不能正则/通配。",
+          "比率类条件 duration 必须 ≥ 2×evaluationInterval,否则可能产生假 incident(官方明文)。",
+          "PromQL alerting 历史上曾是 Public Preview;2026-06 文档仍在更新,部署前确认你项目区域 GA 状态。",
+          "request_count 是请求侧指标:零流量时分母为 0、比率无数据——'归零'判定要区分'真的修好了'和'没流量';可加 'total rate > N' 的前置条件或并行看绝对 5xx 数。"
+        ],
+        "sourceUrls": [
+          "https://docs.cloud.google.com/monitoring/promql/promql-in-alerting",
+          "https://docs.cloud.google.com/monitoring/promql/create-promql-alerts",
+          "https://docs.cloud.google.com/monitoring/promql/promql-mapping",
+          "https://docs.cloud.google.com/stackdriver/docs/solutions/slo-monitoring/sli-metrics/req-resp-metrics"
+        ]
+      },
+      {
+        "topic": "Webhook notification channel → 触发 Cloud Run Agent(开/闭环触发与归零确认)",
+        "recommendation": "建一个 webhook_tokenauth(或 webhook_basicauth)通道,labels.url 指向你的 Cloud Run agent 端点,token 放在 URL query 里(务必 HTTPS)。把它挂到上面那条错误率 policy 的 notificationChannels。Cloud Monitoring 会以 schema version 1.2 POST 一个 {version, incident:{...}} JSON:incident.state=\"open\" 时你的 agent 启动止血(回滚流量),incident.state=\"closed\" 时(错误率持续低于阈值,告警自动关闭)agent 执行撤销临时回滚——这正好把'证明错误率归零→撤销回滚'闭成环,不需要 agent 自己轮询指标。Agent 端要校验 token、对同一 incident_id 幂等(closed 可能重发/renotify)。",
+        "riskLevel": "medium",
+        "keyApisOrCommands": [
+          "channel type: webhook_tokenauth / webhook_basicauth, labels.url",
+          "gcloud beta monitoring channels create --channel-content-from-file=...",
+          "POST payload: {version:\"1.2\", incident:{incident_id, state:open|closed, condition_name, policy_name, resource, started_at, ended_at, url, summary}}",
+          "policy.notificationChannels 关联通道"
+        ],
+        "minimalCodeOrCommand": "# 1) 建 webhook 通道\ncat > ch.json <<'EOF'\n{\"type\":\"webhook_tokenauth\",\"displayName\":\"selfheal-agent\",\"enabled\":true,\n \"labels\":{\"url\":\"https://agent-xxx.run.app/alerts?auth_token=SECRET\"}}\nEOF\ngcloud beta monitoring channels create --channel-content-from-file=ch.json\n\n# 2) agent 收到的 payload(解析 incident.state 驱动状态机)\n# { \"version\":\"1.2\", \"incident\":{\n#     \"incident_id\":\"...\", \"state\":\"open\",   # 或 \"closed\"\n#     \"policy_name\":\"...\", \"condition_name\":\"5xx ratio high\",\n#     \"resource\":{\"type\":\"cloud_run_revision\",\"labels\":{...}},\n#     \"started_at\":1700000000, \"ended_at\":0, \"url\":\"https://console...\", \"summary\":\"...\" }}",
+        "gotchas": [
+          "payload schema 是 version 1.2 的 {version, incident:{...}};Google 提示'按整体消费、不要假设字段格式固定',解析要宽容。",
+          "state 只有 open/closed 两态;closed 即代表 condition 不再满足(错误率回落),这就是你的'归零'信号——但要结合零流量陷阱(见上条),必要时 agent 二次查指标确认再撤回滚。",
+          "token 在 URL query 明文,必须 HTTPS;Cloud Run 端点要鉴权(校验 token + 可选 Pub/Sub 私网通道替代公网 webhook)。",
+          "Cloud Monitoring 通知有去重/重发(renotify);对 incident_id 做幂等,避免重复回滚/重复撤销。",
+          "webhook 通道在部分文档中归类为需注意的渠道类型;创建后用 gcloud alpha/beta monitoring channels verify/describe 确认状态。"
+        ],
+        "sourceUrls": [
+          "https://docs.cloud.google.com/monitoring/alerts/using-channels-api",
+          "https://docs.cloud.google.com/monitoring/support/notification-options",
+          "https://cloud.google.com/blog/products/devops-sre/use-slack-and-webhooks-for-notifications/",
+          "https://docs.cloud.google.com/monitoring/alerts/using-alerting-ui"
+        ]
+      },
+      {
+        "topic": "① 用 GitHub App / Octokit 程序化创建分支 + 修复 PR(权限与接线)",
+        "recommendation": "用 GitHub App(不要用个人 PAT),给最小细粒度权限:Contents=Read&Write、Pull requests=Read&Write、Metadata=Read(强制)、Workflows=Write(仅当 PR 会改 .github/workflows/* 时才需要,否则 push 会被拒)。流程:App 用私钥签 JWT → 换取 installation access token(有效期 1h,过期重签)→ 用该 token 调 REST。创建 PR 标准 8 步序列:(1) GET base 分支的 HEAD sha;(2) POST git/blobs 上传改动文件内容;(3) POST git/trees 基于 base tree 建新 tree;(4) POST git/commits 建 commit;(5) POST git/refs 建新分支 refs/heads/fix-xxx 指向该 commit;(6) POST pulls 开 PR。捷径:小改动可直接用 PUT /contents/{path}(自带 commit,省去 blob/tree/commit 三步)。Octokit 推荐用 `App` 类的 `getInstallationOctokit(installationId)` 自动管 token,不要手搓 JWT。",
+        "riskLevel": "low",
+        "keyApisOrCommands": [
+          "npm i octokit @octokit/auth-app",
+          "new App({ appId, privateKey })",
+          "app.getInstallationOctokit(installationId)",
+          "POST /repos/{owner}/{repo}/git/refs  body:{ref:'refs/heads/fix-xxx', sha}",
+          "POST /repos/{owner}/{repo}/pulls  body:{title, head, base, body}",
+          "PUT /repos/{owner}/{repo}/contents/{path} (单文件捷径)",
+          "POST /app/installations/{id}/access_tokens (底层换 token)"
+        ],
+        "minimalCodeOrCommand": "import { App } from \"octokit\";\nconst app = new App({ appId: APP_ID, privateKey: PRIVATE_KEY });\nconst gh = await app.getInstallationOctokit(INSTALLATION_ID);\nconst { owner, repo, base } = cfg;\n// 1. base HEAD sha\nconst { data: ref } = await gh.rest.git.getRef({ owner, repo, ref: `heads/${base}` });\nconst baseSha = ref.object.sha;\n// 2. 新分支\nconst branch = `fix/agent-${Date.now()}`;\nawait gh.rest.git.createRef({ owner, repo, ref: `refs/heads/${branch}`, sha: baseSha });\n// 3. 改文件(单文件捷径,需先拿该文件当前 sha)\nawait gh.rest.repos.createOrUpdateFileContents({ owner, repo, path, branch,\n  message: \"fix: auto-remediation by agent\",\n  content: Buffer.from(newContent).toString(\"base64\"), sha: fileSha });\n// 4. 开 PR\nconst { data: pr } = await gh.rest.pulls.create({ owner, repo, title, head: branch, base, body });",
+        "gotchas": [
+          "installation token 默认拥有 App 被授予的全部权限;可在换 token 时用 permissions 参数收窄,但不能超过 App 已有权限。",
+          "PR 修改 .github/workflows/* 必须额外授予 Workflows=Write,否则 push 直接 403。这是自愈 Agent 最常踩的坑(它可能想改 CI)。",
+          "GitHub App 自己开的 PR 不会触发 on:pull_request 类型的 workflow(防递归)。要让修复 PR 跑 CI,要么用 PAT/deploy key 推送,要么改用 on:push 触发,要么用 actions/create-github-app-token 这类显式 token。务必在做 demo 前验证 CI 真的被触发。",
+          "JWT iat 要回拨 60s 防时钟漂移;installation token 1h 过期,长流程要刷新。",
+          "private repo 必须显式给 Metadata=Read,否则很多端点 403。",
+          "createRef 在空仓库会失败(无 base sha)。"
+        ],
+        "sourceUrls": [
+          "https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/authenticating-as-a-github-app-installation",
+          "https://docs.github.com/en/rest/git/refs",
+          "https://docs.github.com/en/rest/pulls/pulls",
+          "https://docs.github.com/en/rest/authentication/permissions-required-for-fine-grained-personal-access-tokens",
+          "https://github.com/actions/create-github-app-token",
+          "https://octokit.github.io/rest.js/"
+        ]
+      },
+      {
+        "topic": "② GitHub Actions vs Cloud Build 作为修复 PR 的 CI:怎么选与接线",
+        "recommendation": "选 GitHub Actions 作为修复 PR 的 CI 主入口。理由:(a) Agent 已在用 GitHub API 开 PR,Actions 与 PR/check-run/状态原生集成,Agent 可直接读 PR 的 checks 结论判定『CI 是否绿』来决定撤销回滚;(b) 项目硬性必用 Cloud Run,而 Cloud Run 自带的『从仓库持续部署』本质就是在背后建一个 Cloud Build trigger——所以保留 Cloud Build 只做一件事:合并到 main 后的『真部署』(build 镜像 + deploy 到 Cloud Run)。最佳接线:PR 阶段 = GitHub Actions 跑 build+test(对 Agent 决策友好);merge→main = Cloud Run continuous deployment(= Cloud Build trigger)做生产部署。用 Workload Identity Federation(google-github-actions/auth)让 Actions 免密钥拿 GCP 凭证,避免在仓库放 SA JSON。12 天时间内这是接线最少、Agent 闭环最顺的组合。",
+        "riskLevel": "medium",
+        "keyApisOrCommands": [
+          "google-github-actions/auth@v2 (Workload Identity Federation, 无密钥)",
+          "google-github-actions/deploy-cloudrun@v2 (输出 service URL)",
+          "on: pull_request: 触发 build+test",
+          "gh pr checks <pr> --watch (Agent 轮询 CI 结论)",
+          "gcloud run deploy --source . (Cloud Build buildpacks 路径)",
+          "Cloud Run console: 'Continuously deploy from a repository' = 建 Cloud Build trigger"
+        ],
+        "minimalCodeOrCommand": "# .github/workflows/ci.yml — 修复 PR 的 CI\nname: ci\non:\n  pull_request:\n  push: { branches: [main] }  # App 开的 PR 不触发 pull_request 时,用 push 兜底\njobs:\n  build-test:\n    runs-on: ubuntu-latest\n    permissions: { contents: read, id-token: write, pull-requests: write }\n    steps:\n      - uses: actions/checkout@v4\n      - run: npm ci && npm run build && npm test\n  # merge 到 main 后真部署交给 Cloud Run continuous deployment(Cloud Build),不在此重复",
+        "gotchas": [
+          "Cloud Run 的『continuously deploy from a repository』不是独立产品,底层就是 Cloud Build trigger + Cloud Build GitHub App,会在你的 GCP 项目里建 trigger;别同时再写一套 Actions 部署,会双重部署/打架。",
+          "Cloud Build trigger 默认按 branch regex 匹配;若只匹配到一个分支,创建后会自动跑一次,demo 时注意别意外触发。",
+          "GitHub App(Agent)开的 PR 默认不触发 on:pull_request workflow(防递归)——这会让你以为 CI 没接好。务必加 on:push 兜底或用显式 token 推送,并实测。",
+          "Actions 连 GCP 优先用 Workload Identity Federation,不要把 SA key JSON 塞进 secrets。",
+          "Agent 判定『CI 绿』要读 check-runs/commit status 的 conclusion=success,而不是只看 workflow 是否结束。",
+          "buildpacks 路径无需 Dockerfile,但首次构建较慢;有 Dockerfile 则 Cloud Build 用它作为 build context。"
+        ],
+        "sourceUrls": [
+          "https://docs.cloud.google.com/run/docs/continuous-deployment",
+          "https://cloud.google.com/blog/products/devops-sre/deploy-to-cloud-run-with-github-actions",
+          "https://docs.cloud.google.com/build/docs/triggers",
+          "https://github.com/google-github-actions/deploy-cloudrun"
+        ]
+      },
+      {
+        "topic": "③ Agent 提交前『自我纠错』:本地/沙箱跑 build+test,失败喂回 Gemini 重试",
+        "recommendation": "在『开 PR 之前』加一个本地/沙箱验证闭环,不要把未验证的补丁直接推上去靠远程 CI 兜底(远程 CI 慢、且会污染 PR 历史)。可行做法:(1) Agent 生成补丁 → 写入一个干净的 git worktree/容器沙箱(隔离,失败可丢弃);(2) 在沙箱里跑与远程 CI 同一套命令(build + test + lint),用相同基础镜像保证一致;(3) 捕获 stdout/stderr/exit code,失败时把『失败命令 + 截断后的错误日志 + 相关 diff/文件片段』结构化喂回 Gemini,要求它产出新补丁;(4) 设硬上限(如 max 3 轮)+ 总超时,达到上限就停手并把诊断信息贴进 PR 描述交人工。沙箱用 Docker 容器或一次性 worktree;若想要更强隔离的代码执行,可用专门的代码执行沙箱(如 Cloudflare Sandbox SDK / 任何容器化 runner)。关键是『沙箱命令 == 远程 CI 命令』,否则本地绿、远程红。ADK 里把这套包成一个 tool(run_in_sandbox)+ 一个 loop agent 反馈循环。",
+        "riskLevel": "medium",
+        "keyApisOrCommands": [
+          "git worktree add /tmp/fix-xyz <branch>  (隔离工作区, 失败即弃)",
+          "docker run --rm -v repo:/app <ci-base-image> sh -c 'npm ci && npm run build && npm test'",
+          "ADK: LoopAgent / 自定义 tool 包裹 build+test",
+          "Gemini: 把 {failed_cmd, exit_code, truncated_logs, diff} 作为结构化输入再生成补丁",
+          "subprocess 捕获 returncode + 截断日志(防 token 爆)"
+        ],
+        "minimalCodeOrCommand": "# 伪代码:提交前自我纠错循环(ADK tool 内部)\nfor attempt in range(MAX_RETRIES):  # 例如 3\n    apply_patch(patch, sandbox_dir)\n    res = run([\"sh\",\"-c\",\"npm ci && npm run build && npm test\"],\n              cwd=sandbox_dir, capture_output=True, timeout=600)\n    if res.returncode == 0:\n        open_pr(patch); break\n    # 失败 → 结构化喂回 Gemini\n    patch = gemini.generate(prompt=build_repair_prompt(\n        failed_cmd=\"build+test\", exit_code=res.returncode,\n        logs=truncate(res.stderr, 4000), diff=patch))\nelse:\n    annotate_pr_for_human(last_logs)  # 达上限,转人工",
+        "gotchas": [
+          "沙箱命令必须与远程 CI 完全一致(同基础镜像、同 lockfile、同 Node/Python 版本),否则『本地绿远程红』,自愈反而引入新故障。",
+          "错误日志要截断(取尾部 + 报错栈关键行),否则塞爆 Gemini 上下文且稀释信号。",
+          "必须设 max 重试轮数 + 单次超时 + 总超时,否则 Gemini 可能在同一错误上反复打转烧钱烧时间。",
+          "每轮从干净基线重新 apply(worktree/容器即弃即建),避免上一轮失败补丁残留污染。",
+          "test 可能 flaky:失败先重跑 1 次再判定,避免把抖动当真错喂给模型。",
+          "沙箱内不要带生产凭证;若跑会联网/写库的集成测试要 mock 或隔离。"
+        ],
+        "sourceUrls": [
+          "https://google.github.io/adk-docs/",
+          "https://docs.cloud.google.com/build/docs/triggers",
+          "https://developers.cloudflare.com/sandbox/"
+        ]
+      },
+      {
+        "topic": "④ Sentry webhook / Cloud Monitoring 告警如何触发 Cloud Run endpoint(止血入口)",
+        "recommendation": "两条触发链都用得上,但认证模型不同,坑也不同:\n\nSentry(Internal Integration → webhook):在 Sentry 建 Internal Integration,填你的 Cloud Run 公网 URL 作为 webhook URL,开启 Alert Rule Action,然后在 issue/metric alert rule 里把这个 integration 选为 action。Sentry POST 过来带 4 个头:Content-Type、Request-ID、Sentry-Hook-Resource(issue alert = `event_alert`)、Sentry-Hook-Signature。必须用 Client Secret 做 HMAC-SHA256 验签(对原始 raw body 计算,再 constant-time 比对 signature 头)。硬约束:Sentry 要求 1 秒内响应,所以 endpoint 要『立即 200 + 异步处理』——收到就入队/起后台任务做回滚,别在请求里同步跑回滚。\n\nCloud Monitoring(告警 → 通知渠道):Webhook 通知渠道只支持公网 endpoint,且只支持 Basic Auth 或 URL 里的 token query string,不支持 OIDC。payload 是固定的 Monitoring JSON(1.2 schema,含 incident.state=open/closed)。若想要 IAM 级认证(Cloud Run『要求认证』),不要用 webhook 渠道——改用 Pub/Sub 通知渠道 + push 订阅,push 订阅用 OIDC token + roles/run.invoker 调你的私有 Cloud Run,endpoint 验 JWT。这是触发私有止血服务的推荐路径。\n\n实践:Sentry/Monitoring 都先打到一个『止血触发器』Cloud Run 服务,验签/验 JWT 后立即切 Cloud Run 流量回上一健康 revision。",
+        "riskLevel": "high",
+        "keyApisOrCommands": [
+          "Sentry: Settings → Developer Settings → Internal Integration → Webhook URL + Alert Rule Action",
+          "verify: HMAC-SHA256(rawBody, clientSecret) === header['sentry-hook-signature']",
+          "Monitoring Webhook 渠道: 仅公网 + Basic Auth / ?auth_token=...(无 OIDC)",
+          "Monitoring 私有 endpoint: Pub/Sub 通知渠道 + push 订阅 + OIDC",
+          "gcloud ... --oidc-service-account-email + roles/run.invoker (push 订阅认证)",
+          "止血: gcloud run services update-traffic <svc> --to-revisions=<last-good>=100"
+        ],
+        "minimalCodeOrCommand": "// Sentry webhook 验签(注意:对 RAW body,不要先 JSON 反序列化再 stringify)\nimport crypto from \"crypto\";\nfunction verifySentry(rawBody, sigHeader, clientSecret) {\n  const digest = crypto.createHmac(\"sha256\", clientSecret)\n                       .update(rawBody, \"utf8\").digest(\"hex\");\n  return crypto.timingSafeEqual(Buffer.from(digest), Buffer.from(sigHeader));\n}\n// 1s 约束:验签通过后立刻 200,再异步止血\napp.post(\"/sentry\", express.raw({type:\"*/*\"}), (req,res)=>{\n  if(req.get(\"sentry-hook-resource\")!==\"event_alert\") return res.sendStatus(204);\n  if(!verifySentry(req.body, req.get(\"sentry-hook-signature\"), SECRET)) return res.sendStatus(401);\n  res.sendStatus(200);              // 先回,满足 1s\n  queueRollback(JSON.parse(req.body)); // 后台切流量回 last-good revision\n});",
+        "gotchas": [
+          "Sentry 1 秒超时是硬线:任何同步回滚/调 GCP API 都会超时被判失败并可能重试 → 必须『先 200,后异步处理』,且止血逻辑要幂等(同一告警可能重复投递)。",
+          "验签必须对 RAW request body 计算;若框架已把 body 解析再 JSON.stringify,字节可能不一致导致永远验签失败。用 timingSafeEqual 防时序攻击。",
+          "Cloud Monitoring Webhook 渠道不支持 OIDC,只有 Basic Auth / token query string;若 Cloud Run 设为『要求认证』,webhook 渠道根本进不来 → 要么该服务允许未认证 + 自己在代码里验 token,要么改走 Pub/Sub+OIDC。",
+          "Monitoring 同时发 incident open 和 closed 两种 payload,要按 incident.state 区分,别把 closed 当新故障再触发回滚。",
+          "Pub/Sub push 路径需给 push SA 授 roles/run.invoker,并在 endpoint 校验 OIDC JWT 的 audience=服务 URL,否则任何人都能打你的回滚接口。",
+          "回滚接口是高危操作(能改生产流量):务必鉴权 + 幂等 + 审计日志 + 防重复触发,这也是本组件标 high risk 的原因。"
+        ],
+        "sourceUrls": [
+          "https://docs.sentry.io/organization/integrations/integration-platform/webhooks/",
+          "https://docs.sentry.io/organization/integrations/integration-platform/webhooks/issue-alerts/",
+          "https://docs.cloud.google.com/monitoring/support/notification-options",
+          "https://docs.cloud.google.com/run/docs/authenticating/service-to-service",
+          "https://docs.cloud.google.com/scheduler/docs/http-target-auth"
+        ]
+      }
+    ],
+    "techVerdict": {
+      "recommendedStack": [
+        "语言/框架:Python 3.11 + google-adk~=1.0(锁 1.x,勿装到 2.3.0;2.0 是 graph-based 破坏性升级,95% 教程仍是 1.x 的 LlmAgent+Runner 写法,12 天没时间踩 2.0 新坑)。验证:python -c \"import importlib.metadata as m; print(m.version('google-adk'))\" 必须显示 1.x。",
+        "编排骨架:SequentialAgent 串主流水线(triage→rollback→open_PR→verify),内层用 LoopAgent(子 agent 带 exit_loop 工具,max_iterations 兜底)做'轮询错误率直到归零或超时'。LlmAgent(gemini-2.5-flash)做需要推理的节点。",
+        "决策层:Gemini 经典 generateContent(v1beta) + generationConfig.responseSchema/responseMimeType='application/json',把动作约束成 enum(DIAGNOSE/ROLLBACK/OPEN_PR/VERIFY/REVERT_ROLLBACK/NOOP)。勿混用 2026-06 新主推的 Interactions API(response_format)字段,会 400。",
+        "执行层(止血/回滚):Python google-cloud-run(run_v2.ServicesClient.update_service + TrafficTarget type_=...REVISION, revision=..., percent=100,用 .result() 阻塞等 Operation)。不要 shell out gcloud。回滚必须钉死具体旧 revision(REVISION 类型),不要用 LATEST。",
+        "信号层(错误率):主信号 = Cloud Monitoring PromQL 对 run.googleapis.com/request_count 按 response_code_class='5xx' 算比率(PromQL 名 run_googleapis_com:request_count;比率类 alert 的 duration 必须 ≥ 2×evaluationInterval)。归零判定 = 监听同一 policy 的 incident.state 从 open→closed。备用信号 = log-based metric(severity>=ERROR)。",
+        "触发层:Cloud Monitoring webhook_tokenauth 通知渠道 → Cloud Run agent /alerts 端点(HTTPS + token 校验 + 对 incident_id 幂等)。incident.state='open' 触发止血,'closed' 触发撤销回滚。注意零流量陷阱:closed 可能是没流量而非修好,撤销前 agent 二次查指标确认。",
+        "修复 PR 层:GitHub App(非 PAT)+ Octokit,权限 Contents=RW / Pull requests=RW / Metadata=R(+ Workflows=Write 仅当改 .github/workflows/*)。用 app.getInstallationOctokit(installationId) 自动管 1h token。小改动走 PUT /contents 捷径。",
+        "CI/CD:GitHub Actions 跑 PR 的 build+test(对 agent 判定'CI 绿'最友好,读 check-runs conclusion=success);merge→main 用 Cloud Run continuous deployment(底层 Cloud Build trigger)做真部署。Actions 连 GCP 用 Workload Identity Federation(无密钥)。",
+        "部署:adk deploy cloud_run(目录含 agent.py 内变量名必须叫 root_agent,__init__.py 要 import agent)。min-instances>=1 防冷启动错过告警。",
+        "持久化:DatabaseSessionService 指向 Cloud SQL/Postgres(asyncpg 异步驱动),勿用默认 InMemorySessionService(Cloud Run 多实例/冷启动丢 session)。回滚撤销标记存普通或 user: 前缀 state,勿用 temp:(不持久化)。",
+        "凭据:Gemini API 该用户已是 Tier 1 按量(credits.md 已记 ColorArchive 在用 gemini-2.5-flash,成本极低);GCP 部分无现成学生 credits,需自备 GCP 项目计费。可领 Codecov/ConfigCat 等做加分但非必需。"
+      ],
+      "buildPath": [
+        {
+          "component": "ADK 版本锁定与骨架",
+          "how": "requirements.txt 写 google-adk~=1.0 + google-cloud-aiplatform[adk,agent_engines];建目录 my_agent/{__init__.py(from . import agent), agent.py(root_agent=SequentialAgent(...)), requirements.txt}。先跑通 adk web 本地 demo。",
+          "risk": "low"
+        },
+        {
+          "component": "Cloud Run 流量回滚(止血核心)",
+          "how": "FunctionTool 包 run_v2.ServicesClient:get_service→改 traffic=[TrafficTarget(type_=...REVISION, revision=last_good, percent=100)]→update_service().result()。先用 gcloud run services update-traffic --to-revisions REV=100 --region 手动验证一遍止血路径再写进 agent。",
+          "risk": "low"
+        },
+        {
+          "component": "列 revision + 定位故障 revision",
+          "how": "revisions.list 拿 createTime 排序;关键信号是 Monitoring 按 metric.label.revision_name 分组看 5xx 是否集中在最新 revision(归一化 = 5xx数/该revision请求数)。回滚目标 = 嫌疑 revision 的上一个 Ready revision。",
+          "risk": "medium"
+        },
+        {
+          "component": "Gemini 结构化决策",
+          "how": "LlmAgent 挂 output_schema(Pydantic) 或 generate_content_config 透传 responseSchema;action 字段用 STRING+enum 锁有限状态集。诊断/写修复说明这种开放步骤才放开 JSON 约束。",
+          "risk": "low"
+        },
+        {
+          "component": "错误率信号 + 归零判定",
+          "how": "建 PromQL alertPolicy(5xx 比率 > 阈值, duration=2×interval)。归零靠 incident open→closed。加 'total rate > N' 前置条件防零流量误判为'修好'。",
+          "risk": "medium"
+        },
+        {
+          "component": "Webhook 触发入口",
+          "how": "Cloud Run /alerts 端点校验 token+幂等;解析 incident.state 驱动状态机。webhook 渠道不支持 OIDC,若要 IAM 鉴权改 Pub/Sub+OIDC push(roles/run.invoker)。",
+          "risk": "medium"
+        },
+        {
+          "component": "GitHub App 开修复 PR",
+          "how": "建 App+私钥+installation;Octokit getRef→createRef(新分支)→createOrUpdateFileContents→pulls.create。务必实测:App 开的 PR 默认不触发 on:pull_request(防递归),需 on:push 兜底或用 create-github-app-token。",
+          "risk": "medium"
+        },
+        {
+          "component": "提交前沙箱自纠错",
+          "how": "git worktree/docker 隔离跑与远程 CI 同一套 build+test 命令;失败把{failed_cmd,exit_code,截断日志,diff}喂回 Gemini,max 3 轮+总超时,达上限转人工并贴 PR。",
+          "risk": "medium"
+        },
+        {
+          "component": "GitHub Actions CI + Cloud Run 真部署",
+          "how": "ci.yml: on:[pull_request, push:main];PR 跑 build+test;merge→main 交 Cloud Run continuous deployment。auth 用 WIF。agent 读 PR check-runs conclusion 判 CI 绿。",
+          "risk": "medium"
+        },
+        {
+          "component": "端到端闭环 + 撤销回滚",
+          "how": "SequentialAgent 串全链;DatabaseSessionService 持久化回滚标记;CI 绿+新 revision 部署+错误率 closed → update-traffic --to-latest 撤销临时回滚。撤销前二次查指标确认非零流量误判。",
+          "risk": "high"
+        }
+      ],
+      "riskRegister": [
+        {
+          "risk": "ADK 版本踩坑:跟博客 pip install google-adk 装到 2.3.0,执行语义(BaseNode/graph runtime)与 1.x 教程对不上,_run_async_impl 被静默忽略,排查烧掉宝贵时间",
+          "severity": "high",
+          "mitigation": "requirements.txt 硬锁 google-adk~=1.0;CI/本地启动时断言 importlib.metadata.version('google-adk') 以 1. 开头,否则 fail-fast;Custom Agent 若必须用,确认留在 1.x"
+        },
+        {
+          "risk": "端到端全自治闭环(无人值守 止血→PR→真 CI→证明归零→自动撤销回滚)2 周内难以稳定 demo:跨 5+ 外部系统(Monitoring/Run/Gemini/GitHub/CI)、含不可逆生产动作、非确定性 LLM、长时异步",
+          "severity": "high",
+          "mitigation": "诚实降级:核心可演示=自动止血回滚(确定性、最有冲击力);PR 生成与 CI 用预置故障仓库 + 人工确认闸门;'自动撤销回滚'设为 stretch goal,demo 用半自动(agent 给出建议+一键确认)"
+        },
+        {
+          "risk": "GitHub App 开的 PR 默认不触发 on:pull_request workflow(防递归),导致'走真 CI/CD'这一卖点在 demo 当场 CI 不跑、误以为接错",
+          "severity": "high",
+          "mitigation": "提前数天实测;ci.yml 加 on:push 兜底,或用 actions/create-github-app-token 显式 token 推送;判定 CI 绿读 check-runs conclusion=success 而非 workflow 是否结束"
+        },
+        {
+          "risk": "Sentry/Cloud Monitoring webhook 认证模型差异 + 1s 超时(Sentry)+ 回滚是高危生产操作:验签/鉴权/幂等任一缺失=安全洞或重复回滚",
+          "severity": "high",
+          "mitigation": "端点'先 200 再异步止血';HMAC 对 raw body 验签 + timingSafeEqual;对 incident_id/告警幂等;回滚接口加 token/JWT 鉴权 + 审计日志 + confidence 阈值闸门;Monitoring 私有端点走 Pub/Sub+OIDC"
+        },
+        {
+          "risk": "零流量陷阱:错误率比率分母为 0 时'归零'判定分不清'真修好'还是'没流量',可能在未修复时撤销回滚导致二次事故",
+          "severity": "medium",
+          "mitigation": "alert 比率条件加前置 'sum(rate(total)) > N';撤销回滚前 agent 二次主动查指标 + 确认目标 revision 正在接流量且 5xx 归零;给充分 duration 观察窗"
+        },
+        {
+          "risk": "故障 revision 定位误判:新 revision 用 --no-traffic 部署未接流量却被当罪魁;或蓝绿渐进 rollout 下故障 revision 只承接部分流量被绝对值掩盖",
+          "severity": "medium",
+          "mitigation": "不只看 createTime,必须结合 trafficStatuses + 按 revision_name 分组并归一化(5xx数/该revision请求数)的错误指标;部署审计日志(Services.ReplaceService/UpdateService)与 T_err 对齐,留几分钟容差"
+        },
+        {
+          "risk": "Cloud Run 会话持久化:默认 InMemorySessionService 在冷启动/多实例下丢 session,告警触发新实例时丢失'临时回滚待撤销'状态,导致无法撤销或重复操作",
+          "severity": "medium",
+          "mitigation": "上 DatabaseSessionService(Cloud SQL,asyncpg);min-instances>=1;回滚标记用普通/user: 前缀 state 不用 temp:;PATCH service 用 etag 做乐观并发防多触发互相覆盖流量"
+        },
+        {
+          "risk": "Cloud Run Admin API PATCH 是长跑 Operation 非即时生效:若不等 Operation 完成就跑'验证错误率',会在流量还没切完时误判",
+          "severity": "medium",
+          "mitigation": "用客户端库 .result() 阻塞等待,或轮询 operations.get done;PATCH 必带 updateMask=traffic 只改流量"
+        },
+        {
+          "risk": "沙箱自纠错'本地绿远程红':沙箱命令/基础镜像/lockfile/语言版本与远程 CI 不一致,或 flaky test 被当真错喂模型,反而引入新故障 PR",
+          "severity": "medium",
+          "mitigation": "沙箱命令==远程 CI 命令(同镜像同 lockfile);失败 test 先重跑 1 次;日志截断(尾部+报错栈);max 3 轮+总超时;沙箱内无生产凭据"
+        },
+        {
+          "risk": "GCP 无现成学生 credits(credits.md 仅 Azure/DO/Cloudflare;Gemini 是按量 Tier 1),GCP 计费/配额/API 启用(Run/Monitoring/Logging/Cloud SQL/审计日志)可能临场卡住",
+          "severity": "medium",
+          "mitigation": "开赛前一次性 enable 所有 API + 建计费账号 + 开 Admin Activity 审计日志(默认开);Cloud SQL 可临时用 sqlite+aiosqlite 降级;Gemini 沿用已在用的 gemini-2.5-flash 按量(成本可忽略)"
+        }
+      ],
+      "minimalSlice": [
+        "1. 准备靶子:部署一个能切换好/坏行为的 demo 服务到 Cloud Run,故意发一个会喷 5xx 的坏 revision,确保至少有 1 个已知健康的旧 revision 存在。",
+        "2. 手动验证止血路径(写代码前):gcloud run services update-traffic SVC --to-revisions <last-good>=100 --region <R>,确认流量真切回、5xx 真下降。这是整个项目的地基,必须先红到绿一次。",
+        "3. 把回滚做成一个 Python FunctionTool:用 run_v2.ServicesClient,list revisions→选'当前接流量的嫌疑 revision 的上一个 Ready revision'→update_service 设 TrafficTarget(REVISION, percent=100)→.result() 等 Operation 完成。返回 {'status','service','active_revision'}。",
+        "4. 建错误率主信号:PromQL alertPolicy 对 run.googleapis.com/request_count 按 response_code_class='5xx' 算比率,duration=2×evaluationInterval。手动触发坏 revision 确认 incident 真的 open。",
+        "5. 建 webhook_tokenauth 通知渠道指向 Cloud Run agent 的 /alerts 端点(HTTPS+token),挂到上面的 policy。端点先回 200 再异步处理,校验 token,对 incident_id 幂等。",
+        "6. 接最小自治闭环:/alerts 收到 incident.state='open' → 调步骤3的回滚 tool 止血 → 把'回滚到 rev-X、待撤销'写进持久化 session state(DatabaseSessionService,非 temp:)。此时'独立告警(含部署窗口外)→自动止血'闭环已成立——这是最有冲击力、风险最低的可演示核心。",
+        "7. 用 ADK 包装:SequentialAgent(triage(Gemini structured output 决策 ROLLBACK/NOOP)→rollback tool),adk deploy cloud_run(root_agent 命名正确,min-instances>=1)。",
+        "8. 闭合归零→撤销:监听同一 policy 的 incident.state='closed',撤销前二次查指标确认'目标 revision 正接流量且 5xx 归零'(防零流量陷阱)→ update-traffic --to-latest 撤销临时回滚。至此'延迟炸弹回滚'最小切片完整。",
+        "9.(切片之外,时间够再加)在 6~8 之间插入 Gemini+GitHub App 开修复 PR + GitHub Actions 真 CI;PR 生成与 CI 接线作为 stretch,且开 PR 前加沙箱自纠错与人工确认闸门——这些是高风险、2 周可能做不全的部分,不要让它们阻塞核心止血闭环的可演示性。"
+      ]
+    },
+    "market": {
+      "findings": [
+        {
+          "topic": "ICP — who actually buys AI SRE",
+          "insight": "The clear, high-willingness-to-pay buyer today is the MID-TO-LARGE SRE/platform org running microservices/Kubernetes at scale — not indie devs. Every funded leader sells top-down to enterprises: Resolve AI's named logos are Coinbase, DoorDash, MongoDB, Salesforce, Zscaler; Datadog Bits AI SRE and PagerDuty SRE Agent gate behind paid AIOps/Advance tiers. The pain that justifies spend is concentrated where on-call exists and downtime is expensive. For a hackathon team this means: the dollars are in enterprise, but the wedge/demo audience is small teams. IMPLICATION for your project: a Gemini+ADK+Cloud Run auto-rollback-then-PR loop maps directly to the 'graduated autonomy' enterprises actually adopt first (auto-mitigate via rollback on simple patterns, human-gated code fix) — so frame it as the safe, reversible entry point, not full autonomy.",
+          "evidence": "Resolve AI customers: Coinbase (72% faster critical-incident investigation), Zscaler (~30% fewer engineers per incident), DoorDash, MongoDB, MSCI, Salesforce. Datadog Bits AI SRE and PagerDuty SRE Agent are sold into existing paid observability/AIOps contracts.",
+          "sourceUrls": [
+            "https://techcrunch.com/2025/12/19/ex-splunk-execs-startup-resolve-ai-hits-1-billion-valuation-with-series-a/",
+            "https://resolve.ai/product/ai-sre",
+            "https://www.datadoghq.com/about/latest-news/press-releases/datadog-launches-bits-ai-sre-agent-to-resolve-incidents-faster/"
+          ]
+        },
+        {
+          "topic": "ICP — independent devs / small teams (your demo-friendly segment)",
+          "insight": "Small teams (5–20 engineers) with NO dedicated SRE are a real, underserved segment: they still get paged at 2am but can't staff Google's SRE model. They lean entirely on tooling, sales cycles are short, and 'engineers buy from engineers with high willingness to pay.' BUT their absolute budgets are small and the current funded AI-SRE products are priced/positioned for enterprise. This is the better wedge for a 12-day hackathon build and demo (lower integration surface, Cloud Run-native), even though the eventual money is enterprise. Position your closed loop as 'an SRE-in-a-box for teams too small to have an SRE.'",
+          "evidence": "Google's SRE staffing model 'does not survive in companies with eleven engineers'; small companies of 5–20 'still need systems to stay up and still get paged at two in the morning' and substitute tooling for a specialist. 'Engineers buy from engineers — short sales cycles and high willingness to pay.'",
+          "sourceUrls": [
+            "https://www.technochops.com/small-teams-on-call-incidents-without-sre/",
+            "https://posthog.com/newsletter/small-teams"
+          ]
+        },
+        {
+          "topic": "Pain points & buying triggers",
+          "insight": "The buying pain is quantified and severe: alert fatigue + downtime cost + on-call burnout. Teams get ~2,000+ alerts/week with only ~3% actionable; ~44% had an outage from a suppressed/ignored alert; 78% had an incident where NO alert fired. Downtime runs ~$5,600/min and 61% of orgs estimate ≥$50k/hour. Nearly 40% of orgs report >25% of on-call engineers showing burnout. Critically for your pitch: the bottleneck is 'coordination tax' and MTTR, not technical complexity — which is exactly what an autonomous detect→rollback→prove→revert loop attacks. The 'no alert fired' / 'out-of-deploy-window' gap is a strong differentiator your spec already targets (independent production alerting outside deploy windows).",
+          "evidence": "~2,000 alerts/week, ~3% actionable; 44% had outage from suppressed/ignored alerts; 78% had an incident with no alert. Downtime ~$5,600/min; 61% estimate ≥$50k/hr, 34% ≥$100k/hr. ~40% of orgs report >25% on-call burnout. 'Coordination tax… keeps MTTR high and engineers burned out.'",
+          "sourceUrls": [
+            "https://rootly.com/sre/reducing-alert-fatigue-practical-steps-sre-teams",
+            "https://www.streetinsider.com/Business+Wire/New+Study+Finds+Alert+Fatigue+Has+Become+a+Production+Reliability+Risk+and+Incident+Response+Alone+Is+No+Longer+Enough/26274872.html",
+            "https://runframe.io/blog/state-of-incident-management-2025"
+          ]
+        },
+        {
+          "topic": "Market size & growth — AIOps (parent market)",
+          "insight": "AIOps is the umbrella TAM, growing ~20–30% CAGR but with WIDE analyst disagreement on absolute size — cite a range, not one number, or you'll look naive. Conservative/most-cited: Research and Markets puts it at ~$11.1B (2025) → ~$14.4B (2026) at 30.2% CAGR. Mordor: $18.95B (2026) → $37.79B (2031) at 14.8%. Global Growth Insights (most aggressive): $38.5B (2025) at ~23% CAGR. The spread reflects different definitions of 'AIOps.' Autonomous remediation / 'AI SRE' is a fast-growing SUBSET of this, not the whole thing — don't claim the full AIOps TAM as your market.",
+          "evidence": "Research and Markets: $11.08B (2025) → $14.44B (2026), 30.2% CAGR. Mordor Intelligence: $18.95B (2026) → $37.79B (2031), 14.8% CAGR. Global Growth Insights: $38.46B (2025) → $47.29B (2026), 22.95% CAGR. Research Nester: ~$19.5B (2026).",
+          "sourceUrls": [
+            "https://www.researchandmarkets.com/reports/5767606/aiops-market-report",
+            "https://www.mordorintelligence.com/industry-reports/aiops-market",
+            "https://www.globalgrowthinsights.com/market-reports/aiops-market-123813"
+          ]
+        },
+        {
+          "topic": "Trend — why now (technical inflection)",
+          "insight": "The category has moved through three phases: AIOps/ML alert-correlation (2017–2022) → LLM copilots that assist humans (2022–2024) → autonomous agents that investigate end-to-end and propose/execute remediation (2024–present). 'Now' is driven by (1) LLM/agent capability making cross-service causal reasoning feasible, and (2) a widening build-vs-operate gap: microservices/K8s + faster shipping + lighter reviews mean human-only incident response stops scaling. This validates your project's premise and timing — and ADK/Gemini agentic tooling is the exact enabler.",
+          "evidence": "Phases: AIOps (2017–2022), AI-assisted SRE copilots (2022–2024), Autonomous AI SRE (2024–present). 'Modern systems are easier to build than to operate… at some point, human-only incident response just stops keeping up.'",
+          "sourceUrls": [
+            "https://www.augmentcode.com/guides/ai-sre-ai-powered-site-reliability-engineering",
+            "https://novaaiops.com/ai-sre"
+          ]
+        },
+        {
+          "topic": "Trend — adoption reality (de-risks your scope)",
+          "insight": "Real 2026 adoption is MORE measured than the hype: most teams do NOT run full autonomous remediation. The common path is AI-assisted triage + log search first (value within a week), then graduating to autonomous remediation on only the simplest 10–15 runbook patterns over a quarter — always with approval gates, reversibility, and learning. This is a gift to your hackathon framing: a REVERSIBLE auto-rollback (traffic shift to last healthy Cloud Run revision) + human-gated repair PR is exactly the 'first safe autonomous action' the market is buying. Lead with reversibility and 'prove error-rate→0 before reverting rollback' — that's the credibility unlock.",
+          "evidence": "'Most teams adopting AI SRE in 2026 are not running fully autonomous remediation yet… most common starting point is AI-assisted triage and log search… graduating to autonomous remediation on the simplest 10–15 runbook patterns.' Agents 'must pair action-taking with approval gates, reversibility, and learning.'",
+          "sourceUrls": [
+            "https://www.augmentcode.com/guides/ai-sre-ai-powered-site-reliability-engineering",
+            "https://www.arvoai.ca/blog/ai-sre-complete-guide"
+          ]
+        },
+        {
+          "topic": "Funding signals — the money is flooding in",
+          "insight": "This is a hot, well-capitalized category as of late 2025 / early 2026 — strong validation but also a crowded field you must differentiate from. Resolve AI: $35M seed (Greylock; angels incl. Fei-Fei Li, Jeff Dean) + $125M Series A led by Lightspeed at a ~$1B valuation (>$150M total) — notably on only ~$4M ARR, i.e. funded on category bet, not revenue. Traversal: $48M Series A (Kleiner Perkins + Sequoia). Neubird/Hawkeye: $22.5M Series A (Microsoft M12). Cleric: $4.3M seed (Zetta). Parity: YC. The crowded field is precisely why your differentiator must be the specific closed loop (out-of-window detection → reversible Cloud Run rollback → verified-via-Monitoring → auto-revert), not 'another AI SRE.'",
+          "evidence": "Resolve AI: $35M seed + $125M Series A (Lightspeed), ~$1B valuation, ~$4M ARR, founders ex-Splunk (Spiros Xanthos, Mayank Agarwal), OpenTelemetry co-creators. Traversal: $48M Series A (Kleiner Perkins, Sequoia). Neubird: $22.5M Series A (M12). Cleric: $4.3M seed (Zetta).",
+          "sourceUrls": [
+            "https://techcrunch.com/2025/12/19/ex-splunk-execs-startup-resolve-ai-hits-1-billion-valuation-with-series-a/",
+            "https://siliconangle.com/2025/12/22/incident-remediation-startup-resolve-ai-reportedly-valued-1b-new-funding-round/",
+            "https://www.startuphub.ai/startups/traversal",
+            "https://www.bobbytables.io/p/the-ai-sre-startup-landscape"
+          ]
+        },
+        {
+          "topic": "Competitive structure — incumbents vs startups (the real threat)",
+          "insight": "Two fronts are converging. (1) Observability incumbents who OWN the telemetry are 'cannonballing' in: Datadog shipped Bits AI SRE (GA, now does human-in-the-loop triage actions + automated remediation inside Datadog), and PagerDuty shipped an SRE Agent (GA ~Oct 31 2025; diagnose→context→suggest→auto-execute-on-approval→learn; + Azure AI SRE Agent integration). (2) Pure-play startups (Resolve, Traversal, Cleric, Neubird, Parity). The incumbents' data moat is the biggest threat to any new entrant. Your defensible angle is being CLOUD-RUN-NATIVE and action-first (actually shifting traffic + opening real CI/CD PRs), not just investigating — most incumbents stop at 'surface root cause' or in-platform actions and are tied to their own telemetry.",
+          "evidence": "Datadog Bits AI SRE: GA, reads metrics/logs/traces/source code/RUM/DB monitoring, now supports human-in-the-loop triage actions + initiates automated remediation in-platform. PagerDuty SRE Agent: GA ~Oct 31 2025, six-step diagnose→remediate-on-approval→learn workflow; Azure AI SRE Agent integration (Dec 2025). 'Observability giants (Datadog, Honeycomb, New Relic, Dynatrace) are cannonballing into the space because they possess the underlying telemetry data.'",
+          "sourceUrls": [
+            "https://www.datadoghq.com/blog/bits-ai-sre-deeper-reasoning/",
+            "https://www.pagerduty.com/blog/ai/new-enhancements-to-pagerdutys-sre-agent-triage-faster-without-waking-a-human/",
+            "https://www.bobbytables.io/p/the-ai-sre-startup-landscape"
+          ]
+        },
+        {
+          "topic": "Resolve.ai — pricing model",
+          "insight": "Enterprise询价 (no public list price). Sells custom/negotiated annual enterprise contracts; no per-seat or per-investigation number is disclosed anywhere public. Positions as an autonomous 'AI SRE' that owns on-call/incidents/daily prod work, so deals are platform/value-based, not per-seat.",
+          "evidence": "Series A announcement plus the homepage and product/pricing pages disclose no pricing. Independent search confirms 'custom enterprise pricing negotiated directly with customers rather than published.'",
+          "sourceUrls": [
+            "https://resolve.ai/",
+            "https://resolve.ai/product",
+            "https://resolve.ai/blog/series-a-funding"
+          ]
+        },
+        {
+          "topic": "Resolve.ai — target segment & GTM",
+          "insight": "Top-down enterprise GTM aimed at large engineering orgs in tech, financial services, and consumer apps running business-critical systems at scale. Founder-led credibility (Spiros Xanthos, ex-Splunk Observability SVP/GM, OpenTelemetry co-creator). Lands via Slack/Teams/terminal workflow integration; sells on hard MTTR / engineer-time ROI with a heavy enterprise customer-success motion. Very well funded ($125M Series A led by Lightspeed at ~$1B valuation, $150M+ total) to chase enterprise logos fast.",
+          "evidence": "Named customers: Coinbase, DoorDash, MongoDB, MSCI, Salesforce, Zscaler. Stated results: Coinbase '72% reduction in time to investigate critical incidents'; Zscaler 'reduced engineers required per incident by 30%.' Investors: Lightspeed (lead), Greylock, Unusual Ventures, A*.",
+          "sourceUrls": [
+            "https://resolve.ai/blog/series-a-funding",
+            "https://resolve.ai/product"
+          ]
+        },
+        {
+          "topic": "Cleric — pricing model",
+          "insight": "企业询价, but explicitly steering toward usage/consumption-based pricing (committed compute) rather than per-seat. Offers monthly or annual subscriptions with tiered plans, 'predictable costs with included usage limits,' and a read-only-by-default trial. No public dollar figures; contact sales for enterprise. Has a /pricing page and an ROI '/calculator' but no published numbers.",
+          "evidence": "Stated philosophy: move to 'usage-based pricing with committed compute amounts' so engineers 'just use it and see value'; wants the product to be a daily-use 'toothbrush' vs the observability platform. Per-investigation framing implied but no rate published.",
+          "sourceUrls": [
+            "https://cleric.ai/",
+            "https://cleric.ai/solutions/for-sres",
+            "https://www.zenml.io/llmops-database/ai-sre-agents-for-production-system-diagnostics"
+          ]
+        },
+        {
+          "topic": "Cleric — target segment & GTM",
+          "insight": "Targets SREs / on-call software engineers / engineering leaders at orgs running Kubernetes, microservices and cloud infra. GTM is early-access/waitlist + design-partner + 'book a demo,' with a self-service low-friction install ('setup takes minutes, read-only by default'). Heavy content/event marketing (State of AI SRE whitepaper, webinars, sponsoring AI Engineer World's Fair) and certified implementation partners. Smaller/earlier-stage than Resolve.ai; positions on 'AI SRE that learns' (operational memory) and freeing engineers from on-call.",
+          "evidence": "Site CTAs ('Book a demo'), waitlist/early-access program, read-only default trial, certified implementation partners. Backed by Vertex Ventures US (thesis: 'Reinventing SRE with AI').",
+          "sourceUrls": [
+            "https://cleric.ai/",
+            "https://cleric.ai/blog/introducing-cleric",
+            "https://medium.com/vvus/reinventing-sre-with-ai-our-investment-in-cleric-6c2ced0b3f12"
+          ]
+        },
+        {
+          "topic": "incident.io — pricing model",
+          "insight": "Transparent published per-seat SaaS, with AI bundled rather than sold as a separate SKU. Incident Response: Team ~$15–19/user/mo (annual vs monthly), Pro ~$25/user/mo. On-call add-on: +$10/user/mo (Team) or +$20/user/mo (Pro). So all-in ~$31/user/mo (Team) to ~$45/user/mo (Pro). Free tier exists. Enterprise (~300+ users) custom-priced ~$50/user/mo. AI/Insights features live mainly in Pro+ at no separate AI line item.",
+          "evidence": "Team $19/user/mo ($15 annual); Pro $25/user/mo; on-call add-on $10 (Team)/$20 (Pro); Team+on-call $31, Pro+on-call $45; Enterprise ~$50/user/mo. Free tier; AI-powered automation included in Pro.",
+          "sourceUrls": [
+            "https://incident.io/blog/incident-management-pricing-comparison-2026",
+            "https://instatus.com/blog/incident-io-pricing",
+            "https://docs.incident.io/admin/seat-types"
+          ]
+        },
+        {
+          "topic": "incident.io — AI SRE product & GTM",
+          "insight": "Bottom-up, Slack-native, product-led GTM expanding from incident management into an 'AI SRE' that autonomously investigates alerts (multi-agent: searches GitHub PRs, Slack, past incidents, logs/metrics/traces; posts hypotheses/reports in Slack in 1–2 min; drafts postmortems; generates fixes). Strength is a large installed incident-response base they can upsell AI into; per-seat model means AI rides existing seats rather than a usage meter.",
+          "evidence": "Dedicated AI SRE page; multi-agent investigation that builds root-cause hypotheses and presents reports in Slack within 1–2 minutes; claims ~5x faster resolution and 'environment-specific fixes with up to 90% accuracy.'",
+          "sourceUrls": [
+            "https://incident.io/ai-sre",
+            "https://www.zenml.io/llmops-database/ai-powered-incident-response-system-with-multi-agent-investigation",
+            "https://www.producttalk.org/when-ai-becomes-your-sre-how-incident-io-is-automating-incident-response/"
+          ]
+        },
+        {
+          "topic": "Datadog Bits AI SRE — pricing model",
+          "insight": "Pure consumption/usage-based, billed per CONCLUSIVE investigation via AI credits — distinct from per-seat. List: from $500/mo for 20 conclusive investigations (annual) or $600/mo for 20 (monthly) ≈ $25–30 per conclusive investigation. Only investigations that reach a conclusive status are billable; inconclusive ones are free. It is a standalone add-on line item layered on top of (and requiring) an existing Datadog subscription — not bundled into existing contracts.",
+          "evidence": "$500/mo per 20 conclusive investigations (annual); $600/mo (monthly) ≈ $25–30 each. Reported real-world spend: ~$500–800/mo (startups) up to ~$2,000–5,000/mo (growth-stage heavy users). Requires existing Datadog subscription; priced via AI credits.",
+          "sourceUrls": [
+            "https://www.datadoghq.com/product/ai/bits-ai-sre/",
+            "https://blog.struct.ai/datadog-bits-ai-pricing-2026/",
+            "https://www.datadoghq.com/pricing/"
+          ]
+        },
+        {
+          "topic": "Datadog Bits AI SRE — target segment & GTM",
+          "insight": "Classic land-and-expand inside the existing Datadog installed base: enterprise/mid-large orgs already on Datadog observability with 24/7 on-call. GTM advantage is zero data-integration friction (it sits on Datadog's telemetry) and easy add-on to existing contracts; risk is bill-shock from per-investigation metering scaling with alert volume. Auto-investigates every alert the moment it fires; suggests code fixes; chat-based.",
+          "evidence": "Requires existing Datadog subscription; testimonials from Uber Freight, iFood, Kyndryl. Claims results ~90% faster and ~70% MTTR reduction. Messaging targets SRE teams / on-call engineers in 'complex environments.'",
+          "sourceUrls": [
+            "https://www.datadoghq.com/product/ai/bits-ai-sre/",
+            "https://metoro.io/comparisons/ai-sre/datadog-bits-ai-sre-alternatives"
+          ]
+        },
+        {
+          "topic": "Harness — pricing model",
+          "insight": "Per-developer, modular (买你需要的模块) platform pricing — recently formalized as 'Developer 360' per-developer pricing. Tiers: Free ($0, 2,000 monthly cloud credits), Essentials (mid-market, sales-quoted, up to 500 users / 60 concurrent executions), Enterprise (custom, unlimited users / 500 concurrent). No official per-dev list numbers; third parties peg Enterprise CD at $100+/dev/mo with CI/Feature Flags/STO as separate line items. Cloud Cost Management is billed as a % of cloud spend (not per-dev). Internal Developer Portal requires a 20-license minimum. Multi-year/annual prepay unlocks ~15–30% discounts.",
+          "evidence": "Vendr/CloudZero benchmarks: median ~$48,350/yr; range $8.5K–$232K+; ~$23K–$41K/yr for ~200-person orgs. Per-developer modular billing confirmed via 'Developer 360 pricing.' Free plan = 2,000 monthly cloud credits.",
+          "sourceUrls": [
+            "https://www.harness.io/pricing",
+            "https://www.harness.io/blog/introducing-developer-360-pricing-by-harness",
+            "https://www.cloudzero.com/blog/harness-pricing/"
+          ]
+        },
+        {
+          "topic": "Harness — target segment & GTM",
+          "insight": "Broadest scope of the set: a full AI-native software-delivery platform (CI/CD, GitOps, IaCM, Security Testing, Feature Flags, Cloud Cost Mgmt, SRM, IDP, DB DevOps) selling to growing-to-large engineering orgs, expanding from individual devs (Free) up to large enterprises (Enterprise). AI is positioned as a platform-wide capability ('AI Across the SDLC') embedded in modules (deployment verification, cost optimization), not a standalone AI SKU. GTM = sales-led/land-and-expand by module, plus PLG via Free tier. Less of a pure 'incident self-healing' competitor and more the CI/CD pipeline + delivery-platform incumbent your project rides on.",
+          "evidence": "Modules incl. CD & GitOps, CI, IaCM, STO (Essentials bundle) plus à-la-carte Feature Mgmt, Resilience/Chaos Testing, Service Reliability Mgmt, DB DevOps, Artifact Registry, SEI, IDP, CCM. AI marketed as 'AI Across the SDLC.'",
+          "sourceUrls": [
+            "https://www.harness.io/pricing",
+            "https://www.harness.io/",
+            "https://developer.harness.io/docs/platform/harness-ai/devops-agent/"
+          ]
+        },
+        {
+          "topic": "Sedai — pricing model",
+          "insight": "Usage/资源-based pricing tied to infra units, with a free option and enterprise询价 for custom plans. Meters by Lambda invocations, Kubernetes pods, and ECS tasks (i.e., per-resource), not per-seat. Autonomous actions are included in all plans including free. No public dollar figures; contact sales for enterprise. Value framed as 30–50% cost savings, so pricing is anchored to savings/ROI.",
+          "evidence": "Pricing page: 'start free or contact for a custom plan'; usage metrics = invocations (Lambda), pods (K8s), tasks (ECS); autonomous actions in all plans. Claims 30–50% cloud-cost reduction.",
+          "sourceUrls": [
+            "https://www.sedai.io/pricing",
+            "https://sedai.io/",
+            "https://www.sedai.io/use-cases/cloud-cost-optimization"
+          ]
+        },
+        {
+          "topic": "Sedai — target segment & GTM",
+          "insight": "Adjacent rather than head-on: a 'self-driving cloud' autonomous optimization/reliability platform focused on cost optimization and SLO-aware autoscaling/rightsizing for cloud-native workloads (Lambda, ECS, Kubernetes, GPU/storage/network). Targets cloud/platform/FinOps + SRE teams at companies with meaningful cloud spend. GTM = ROI/savings-led (free start → custom enterprise) with self-service onboarding. Overlaps your project on autonomous prod actions but its wedge is cost/performance optimization, not deploy/incident self-healing.",
+          "evidence": "Positioned as 'Self-Driving Cloud'; rightsizes workloads, tunes scaling, optimizes nodes/clusters 'while meeting SLOs'; per-resource cost attribution for GPU/storage/network; purchasing/savings-plan optimization. 30–50% savings claim.",
+          "sourceUrls": [
+            "https://sedai.io/",
+            "https://www.sedai.io/use-cases/cloud-cost-optimization",
+            "https://www.sedai.io/platform/kubernetes-cost-optimization"
+          ]
+        },
+        {
+          "topic": "PagerDuty (Advance + AIOps) — pricing model",
+          "insight": "Two layers. (1) PagerDuty Advance = generative-AI assistant add-on, flat from $415/mo, annual commitment only (no monthly), requires an existing Incident Management plan; assists with status updates, automation summaries, suggested next steps. (2) PagerDuty AIOps = consumption-based, billed per ACCEPTED EVENT (not per seat), from $699/mo (annual) or $799/mo (monthly), requires ≥1 user on a Professional/Business Incident Response plan; applies ML for noise reduction and event correlation. So PagerDuty mixes per-user core + flat AI add-on + usage-based AIOps.",
+          "evidence": "Advance: from $415/mo, annual-only, requires existing Incident Management plan. AIOps: from $699/mo (annual) / $799/mo (monthly), per accepted event, requires ≥1 user on Professional/Business IR plan.",
+          "sourceUrls": [
+            "https://www.pagerduty.com/pricing/aiops/",
+            "https://checkthat.ai/brands/pagerduty/pricing"
+          ]
+        },
+        {
+          "topic": "PagerDuty (Advance + AIOps) — target segment & GTM",
+          "insight": "Incumbent on-call/incident-response platform doing classic upsell into its large installed base: attach AI (Advance) and event-correlation/automation (AIOps) on top of existing per-seat IR contracts. Targets enterprises that already standardized on PagerDuty for paging and want noise reduction + faster resolution without re-platforming. GTM strength = distribution/installed base; structurally it gates AI behind existing paid plans (add-ons require an existing IR plan), which slows pure-AI adoption vs greenfield 'AI SRE' entrants like Resolve.ai/Cleric.",
+          "evidence": "Advance and AIOps both require an existing paid Incident Response plan to purchase. Advance positioned as 'Generative AI for the PagerDuty Operations Cloud'; AIOps positioned to 'reduce noise and automate incident resolutions.'",
+          "sourceUrls": [
+            "https://www.pagerduty.com/pricing/aiops/",
+            "https://www.vendr.com/marketplace/pagerduty"
+          ]
+        },
+        {
+          "topic": "Cross-competitor takeaway for your project",
+          "insight": "Three pricing archetypes are emerging: (a) per-seat with AI bundled — incident.io; (b) usage/consumption-based — Datadog Bits (per conclusive investigation), Sedai (per resource), PagerDuty AIOps (per accepted event); (c) enterprise询价 value-based for full-autonomy 'AI SRE' — Resolve.ai, Cleric. Harness is the broad per-developer delivery-platform incumbent. The greenfield autonomous-remediation space your project targets (alert → auto traffic-rollback on Cloud Run → fix-PR via real CI/CD → prove error-rate→0 → revert rollback) is closest to Resolve.ai and Cleric in ambition, but none of those publish prices — a wedge to price transparently (e.g., per auto-resolved incident or per healed deploy) is open. Note: incident.io, Datadog Bits, and incident.io's AI SRE detect/diagnose and suggest fixes, but your differentiated loop is autonomous traffic-level stop-the-bleed (Cloud Run revision rollback) plus closed-loop proof-of-recovery and auto-revert — closer to a self-healing action layer than the diagnosis-and-suggest layer most competitors stop at.",
+          "evidence": "Synthesis of the per-competitor findings above: bundled per-seat (incident.io), per-investigation (Datadog $25–30), per-event (PagerDuty AIOps), per-resource (Sedai), per-developer modular (Harness), and enterprise-询价 value-based (Resolve.ai, Cleric).",
+          "sourceUrls": [
+            "https://incident.io/blog/incident-management-pricing-comparison-2026",
+            "https://blog.struct.ai/datadog-bits-ai-pricing-2026/",
+            "https://www.pagerduty.com/pricing/aiops/"
+          ]
+        }
+      ],
+      "pricing": [
+        {
+          "product": "Resolve AI (autonomous AI SRE)",
+          "model": "Enterprise sales, undisclosed list pricing",
+          "priceNote": "~$1B valuation on ~$4M ARR; >$150M total raised ($35M seed + $125M Series A led by Lightspeed). Sold top-down to large eng orgs (Coinbase, DoorDash, Salesforce, Zscaler).",
+          "sourceUrl": "https://techcrunch.com/2025/12/19/ex-splunk-execs-startup-resolve-ai-hits-1-billion-valuation-with-series-a/"
+        },
+        {
+          "product": "Datadog Bits AI SRE",
+          "model": "Add-on to paid Datadog observability platform",
+          "priceNote": "Gated behind existing paid Datadog tiers/usage; requires Datadog telemetry. GA to all Datadog users but consumption/seat economics tied to Datadog contract.",
+          "sourceUrl": "https://www.datadoghq.com/about/latest-news/press-releases/datadog-launches-bits-ai-sre-agent-to-resolve-incidents-faster/"
+        },
+        {
+          "product": "PagerDuty SRE Agent",
+          "model": "Add-on to PagerDuty AIOps + Advance tiers",
+          "priceNote": "Available only to PagerDuty AIOps + Advance customers (GA ~Oct 31 2025); bundled into enterprise incident-management subscription.",
+          "sourceUrl": "https://www.pagerduty.com/blog/ai/new-enhancements-to-pagerdutys-sre-agent-triage-faster-without-waking-a-human/"
+        },
+        {
+          "product": "Resolve.ai",
+          "model": "Enterprise询价 (custom, value-based; no public price; not per-seat)",
+          "priceNote": "No published pricing. $125M Series A (Lightspeed) at ~$1B valuation; sells custom annual enterprise contracts.",
+          "sourceUrl": "https://resolve.ai/blog/series-a-funding"
+        },
+        {
+          "product": "Cleric",
+          "model": "企业询价, trending to usage/consumption-based (committed compute)",
+          "priceNote": "No public figures. Monthly/annual tiered plans with 'predictable costs + included usage limits'; read-only-by-default trial; early-access/waitlist. Has /pricing + ROI /calculator but no numbers.",
+          "sourceUrl": "https://cleric.ai/"
+        },
+        {
+          "product": "incident.io",
+          "model": "Per-seat SaaS, AI bundled (no separate AI SKU)",
+          "priceNote": "Team ~$15–19/user/mo, Pro ~$25/user/mo; On-call add-on +$10 (Team)/+$20 (Pro); all-in ~$31 (Team) to ~$45 (Pro)/user/mo; Free tier; Enterprise ~$50/user/mo (~300+ users).",
+          "sourceUrl": "https://incident.io/blog/incident-management-pricing-comparison-2026"
+        },
+        {
+          "product": "Datadog Bits AI SRE",
+          "model": "Consumption/usage-based, per conclusive investigation (AI credits)",
+          "priceNote": "From $500/mo per 20 conclusive investigations (annual) or $600/mo (monthly) ≈ $25–30 each; inconclusive investigations free; standalone add-on requiring an existing Datadog subscription.",
+          "sourceUrl": "https://blog.struct.ai/datadog-bits-ai-pricing-2026/"
+        },
+        {
+          "product": "Harness",
+          "model": "Per-developer, modular platform ('Developer 360'); CCM as % of cloud spend",
+          "priceNote": "Free ($0, 2,000 monthly cloud credits); Essentials (mid-market, sales-quoted, up to 500 users); Enterprise (custom). No official per-dev list; 3rd-party: Enterprise CD ~$100+/dev/mo; median ~$48K/yr, range $8.5K–$232K+. Multi-year/annual prepay ~15–30% off.",
+          "sourceUrl": "https://www.harness.io/pricing"
+        },
+        {
+          "product": "Sedai",
+          "model": "Usage/resource-based (per Lambda invocation, K8s pod, ECS task); free start + enterprise询价",
+          "priceNote": "No public dollar figures. Free option; custom enterprise quote. Autonomous actions included in all plans. Value framed as 30–50% cloud-cost savings.",
+          "sourceUrl": "https://www.sedai.io/pricing"
+        },
+        {
+          "product": "PagerDuty Advance (GenAI add-on)",
+          "model": "Flat add-on, annual commitment only; requires existing Incident Management plan",
+          "priceNote": "From $415/mo (annual only; no monthly). Gated behind an existing paid IR plan.",
+          "sourceUrl": "https://www.pagerduty.com/pricing/aiops/"
+        },
+        {
+          "product": "PagerDuty AIOps",
+          "model": "Consumption-based, per accepted event; requires ≥1 user on Professional/Business IR plan",
+          "priceNote": "From $699/mo (annual) or $799/mo (monthly). Billed per accepted event (valid 2xx-processed events).",
+          "sourceUrl": "https://www.pagerduty.com/pricing/aiops/"
+        }
+      ]
+    },
+    "marketVerdict": {
+      "icp": "两层 ICP,做「demo 拿奖在小队、未来收钱在企业」的双轨定位。\n\n【主 ICP — 拿奖/落地的楔子(wedge)】5–20 人、没有专职 SRE、却已经在 Cloud Run 上跑生产、半夜还会被 paging 叫醒的小团队。证据:Google 的 SRE 配置模型「在只有 11 个工程师的公司里活不下来」,小公司「仍然需要系统不宕、仍然会在凌晨两点被 paging」,只能用工具替代专职岗。这类团队集成面小、销售周期短、「工程师向工程师买、付费意愿高」,且与你必用的 Cloud Run 原生贴合 —— 是 12 天能做出可演示闭环的唯一现实 ICP。\n\n【真 ICP — 钱在这里(讲故事用,不在 12 天内交付)】跑微服务/K8s、有 24/7 on-call、宕机每分钟烧钱的中大型 SRE/平台团队。证据:所有拿到融资的玩家都自上而下卖企业 —— Resolve AI 客户是 Coinbase/DoorDash/MongoDB/Salesforce/Zscaler;Datadog Bits AI SRE、PagerDuty SRE Agent 都锁在付费 AIOps/Advance 档之后。宕机成本约 $5,600/分钟,61% 的组织估 ≥$50k/小时。\n\n一句话定位:「给小到养不起 SRE 的团队的 SRE-in-a-box」,而企业版是同一闭环往上长。评委要听到你清楚知道「楔子 ≠ 最终买家」。",
+      "demandStrength": "需求强、被量化、且正处在技术拐点 —— 这是个「热钱涌入、但真实采用比炒作更克制」的市场,对 12 天的 hackathon 反而是利好。\n\n【痛点已被量化,买点清晰】告警疲劳 + 宕机成本 + on-call 倦怠三件套:团队每周约 2,000+ 条告警、仅约 3% 可执行;44% 曾因被抑制/忽略的告警导致一次 outage;78% 经历过「根本没有告警触发」的事故;宕机约 $5,600/分钟,34% 估 ≥$100k/小时;近 40% 组织报告 >25% 的 on-call 工程师倦怠。关键:瓶颈是「协调税」和 MTTR,不是技术复杂度 —— 这正是「检测→回滚→证明→撤销」闭环要打的点。你 spec 里的「部署窗口外、独立告警」直接命中「没有告警触发 / 窗口外」这个差异化缺口。\n\n【市场在增长但别吹大数字】AIOps 母市场约 20–30% CAGR,但分析机构口径差异巨大,必须报区间别报单一数字否则显得幼稚:Research and Markets $11.1B(2025)→$14.4B(2026)@30.2%;Mordor $18.95B(2026)→$37.79B(2031)@14.8%;Global Growth Insights 最激进 $38.5B(2025)。自治修复/「AI SRE」是其中快速增长的子集,不要把整个 AIOps TAM 当成自己的市场。\n\n【钱在涌入(强验证 + 拥挤警告)】Resolve AI:$35M 种子 + $125M A 轮(Lightspeed 领投),约 $1B 估值,却只有约 $4M ARR —— 是赌赛道不是赌收入;Traversal $48M A 轮(Kleiner Perkins+Sequoia);Neubird/Hawkeye $22.5M(M12);Cleric $4.3M 种子。\n\n【采用现实 = 给你的范围背书】2026 真实采用比炒作更克制:多数团队不跑全自治修复,常见路径是先 AI 辅助分诊+日志搜索(一周内出价值),再逐步只在最简单的 10–15 个 runbook 模式上放开自治,且永远带审批闸门、可逆、可学习。你的「可逆自动回滚(Cloud Run 流量切回上一健康 revision)+ 人工 gated 修复 PR」恰好就是市场正在买的「第一个安全的自治动作」。",
+      "realProductNarrative": "这不是又一个「AI SRE demo」,而是一个把「実務で本当に届く(真正交付到生产)」做成可验证闭环的产品。三个「真」:\n\n【真闭环(とどける)— 动作层,不止诊断层】市面上的主流产品(incident.io 的 AI SRE、Datadog Bits)大多停在「检测→诊断→建议修复」。你的差异化是真正动手:① 独立生产告警(含部署窗口外)→ ② 自动把 Cloud Run 流量切回上一健康 revision 止血(真实流量级动作)→ ③ Gemini/ADK 开真修复 PR 走真 CI/CD → ④ 用 Cloud Logging/Monitoring 证明错误率归零(闭环 proof-of-recovery)→ ⑤ 撤销临时回滚。这是「自愈动作层」,不是「诊断建议层」。\n\n【真可逆 = 真敢上生产】市场买的不是「全自治」,是「可逆的第一步」。你的止血动作是流量切换(切回已存在的健康 revision),天然可逆、零数据迁移风险;代码修复走人工 gated PR + 真 CI/CD,不绕过评审。「先证明 error-rate→0 再撤销回滚」这一步是信任解锁点 —— 它把「自治」从赌博变成有证据、可回退的工程动作。这正是企业「graduated autonomy(渐进自治)」首先采用的形态。\n\n【真平台原生 = 真护城河方向】对手最大的威胁是「拥有遥测数据」的可观测性巨头(Datadog/PagerDuty)正在 cannonball 进场,数据是它们的护城河。你不可能在 12 天里赢数据,但可以赢「动作 + Cloud Run 原生」:别人绑死在自家遥测、停在「surface root cause / 平台内动作」,你是云原生、动作优先(真的切流量 + 开真 CI/CD PR)。\n\n定价上也有真空位:Resolve/Cleric 全是企业询价、无公开价;你可以透明地按「每次自动化解的事故」或「每次治愈的部署」计价 —— 这本身就是一个差异化产品决策,而不是技术 demo。",
+      "judgeValueProof": [
+        "演一个『部署窗口外』的真事故,而不是教科书场景:故意在非部署时间注入会拉高错误率的 revision,让系统在没有人工触发、没有现成告警规则命中的情况下独立发现。这直接命中数据点『78% 的事故根本没有告警触发』,评委一眼看出你解决的是真实盲区而非玩具问题。",
+        "把闭环的『证据』摊在屏幕上:左边 Cloud Monitoring 错误率曲线随自动流量回滚(切回上一健康 Cloud Run revision)实时归零,右边是 Gemini/ADK 生成的修复 PR 在真 CI/CD 里跑绿。评委要看到『止血(秒级、可逆)』与『根因修复(走真评审)』被明确分成两层 —— 这就是企业最先采用的 graduated autonomy。",
+        "强调可逆与撤销:演示『先用 Cloud Logging/Monitoring 证明 error-rate→0,再自动撤销临时回滚』。引用『2026 多数团队不跑全自治,只在最简单 10–15 个 runbook 模式上放开,且必须带审批闸门+可逆+可学习』,证明你的范围不是 hackathon 式过度承诺,而是贴合真实采用曲线。",
+        "量化 ROI 锚点:宕机约 $5,600/分钟、61% 组织估 ≥$50k/小时;每周约 2,000 条告警仅约 3% 可执行、近 40% 组织 >25% on-call 倦怠。把 demo 里『从告警到错误率归零』的 MTTR 秒数换算成省下的钱和省下的 on-call 唤醒,说明你打的是『协调税/MTTR』而非技术复杂度。",
+        "讲清差异化护城河,主动点名对手:incident.io / Datadog Bits 停在『诊断+建议修复』;Resolve/Cleric 全自治但企业询价、不公开价、集成面重。你是 Cloud Run 原生 + 动作优先(真切流量 + 开真 CI/CD PR)+ 闭环 proof-of-recovery —— 一个『自愈动作层』。让评委记住你不是『又一个 AI SRE』。",
+        "必用栈讲成一个连贯的 agentic 故事而非堆砌:Gemini 做跨服务因果推理 + 生成修复、ADK 编排『检测→止血→修 PR→验证→撤销』的多步带闸门 agent、Cloud Run 既是被治对象也是运行时,Cloud Logging/Monitoring 闭合证据环。强调『现在能做』是因为 LLM/agent 能力 + ADK/Gemini 工具的拐点。",
+        "给一句可落地的商业判断当收尾:定价真空(Resolve/Cleric 都不公开价)给了你『按每次自动化解的事故 / 每次治愈的部署透明计价』的位置,楔子是 Cloud Run 小团队、最终钱在企业 graduated autonomy —— 证明你想的是产品和生意,不只是 demo。"
+      ],
+      "pricingBenchmark": [
+        "定价存在三种原型,自治修复赛道(你所在)最接近 Resolve/Cleric,但二者都不公开价 —— 透明定价是公开的楔子。",
+        "原型 A 按席位、AI 捆绑(不单独 SKU):incident.io —— Team 约 $15–19/user/月、Pro 约 $25/user/月;on-call 加购 +$10(Team)/+$20(Pro);全包约 $31(Team)→$45(Pro)/user/月;有免费档;企业约 $50/user/月(约 300+ 用户)。",
+        "原型 B 按用量/消耗:Datadog Bits AI SRE —— 按『有结论的调查』计费,$500/月含 20 次(年付)或 $600/月(月付)≈ $25–30/次,无结论不收费;但需已有 Datadog 订阅做底座。真实开销约 $500–800/月(初创)到 $2,000–5,000/月(成长期重度)。",
+        "原型 B 续:PagerDuty 混合 —— Advance(GenAI 加购)从 $415/月起、仅年付、需已有 IM 计划;AIOps 按『accepted event』从 $699/月(年)/$799/月(月)起,需 ≥1 用户在 Professional/Business IR 档。Sedai 按资源(Lambda 调用/K8s pod/ECS task),免费起步 + 企业询价,价值锚定 30–50% 省云成本。",
+        "原型 C 企业询价、价值定价(全自治 AI SRE):Resolve.ai 与 Cleric 均无公开价。Resolve 约 $1B 估值 / 约 $4M ARR,卖自定义年度企业合同;Cleric 走 usage/committed-compute 方向,有 /pricing 与 ROI /calculator 但无数字,read-only 默认试用。",
+        "平台型对照:Harness 按开发者、模块化(Developer 360),免费档($0,2,000 月度 cloud credits);第三方基准 企业 CD 约 $100+/dev/月,中位约 $48K/年,区间 $8.5K–$232K+;多年/年付预付约省 15–30%。它更像你 CI/CD 管线所『骑』的底座,不是正面竞品。",
+        "对你的启示:可考虑『按每次自动化解的事故』或『按每次治愈的部署』透明计价 —— 既贴近你『动作层/proof-of-recovery』的价值单元,又填补 Resolve/Cleric 不公开价的真空,且对小团队 ICP 比按席位更友好(没有 on-call 工程师可摊席位)。"
+      ],
+      "risks": [
+        "赛道极度拥挤且热钱已涌入 —— Resolve($150M+)、Traversal($48M)、Neubird、Cleric、Parity(YC) + incident.io,差异化必须是『具体闭环』(窗口外检测→可逆 Cloud Run 回滚→Monitoring 验证→自动撤销)而非『又一个 AI SRE』,否则评委和市场都记不住你。",
+        "最大结构性威胁是拥有遥测数据的可观测性巨头:Datadog Bits AI SRE(GA,已支持 human-in-the-loop 分诊动作 + 平台内自动修复)、PagerDuty SRE Agent(约 2025-10-31 GA,六步诊断→批准后执行→学习,且接了 Azure AI SRE Agent)。它们的数据护城河你 12 天内赢不了 —— 只能靠 Cloud Run 原生 + 动作优先绕开,别正面拼诊断。",
+        "ICP 错配风险:演示友好的是小团队,但付费的钱在企业。若叙事只停在小团队,评委会问『商业天花板』;若只讲企业,12 天又做不出来。必须明确讲清『楔子 vs 最终买家』的双轨,否则两头都不讨好。",
+        "自治动作的信任/安全风险:自动改生产流量哪怕可逆也吓人。必须把『可逆止血(切回已有健康 revision)+ 人工 gated 代码 PR + 先证明 error-rate→0 再撤销』做成显式护栏并在 demo 中讲出来,否则评委担心『它会不会把生产搞挂』。任何『全自治、无闸门』的表述都会反噬。",
+        "范围/时间风险:12 天 + 小团队要打通『Gemini + ADK + Cloud Run + 真 CI/CD + Cloud Logging/Monitoring』整条真链路,任何一环(尤其真 CI/CD 触发与 Monitoring 取证)掉链子都会让闭环演不出来。建议先锁死一个可重复注入的故障场景 + 一条绿色 CI/CD 路径作为 demo 主干,其余降级为 talking point。",
+        "市场吹大风险:AIOps TAM 各家口径差异巨大($11B 到 $38B),且自治修复只是其中子集。若把整个 AIOps TAM 当自己市场,会被评委一眼看穿幼稚 —— 报区间、明确说『我们是其中快速增长的子集』。",
+        "数据/演示真实性风险:评委可能怀疑『错误率归零』是演的。需要用真实 Cloud Monitoring 查询/曲线 + 真实 PR 链接 + 真实 CI run 截图作证,避免任何 mock,否则『proof-of-recovery』这个最大卖点失分。"
+      ]
+    }
+  },
+  "workflowProgress": [
+    {
+      "type": "workflow_phase",
+      "index": 1,
+      "title": "TechDocs"
+    },
+    {
+      "type": "workflow_phase",
+      "index": 2,
+      "title": "Market"
+    },
+    {
+      "type": "workflow_phase",
+      "index": 3,
+      "title": "Synthesize"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 1,
+      "label": "tech:adk",
+      "phaseIndex": 1,
+      "phaseTitle": "TechDocs",
+      "agentId": "a2714c879490e08c9",
+      "model": "claude-opus-4-8",
+      "state": "done",
+      "startedAt": 1782574496548,
+      "queuedAt": 1782574496535,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "promptPreview": "项目:自治「发布/事故自愈」DevOps Agent。闭环=独立生产告警(含部署窗口外)→自动把 Cloud Run 流量切回上一健康 revision 止血→Gemini/ADK 开修复 PR 走真 CI/CD→用 Cloud Logging/Monitoring 证明错误率归零→撤销临时回滚。必用 Gemini+ADK+Cloud Run。团队小、距 7/10 仅 ~12 天。今天 2026-06-28。\n\n查 **Agent Development Kit (ADK)** 官方文档(google.github.io/adk-docs 等)当前(2026)状态:① 语言支持(Python/Java/TS,哪个最成熟);② agent 类型与编排(LlmAgent、Sequential/Parallel/Loop Workflow agents、multi-agent);③ tool c…",
+      "lastProgressAt": 1782574779971,
+      "tokens": 49523,
+      "toolCalls": 27,
+      "durationMs": 283423,
+      "resultPreview": "{\"components\":[{\"topic\":\"版本现状与最关键风险:ADK 2.0(2026-05)是重大破坏性升级,新项目用哪个版本\",\"recommendation\":\"用 Python。但务必先做版本决策。google-adk 在 PyPI 当前最新是 2.3.0(2026-06-18),2.0.0 于 2026-05-19 转 stable。2.0 把执行模型整体改成 graph-based Workflow Runtime:BaseAgent 现在 subclass BaseNode,classic 的 _run_async_impl() 等方法覆盖会被『静默忽略』;手动 context.session.events.append() 不再生效;1.x 与 2.0 的 session/memory/eval 存储 schema 不兼容(混用会丢数据)。对你们这种『距 7/10…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 2,
+      "label": "tech:cloudrun",
+      "phaseIndex": 1,
+      "phaseTitle": "TechDocs",
+      "agentId": "a4b45a42225ef4f22",
+      "model": "claude-opus-4-8",
+      "state": "done",
+      "startedAt": 1782574496549,
+      "queuedAt": 1782574496535,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "promptPreview": "项目:自治「发布/事故自愈」DevOps Agent。闭环=独立生产告警(含部署窗口外)→自动把 Cloud Run 流量切回上一健康 revision 止血→Gemini/ADK 开修复 PR 走真 CI/CD→用 Cloud Logging/Monitoring 证明错误率归零→撤销临时回滚。必用 Gemini+ADK+Cloud Run。团队小、距 7/10 仅 ~12 天。今天 2026-06-28。\n\n查 **Cloud Run** 官方文档(cloud.google.com/run/docs)关于 revision 与流量回滚:① 怎么列 revision 历史;② 怎么把 100% 流量切回上一个 revision(`gcloud run services update-traffic --to-revisions=...`);③ Cloud Run Admin API v2…",
+      "lastProgressAt": 1782574679457,
+      "tokens": 38793,
+      "toolCalls": 14,
+      "durationMs": 182908,
+      "resultPreview": "{\"components\":[{\"topic\":\"① 列 revision 历史(CLI)— 用于自愈闭环里枚举候选回滚目标\",\"recommendation\":\"用 `gcloud run revisions list --service SERVICE --region REGION` 列出某服务的所有 revision。加 `--format` 自定义输出,这是程序化止血决策的关键:`gcloud run revisions list --service SERVICE --region REGION --format='value(metadata.name, metadata.creationTimestamp)' --sort-by='~metadata.creationTimestamp'`(按创建时间倒序,最新在前)。查单个 revision 详情用 `gcloud run…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 3,
+      "label": "tech:gemini-monitor",
+      "phaseIndex": 1,
+      "phaseTitle": "TechDocs",
+      "agentId": "a81ec4a07d6b11f79",
+      "model": "claude-opus-4-8",
+      "state": "done",
+      "startedAt": 1782574496549,
+      "queuedAt": 1782574496535,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "promptPreview": "项目:自治「发布/事故自愈」DevOps Agent。闭环=独立生产告警(含部署窗口外)→自动把 Cloud Run 流量切回上一健康 revision 止血→Gemini/ADK 开修复 PR 走真 CI/CD→用 Cloud Logging/Monitoring 证明错误率归零→撤销临时回滚。必用 Gemini+ADK+Cloud Run。团队小、距 7/10 仅 ~12 天。今天 2026-06-28。\n\n查两块官方文档:① **Gemini API** 的 structured output / controlled generation(responseSchema / responseMimeType)与 function calling 怎么用来驱动状态机决策(ai.google.dev / Vertex);② **Cloud Monitoring + Cloud Loggi…",
+      "lastProgressAt": 1782574689873,
+      "tokens": 44257,
+      "toolCalls": 18,
+      "durationMs": 193324,
+      "resultPreview": "{\"components\":[{\"topic\":\"Gemini structured output (responseSchema / responseMimeType) 驱动状态机决策\",\"recommendation\":\"用 classic generateContent v1beta 的 generationConfig 把决策结果约束成枚举 JSON,作为状态机的输入。设 responseMimeType='application/json' + responseSchema(用 OpenAPI-subset Schema,顶层 OBJECT,字段含 enum 的 action),让 Gemini 输出形如 {\\\"action\\\":\\\"ROLLBACK\\\",\\\"target_revision\\\":\\\"...\\\",\\\"confidence\\\":0.9,\\\"reason\\\":\\\"...…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 4,
+      "label": "tech:github-ci",
+      "phaseIndex": 1,
+      "phaseTitle": "TechDocs",
+      "agentId": "a5bb28a063360c471",
+      "model": "claude-opus-4-8",
+      "state": "done",
+      "startedAt": 1782574496549,
+      "queuedAt": 1782574496535,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "promptPreview": "项目:自治「发布/事故自愈」DevOps Agent。闭环=独立生产告警(含部署窗口外)→自动把 Cloud Run 流量切回上一健康 revision 止血→Gemini/ADK 开修复 PR 走真 CI/CD→用 Cloud Logging/Monitoring 证明错误率归零→撤销临时回滚。必用 Gemini+ADK+Cloud Run。团队小、距 7/10 仅 ~12 天。今天 2026-06-28。\n\n查:① 用 **GitHub API / GitHub App** 程序化创建分支+PR(Octokit / REST)需要什么权限、怎么做;② **GitHub Actions vs Cloud Build** 作为修复 PR 的 CI 怎么选与接线;③ Agent 提交前\"自我纠错\"(本地/沙箱跑 build+test,失败喂回 Gemini 重试)的可行做法;④ Sentry…",
+      "lastProgressAt": 1782574672884,
+      "tokens": 39782,
+      "toolCalls": 14,
+      "durationMs": 176335,
+      "resultPreview": "{\"components\":[{\"topic\":\"① 用 GitHub App / Octokit 程序化创建分支 + 修复 PR(权限与接线)\",\"recommendation\":\"用 GitHub App(不要用个人 PAT),给最小细粒度权限:Contents=Read&Write、Pull requests=Read&Write、Metadata=Read(强制)、Workflows=Write(仅当 PR 会改 .github/workflows/* 时才需要,否则 push 会被拒)。流程:App 用私钥签 JWT → 换取 installation access token(有效期 1h,过期重签)→ 用该 token 调 REST。创建 PR 标准 8 步序列:(1) GET base 分支的 HEAD sha;(2) POST git/blobs 上传改动文件内容;(3)…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 5,
+      "label": "market:icp-demand",
+      "phaseIndex": 2,
+      "phaseTitle": "Market",
+      "agentId": "ab46b8b84b0d45e08",
+      "model": "claude-opus-4-8",
+      "state": "done",
+      "startedAt": 1782574780008,
+      "queuedAt": 1782574779997,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "promptPreview": "项目:自治「发布/事故自愈」DevOps Agent。闭环=独立生产告警(含部署窗口外)→自动把 Cloud Run 流量切回上一健康 revision 止血→Gemini/ADK 开修复 PR 走真 CI/CD→用 Cloud Logging/Monitoring 证明错误率归零→撤销临时回滚。必用 Gemini+ADK+Cloud Run。团队小、距 7/10 仅 ~12 天。今天 2026-06-28。\n\n调研 **AI SRE / 自治事故修复** 的市场:① ICP 到底是谁(独立开发者/小团队 vs 中大型 SRE 组织),各自痛点与买单意愿;② 市场规模与增长(AIOps / autonomous remediation 2025-2026 市场报告数字);③ 趋势(为什么现在火、投融资信号如 Resolve.ai $150M)。给来源。\n\n用 WebSearch/WebFe…",
+      "lastProgressAt": 1782574917925,
+      "tokens": 40970,
+      "toolCalls": 12,
+      "durationMs": 137916,
+      "resultPreview": "{\"findings\":[{\"topic\":\"ICP — who actually buys AI SRE\",\"insight\":\"The clear, high-willingness-to-pay buyer today is the MID-TO-LARGE SRE/platform org running microservices/Kubernetes at scale — not indie devs. Every funded leader sells top-down to enterprises: Resolve AI's named logos are Coinbase, DoorDash, MongoDB, Salesforce, Zscaler; Datadog Bits AI SRE and PagerDuty SRE Agent gate behind paid…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 6,
+      "label": "market:pricing-gtm",
+      "phaseIndex": 2,
+      "phaseTitle": "Market",
+      "agentId": "a92ad921cf91c608f",
+      "model": "claude-opus-4-8",
+      "state": "done",
+      "startedAt": 1782574780010,
+      "queuedAt": 1782574779997,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "promptPreview": "项目:自治「发布/事故自愈」DevOps Agent。闭环=独立生产告警(含部署窗口外)→自动把 Cloud Run 流量切回上一健康 revision 止血→Gemini/ADK 开修复 PR 走真 CI/CD→用 Cloud Logging/Monitoring 证明错误率归零→撤销临时回滚。必用 Gemini+ADK+Cloud Run。团队小、距 7/10 仅 ~12 天。今天 2026-06-28。\n\n调研竞品**定价与 GTM**:Resolve.ai、Cleric、incident.io、Datadog Bits AI、Harness、Sedai、PagerDuty Advance 各自定价模式(按席/按用量/企业询价)、目标客户段、上市策略。能查到的具体价格数字尽量给,查不到就标\"企业询价\"。给来源。\n\n用 WebSearch/WebFetch 核验。按 schema 输出…",
+      "lastProgressAt": 1782575078162,
+      "tokens": 45427,
+      "toolCalls": 19,
+      "durationMs": 298152,
+      "resultPreview": "{\"findings\":[{\"topic\":\"Resolve.ai — pricing model\",\"insight\":\"Enterprise询价 (no public list price). Sells custom/negotiated annual enterprise contracts; no per-seat or per-investigation number is disclosed anywhere public. Positions as an autonomous 'AI SRE' that owns on-call/incidents/daily prod work, so deals are platform/value-based, not per-seat.\",\"evidence\":\"Series A announcement plus the home…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 7,
+      "label": "verdict:tech",
+      "phaseIndex": 3,
+      "phaseTitle": "Synthesize",
+      "agentId": "a9244094f3a13856c",
+      "model": "claude-opus-4-8",
+      "state": "done",
+      "startedAt": 1782575078183,
+      "queuedAt": 1782575078168,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "promptPreview": "项目:自治「发布/事故自愈」DevOps Agent。闭环=独立生产告警(含部署窗口外)→自动把 Cloud Run 流量切回上一健康 revision 止血→Gemini/ADK 开修复 PR 走真 CI/CD→用 Cloud Logging/Monitoring 证明错误率归零→撤销临时回滚。必用 Gemini+ADK+Cloud Run。团队小、距 7/10 仅 ~12 天。今天 2026-06-28。\n\n已核验的技术组件(JSON):\n[{\"topic\":\"版本现状与最关键风险:ADK 2.0(2026-05)是重大破坏性升级,新项目用哪个版本\",\"recommendation\":\"用 Python。但务必先做版本决策。google-adk 在 PyPI 当前最新是 2.3.0(2026-06-18),2.0.0 于 2026-05-19 转 stable。2.0 把执行模型整体改…",
+      "lastProgressAt": 1782575177013,
+      "tokens": 59319,
+      "toolCalls": 2,
+      "durationMs": 98830,
+      "resultPreview": "{\"recommendedStack\":[\"语言/框架:Python 3.11 + google-adk~=1.0(锁 1.x,勿装到 2.3.0;2.0 是 graph-based 破坏性升级,95% 教程仍是 1.x 的 LlmAgent+Runner 写法,12 天没时间踩 2.0 新坑)。验证:python -c \\\"import importlib.metadata as m; print(m.version('google-adk'))\\\" 必须显示 1.x。\",\"编排骨架:SequentialAgent 串主流水线(triage→rollback→open_PR→verify),内层用 LoopAgent(子 agent 带 exit_loop 工具,max_iterations 兜底)做'轮询错误率直到归零或超时'。LlmAgent(gemini-2.5-flash)做需要…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 8,
+      "label": "verdict:market",
+      "phaseIndex": 3,
+      "phaseTitle": "Synthesize",
+      "agentId": "a52245287d96c292d",
+      "model": "claude-opus-4-8",
+      "state": "done",
+      "startedAt": 1782575078191,
+      "queuedAt": 1782575078168,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "lastToolSummary": "两层 ICP,做「demo 拿奖在小队、未来收钱在企业」的双轨定位。 …",
+      "promptPreview": "项目:自治「发布/事故自愈」DevOps Agent。闭环=独立生产告警(含部署窗口外)→自动把 Cloud Run 流量切回上一健康 revision 止血→Gemini/ADK 开修复 PR 走真 CI/CD→用 Cloud Logging/Monitoring 证明错误率归零→撤销临时回滚。必用 Gemini+ADK+Cloud Run。团队小、距 7/10 仅 ~12 天。今天 2026-06-28。\n\n已核验的市场洞见与定价(JSON):\n{\"findings\":[{\"topic\":\"ICP — who actually buys AI SRE\",\"insight\":\"The clear, high-willingness-to-pay buyer today is the MID-TO-LARGE SRE/platform org running microservices/K…",
+      "lastProgressAt": 1782575184250,
+      "tokens": 42342,
+      "toolCalls": 2,
+      "durationMs": 106059,
+      "resultPreview": "{\"icp\":\"两层 ICP,做「demo 拿奖在小队、未来收钱在企业」的双轨定位。\\n\\n【主 ICP — 拿奖/落地的楔子(wedge)】5–20 人、没有专职 SRE、却已经在 Cloud Run 上跑生产、半夜还会被 paging 叫醒的小团队。证据:Google 的 SRE 配置模型「在只有 11 个工程师的公司里活不下来」,小公司「仍然需要系统不宕、仍然会在凌晨两点被 paging」,只能用工具替代专职岗。这类团队集成面小、销售周期短、「工程师向工程师买、付费意愿高」,且与你必用的 Cloud Run 原生贴合 —— 是 12 天能做出可演示闭环的唯一现实 ICP。\\n\\n【真 ICP — 钱在这里(讲故事用,不在 12 天内交付)】跑微服务/K8s、有 24/7 on-call、宕机每分钟烧钱的中大型 SRE/平台团队。证据:所有拿到融资的玩家都自上而下卖企业 —— Reso…"
+    }
+  ],
+  "totalTokens": 360413,
+  "totalToolCalls": 108
+}
