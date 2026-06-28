@@ -5,8 +5,12 @@ shipped and starts erroring" — including the 'delay bomb' (errors begin only N
 seconds after start, i.e. outside the deploy/canary window).
 
 Fault sources:
-  - env FAULT_MODE = off | http500 | delay_bomb  (a 'bad revision' ships with this)
-  - runtime POST /__fault/{mode}                 (demo harness: flip faults live)
+  - env FAULT_MODE = off | bug | http500 | delay_bomb  (a 'bad revision' ships with this)
+  - runtime POST /__fault/{mode}                        (demo harness: flip faults live)
+The canonical demo fault is `bug`: a real KeyError in total_revenue() (reads "amount"
+instead of "price") -> unhandled exception -> HTTP 500. This is the SAME root-cause bug
+the Gemini fix-PR repairs, so the story is coherent: we roll back the bad revision AND
+open a PR that fixes the exact cause. `http500` is a blunt alternative (explicit 500).
 /healthz stays 200 so Cloud Run readiness and the agent's synthetic probe work.
 """
 from __future__ import annotations
@@ -20,15 +24,17 @@ app = FastAPI(title="airbag-target")
 _START = time.time()
 FAULT_MODE = os.getenv("FAULT_MODE", "off")
 DELAY_BOMB_AFTER_S = float(os.getenv("DELAY_BOMB_AFTER_S", "90"))
+_FAULTS = ("bug", "http500")
 _runtime: dict[str, str | None] = {"fault": None}
 
 
 def _active_fault() -> str | None:
     if _runtime["fault"] is not None:
         return _runtime["fault"] or None
-    if FAULT_MODE == "delay_bomb" and (time.time() - _START) >= DELAY_BOMB_AFTER_S:
-        return "http500"
-    return FAULT_MODE if FAULT_MODE == "http500" else None
+    # a 'delay bomb' revision ships clean, then trips the bug N seconds in (out-of-window)
+    if FAULT_MODE == "delay_bomb":
+        return "bug" if (time.time() - _START) >= DELAY_BOMB_AFTER_S else None
+    return FAULT_MODE if FAULT_MODE in _FAULTS else None
 
 
 @app.get("/healthz")
@@ -57,6 +63,7 @@ def orders():
 
 @app.post("/__fault/{mode}")
 def set_fault(mode: str):
-    """Demo harness: mode in {off, http500}."""
+    """Demo harness: mode in {off, bug, http500}. `bug` triggers the KeyError that the
+    Gemini fix-PR repairs; `off` clears the fault (= healthy revision)."""
     _runtime["fault"] = None if mode == "off" else mode
     return {"fault": _runtime["fault"]}

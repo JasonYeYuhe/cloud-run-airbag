@@ -87,8 +87,9 @@ def _target(path: str, method: str = "post"):
 
 @app.post("/demo/inject", dependencies=[Depends(require_demo_token)])
 def demo_inject():
-    _target("/__fault/http500")
-    events.publish({"stage": "FAULT_INJECTED", "msg": "bad revision now returns 5xx on /api/orders",
+    _target("/__fault/bug")
+    events.publish({"stage": "FAULT_INJECTED",
+                    "msg": "bad revision now raises KeyError on /api/orders → HTTP 500",
                     "service": config.TARGET_SERVICE})
     return {"status": "fault injected"}
 
@@ -109,8 +110,9 @@ def demo_trigger(background_tasks: BackgroundTasks):
 @app.post("/demo/run", dependencies=[Depends(require_demo_token)])
 def demo_run(background_tasks: BackgroundTasks):
     """One-click demo: inject a fault, then trigger the self-heal a moment later."""
-    _target("/__fault/http500")
-    events.publish({"stage": "FAULT_INJECTED", "msg": "bad revision now returns 5xx on /api/orders",
+    _target("/__fault/bug")
+    events.publish({"stage": "FAULT_INJECTED",
+                    "msg": "bad revision now raises KeyError on /api/orders → HTTP 500",
                     "service": config.TARGET_SERVICE})
     incident_id = f"inc-{uuid.uuid4().hex[:8]}"
 

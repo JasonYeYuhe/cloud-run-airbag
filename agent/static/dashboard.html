@@ -235,18 +235,18 @@ fetch('/health').then(r=>r.json()).then(j=>{ setBackend(j.backend); setDot('#d-g
 const REVS=[{name:'airbag-target-00002-bad',ready:true,traffic_percent:100},
             {name:'airbag-target-00001-good',ready:true,traffic_percent:0}];
 const SCRIPT=[
-  [0,   {stage:'FAULT_INJECTED',msg:'bad revision now returns 5xx on /api/orders'}],
+  [0,   {stage:'FAULT_INJECTED',msg:'bad revision raises KeyError on /api/orders → HTTP 500'}],
   [600, {stage:'RECEIVED',msg:'incident inc-demo on airbag-target (out-of-window alert)'}],
   [700, {stage:'TRIAGED',msg:'collected revisions + error rate',error_rate:1.0,revisions:REVS}],
-  [800, {stage:'DECISION',action:'ROLLBACK',confidence:0.92,_source:'heuristic',
+  [800, {stage:'DECISION',action:'ROLLBACK',confidence:0.92,_source:'gemini',
          bad_revision:'airbag-target-00002-bad',rollback_revision:'airbag-target-00001-good',
-         msg:'ROLLBACK',reasoning:'5xx rate 1.0 on …-00002-bad; …-00001-good is a healthy prior revision.'}],
+         msg:'ROLLBACK',reasoning:'5xx rate 1.0 on …-00002-bad (KeyError); …-00001-good is a healthy prior revision.'}],
   [800, {stage:'ROLLBACK_APPLIED',msg:'100% traffic -> airbag-target-00001-good'}],
   [900, {stage:'VERIFYING',msg:'attempt 1/6',error_rate:0.6,probe_ok:false}],
   [900, {stage:'VERIFYING',msg:'attempt 2/6',error_rate:0.15,probe_ok:true}],
   [900, {stage:'VERIFYING',msg:'attempt 3/6',error_rate:0.0,probe_ok:true}],
   [700, {stage:'MITIGATED',msg:'error rate back to zero — recovery proven',before:1.0,after:0.0}],
-  [700, {stage:'FIX_PR',msg:'stretch: Gemini-authored fix PR + real CI'}],
+  [700, {stage:'FIX_PR',msg:'Gemini opened a fix PR for the KeyError → real CI green'}],
 ];
 function playScript(){
   if(live) return;

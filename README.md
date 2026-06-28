@@ -1,6 +1,6 @@
 # Airbag — autonomous release airbag for Cloud Run
 
-> Detects a bad Cloud Run deploy **even hours after it shipped**, instantly rolls traffic back to the last healthy revision, **proves recovery** via Cloud Monitoring, then opens a Gemini-written fix PR through real CI/CD — and undoes the temporary rollback once the fix is verified.
+> Detects a bad Cloud Run deploy **even hours after it shipped**, instantly rolls traffic back to the last healthy revision, **proves recovery** via Cloud Monitoring/Logging, then has Gemini open a real fix PR through CI/CD. *(Closing the loop — auto-undoing the temporary rollback once the fix is verified — is the next milestone; see [Roadmap](docs/NEXT_STEPS.md). Today the rollback is held until the fix ships.)*
 
 Built for the **DevOps × AI Agent Hackathon 2026** (Google Cloud Japan / Findy). Stack: **Gemini + ADK + Cloud Run** (required), FastAPI, Cloud Monitoring/Logging, GitHub App + Actions.
 
@@ -9,11 +9,12 @@ Monitoring tools only *alert*. Coding agents (Jules/Devin) only *write code* off
 
 ```
 independent prod alert (even out-of-window)
-  → auto rollback Cloud Run traffic to last-good revision   (deterministic, reversible — STOP THE BLEEDING)
-  → prove error-rate == 0 via Monitoring/Logging + synthetic probe   (PROOF OF RECOVERY)
-  → Gemini/ADK open a fix PR → real GitHub Actions CI         (PERMANENT FIX)
-  → on green + deploy + verified, undo the temporary rollback (CLOSE THE TRANSACTION)
+  → auto rollback Cloud Run traffic to last-good revision   (deterministic, reversible — STOP THE BLEEDING)  ✅ live
+  → prove error-rate == 0 via Monitoring/Logging + synthetic probe   (PROOF OF RECOVERY)                    ✅ live
+  → Gemini/ADK open a fix PR → real GitHub Actions CI         (PERMANENT FIX)                                ✅ live
+  → on green + deploy + verified, undo the temporary rollback (CLOSE THE TRANSACTION)                        🚧 roadmap (P1)
 ```
+The first three steps run unattended on live Cloud Run today; closing the transaction (the last step) is the next milestone.
 
 **Design rule:** a deterministic state machine executes production actions; **Gemini only diagnoses and emits a structured decision** — the LLM never freely touches prod.
 
@@ -43,7 +44,7 @@ Cloud Monitoring alert ─webhook(token)→ /alerts  (Cloud Run: airbag-agent, F
 | `.github/workflows/` | CI |
 
 ## Status — 🟢 LIVE on Google Cloud Run
-The **deployed agent autonomously heals the deployed target** on real Cloud Run, decided by real Gemini. Verified end-to-end: bad revision serving 500s → agent detects → Gemini decides `ROLLBACK` (conf 1.0) → real traffic shifts to the healthy revision → error rate proven `0%`.
+The **deployed agent autonomously heals the deployed target** on real Cloud Run, decided by real Gemini. Verified end-to-end: bad revision serving 500s (a planted `KeyError` on `/api/orders`) → agent detects → Gemini decides `ROLLBACK` (conf 1.0) → real traffic shifts to the healthy revision → error rate proven `0%`. The slow path then opens a fix PR for **that same `KeyError`** — rolled back *and* root-cause fixed.
 
 | | URL |
 |---|---|

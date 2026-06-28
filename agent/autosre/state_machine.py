@@ -64,8 +64,9 @@ def run_self_heal(incident_id: str, service: str) -> dict:
     # --- FIX PR (slow path): Gemini opens a real fix PR through CI ---------
     from . import github_pr
     if github_pr.available():
-        ctx = (f"bad revision {decision.get('bad_revision')} on {service} returned HTTP 500; "
-               f"evidence: {decision.get('evidence')}")
+        ctx = (f"bad revision {decision.get('bad_revision')} on {service} returned HTTP 500 on the "
+               f"business path {config.PROBE_PATH} (unhandled exception, not an explicit error "
+               f"response); evidence: {decision.get('evidence')}")
         pr = github_pr.open_fix_pr(service, ctx)
         if pr:
             emit("FIX_PR", f"opened fix PR — {pr['summary']}", pr_url=pr["pr_url"])
