@@ -39,13 +39,28 @@ if [ -f "$ROOT/agent/.env" ]; then
     --role=roles/secretmanager.secretAccessor -q >/dev/null
 fi
 
+ENVS="AIRBAG_BACKEND=gcp,GOOGLE_CLOUD_PROJECT=${PROJECT},GOOGLE_CLOUD_LOCATION=${REGION},TARGET_SERVICE=airbag-target,AIRBAG_WEBHOOK_TOKEN=airbag-demo-token,AIRBAG_VERIFY_INTERVAL_S=4,AIRBAG_VERIFY_ATTEMPTS=8"
+SECRETS="GEMINI_API_KEY=airbag-gemini-key:latest"
+
+# Optional fix-PR slow path: use a FINE-GRAINED, repo-scoped GitHub token (Contents +
+# Pull requests: write). Never put a broad classic token in this public service.
+if grep -q '^GITHUB_TOKEN=..' "$ROOT/agent/.env" 2>/dev/null; then
+  echo "== github token -> Secret Manager =="
+  GHT="$(grep '^GITHUB_TOKEN=' "$ROOT/agent/.env" | cut -d= -f2-)"
+  printf '%s' "$GHT" | gcloud secrets create airbag-github-token --data-file=- 2>/dev/null \
+    || printf '%s' "$GHT" | gcloud secrets versions add airbag-github-token --data-file=-
+  gcloud secrets add-iam-policy-binding airbag-github-token --member="serviceAccount:${SA}" \
+    --role=roles/secretmanager.secretAccessor -q >/dev/null
+  ENVS="${ENVS},GITHUB_REPO=$(grep '^GITHUB_REPO=' "$ROOT/agent/.env" | cut -d= -f2-)"
+  SECRETS="${SECRETS},GITHUB_TOKEN=airbag-github-token:latest"
+fi
+
 echo "== deploy agent =="
 # GOTCHA 3: the background self-heal needs CPU always allocated (--no-cpu-throttling),
 # else CPU is throttled after the 202 response and the heal stalls.
 gcloud run deploy airbag-agent --source "$ROOT/agent" --region "$REGION" \
   --service-account "$SA" --allow-unauthenticated --min-instances 1 --no-cpu-throttling \
-  --set-env-vars "AIRBAG_BACKEND=gcp,GOOGLE_CLOUD_PROJECT=${PROJECT},GOOGLE_CLOUD_LOCATION=${REGION},TARGET_SERVICE=airbag-target,AIRBAG_WEBHOOK_TOKEN=airbag-demo-token,AIRBAG_VERIFY_INTERVAL_S=4,AIRBAG_VERIFY_ATTEMPTS=8" \
-  --update-secrets "GEMINI_API_KEY=airbag-gemini-key:latest" -q
+  --set-env-vars "$ENVS" --update-secrets "$SECRETS" -q
 
 echo
 echo "Agent:  $(gcloud run services describe airbag-agent  --region "$REGION" --format='value(status.url)')"
