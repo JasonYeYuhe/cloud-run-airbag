@@ -37,3 +37,11 @@ def test_public_endpoints_never_gated(client, monkeypatch):
     monkeypatch.setattr(config, "DEMO_TOKEN", "s3cret")
     assert client.get("/health").status_code == 200
     assert client.get("/").status_code == 200  # dashboard is watch-only public
+
+
+def test_fails_closed_on_gcp_when_token_unset(client, monkeypatch):
+    # a blank token on the public gcp service must REFUSE (503), never silently serve
+    monkeypatch.setattr(config, "BACKEND", "gcp")
+    monkeypatch.setattr(config, "DEMO_TOKEN", "")
+    assert client.post("/demo/reset").status_code == 503
+

@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import datetime
 import html
-import json
 
 _STAGE_COLOR = {
     "RUN_START": "#6b7a8d", "RECEIVED": "#f85149", "FAULT_INJECTED": "#f85149",
