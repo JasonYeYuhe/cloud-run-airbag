@@ -53,16 +53,6 @@ def rollback_traffic_to_revision(service: str, region: str, revision: str) -> di
     return get_backend().rollback_traffic_to_revision(service, region, revision)
 
 
-def restore_traffic_to_latest(service: str, region: str) -> dict:
-    """Undo a temporary rollback by routing traffic back to LATEST (the fixed revision).
-
-    Args:
-        service (str): Cloud Run service name.
-        region (str): GCP region.
-    """
-    return get_backend().restore_traffic_to_latest(service, region)
-
-
 def set_traffic_split(service: str, region: str, splits: dict, tag_revision: str | None = None) -> dict:
     """Split traffic across explicit revisions (e.g. {fix: 10, safe: 90}) — used for the
     gradual canary when restoring traffic to the fix. `tag_revision` tags one revision so it

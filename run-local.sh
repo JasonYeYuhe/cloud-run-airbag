@@ -20,7 +20,10 @@ echo "→ starting agent + dashboard on :8080"
 APID=$!
 trap "kill $TPID $APID 2>/dev/null || true" EXIT
 
-sleep 2
+echo "→ waiting for the agent to be ready (first run installs deps, ~30-60s)…"
+for _ in $(seq 1 60); do
+  curl -fsS -o /dev/null http://localhost:8080/health 2>/dev/null && break || sleep 1
+done
 echo
 echo "  ✅ Dashboard:  http://localhost:8080"
 echo "     (click 'Run demo' — or: curl -XPOST localhost:8080/demo/run)"

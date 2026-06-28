@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Cloud demo: simulate a bad deploy on the live target, then let the live agent self-heal.
-#   ./scripts/gcp-demo.sh   then open the agent dashboard and click "Trigger incident".
+#   ./scripts/gcp-demo.sh   then open the agent dashboard and click "Heal".
 set -euo pipefail
 PROJECT="${PROJECT:-airbag-hack-260628}"; REGION="${REGION:-asia-northeast1}"
 TURL="$(gcloud run services describe airbag-target --region "$REGION" --project "$PROJECT" --format='value(status.url)')"
@@ -19,5 +19,5 @@ for r in 1 2 3 4; do for i in $(seq 1 8); do curl -s -o /dev/null "$TURL/api/ord
 sleep 12
 echo
 echo "  Target is now failing (500s)."
-echo "  Dashboard: $AURL   ->  click 'Trigger incident'"
-echo "  or:        curl -XPOST $AURL/demo/trigger"
+echo "  Dashboard: $AURL   ->  click 'Heal'"
+echo "  or:        curl -XPOST $AURL/demo/heal"

@@ -179,14 +179,6 @@ def probe_candidate(service: str, region: str, revision: str, n: int = 6) -> dic
         return {"ok": False, "errors": n, "total": n, "error": str(e)}
 
 
-def restore_traffic_to_latest(service: str, region: str) -> dict:
-    from google.cloud import run_v2
-    _set_traffic(service, region, run_v2.TrafficTarget(
-        type_=run_v2.TrafficTargetAllocationType.TRAFFIC_TARGET_ALLOCATION_TYPE_LATEST,
-        percent=100))
-    return {"status": "success", "service": service, "active_revision": "LATEST"}
-
-
 # --- demo harness: drive break/reset by routing traffic between revisions -----------
 _FAULT_VALUES = {"bug", "http500", "delay_bomb"}
 

@@ -19,6 +19,6 @@ def test_mock_heal_mitigates():
 
 
 def test_no_error_means_noop():
-    mock._STATE["rolled_back"] = True  # error rate reads 0 -> OBSERVE, not ROLLBACK
+    mock.reset_target("airbag-target", "r")  # healthy serving -> error rate 0 -> OBSERVE
     result = run_self_heal("inc-quiet", "airbag-target")
     assert result["status"] == "noop"

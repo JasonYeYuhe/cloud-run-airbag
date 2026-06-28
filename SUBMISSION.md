@@ -55,7 +55,7 @@ never freely touches prod. Judges see a governed control loop, not a chatbot wit
   `IncidentDecision` (`response_schema`). Runtime path: [`agent/autosre/adk_brain.py`](agent/autosre/adk_brain.py)
   runs the `SequentialAgent` defined in [`agent/autosre/agent.py`](agent/autosre/agent.py).
   Fail-closed: ADK → direct Gemini → heuristic, so the heal never blocks on the LLM.
-- **ADK** — `google-adk` 1.36 (pinned `~=1.0`; CI asserts the 1.x pin — 2.x is a breaking
+- **ADK** — `google-adk` 1.36 (pinned `~=1.36.0`; CI asserts the 1.x pin — 2.x is a breaking
   graph-runtime rewrite). The `SequentialAgent(triage → decide)` runs on every heal.
 - **Cloud Run** — both the **patient** (the target service we roll back) and the **runtime**
   (the agent + dashboard, `--min-instances=1 --no-cpu-throttling` so the async heal isn't
@@ -83,15 +83,15 @@ never freely touches prod. Judges see a governed control loop, not a chatbot wit
 - **Verifiable incident-report Artifact:** every run is persisted and rendered at
   `/incidents/{id}/report` (decision + signals + before/after + full timeline) — *AI isn't guessing*.
 - Three execution backends (mock / local / gcp) behind one agent codebase; `/demo/*` is
-  token-gated so the public dashboard is watch-only. 18 tests, CI green.
+  token-gated so the public dashboard is watch-only. 32 tests, CI green.
 
 **Roadmap (P2, honestly not done):**
 - **Fully-unattended CI close:** the included `.github/workflows/complete-rollback.yml` deploys
   the fix and calls `/internal/complete-rollback`, but is gated on a one-time **Workload Identity
   Federation** binding (GitHub Actions → GCP deploy). Until that's wired, the close is triggered
   by the dashboard button (or a manual `curl`/`workflow_dispatch`).
-- Durable state (Firestore) instead of in-process idempotency; Cloud Tasks/Pub-Sub worker;
-  gradual canary on restore; CI self-correction loop.
+- Durable state (Firestore) instead of in-process idempotency + `--max-instances 1`; a
+  Cloud Tasks/Pub-Sub worker instead of FastAPI `BackgroundTasks`.
 
 ## 6. The demo
 - **Live:** open the agent URL (operator link pre-fills the demo token), click **Break → Heal →

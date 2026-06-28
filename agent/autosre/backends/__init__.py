@@ -5,7 +5,9 @@ A backend exposes:
   query_error_rate(service, region, window_minutes) -> dict
   synthetic_probe(service, path) -> dict
   rollback_traffic_to_revision(service, region, revision) -> dict
-  restore_traffic_to_latest(service, region) -> dict
+  set_traffic_split(service, region, splits, tag_revision=None) -> dict
+  probe_candidate(service, region, revision) -> dict
+  break_target(service, region) -> dict   ·   reset_target(service, region) -> dict
 """
 from __future__ import annotations
 

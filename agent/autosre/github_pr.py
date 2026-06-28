@@ -60,7 +60,9 @@ def open_fix_pr(service: str, error_context: str) -> dict | None:
                 log.warning("no usable fix produced; skipping PR")
                 return None
 
-            base_sha = c.get(f"{_API}/repos/{repo}/git/ref/heads/{base}").json()["object"]["sha"]
+            ref = c.get(f"{_API}/repos/{repo}/git/ref/heads/{base}")
+            ref.raise_for_status()
+            base_sha = ref.json()["object"]["sha"]
             branch = f"airbag/fix-{int(time.time())}"
             c.post(f"{_API}/repos/{repo}/git/refs",
                    json={"ref": f"refs/heads/{branch}", "sha": base_sha}).raise_for_status()
