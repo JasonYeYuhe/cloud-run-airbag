@@ -38,8 +38,8 @@ def dashboard():
     return _DASHBOARD
 
 
-@app.get("/healthz")
-def healthz():
+@app.get("/health")  # NB: Cloud Run's frontend reserves /healthz, so use /health
+def health():
     return {"status": "ok", "backend": config.BACKEND, "gemini": bool(config.GEMINI_API_KEY)}
 
 

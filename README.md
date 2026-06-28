@@ -42,8 +42,18 @@ Cloud Monitoring alert ─webhook(token)→ /alerts  (Cloud Run: airbag-agent, F
 | `docs/` | `PLAN.md` (roadmap + minimal slice), `ARCHITECTURE.md` |
 | `.github/workflows/` | CI |
 
-## Status
-✅ **Working local demo** — the full loop (detect → decide → rollback → prove recovery) runs end-to-end over real HTTP with a live dashboard, **no GCP required**. Real Cloud Run path is wired behind a flag. See [docs/PLAN.md](docs/PLAN.md).
+## Status — 🟢 LIVE on Google Cloud Run
+The **deployed agent autonomously heals the deployed target** on real Cloud Run, decided by real Gemini. Verified end-to-end: bad revision serving 500s → agent detects → Gemini decides `ROLLBACK` (conf 1.0) → real traffic shifts to the healthy revision → error rate proven `0%`.
+
+| | URL |
+|---|---|
+| **Agent + dashboard** | https://airbag-agent-946577240607.asia-northeast1.run.app |
+| **Target (demo app)** | https://airbag-target-946577240607.asia-northeast1.run.app |
+
+**Cloud demo:** `./scripts/gcp-demo.sh` (breaks the target), then open the agent URL and click **🚨 Trigger incident**.
+**Reproduce the deploy from scratch:** `gcloud auth login` once, then `PROJECT=<id> ./deploy.sh`.
+
+It also runs fully **locally with no GCP** (see below). See [docs/PLAN.md](docs/PLAN.md) and [docs/DEMO.md](docs/DEMO.md).
 
 ## Run the live demo (no GCP, ~1 min)
 ```bash

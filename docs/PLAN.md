@@ -37,8 +37,15 @@ Full unattended end-to-end loop is high-risk in ~12 days. Ship in this order; ev
 - **gcp error-rate**: the has-errors gate is coarse; for a true rate use a Cloud Monitoring
   `request_count` 5xx ratio / log-based metric — validate all filters against the live project.
 
-## Pre-flight (needs Jason — see chat)
-- [ ] GCP project + **billing enabled** (no student credits; Gemini is pay-as-you-go Tier 1).
-- [ ] Install `gcloud` (+ optionally Docker; Cloud Run can build from source without it).
-- [ ] Enable APIs: run, monitoring, logging, cloudbuild, secretmanager, sqladmin, aiplatform.
-- [ ] Decide GitHub repo that the fix-PR stretch targets.
+## ✅ Deployed to Cloud Run (project `airbag-hack-260628`, region `asia-northeast1`)
+Reproduce with `./deploy.sh`. Real deploy gotchas hit & fixed (all encoded in deploy.sh):
+- **New-project default compute SA lacks build perms** → grant `roles/cloudbuild.builds.builder` or `gcloud run deploy --source` fails with PERMISSION_DENIED on the source bucket.
+- **Cross-service `actAs`** → the agent SA needs `roles/iam.serviceAccountUser` on the *target's* runtime SA, else `update_service` (rollback) → `403 iam.serviceaccounts.actAs`.
+- **Background work is CPU-throttled** → deploy the agent with `--no-cpu-throttling`, else the post-202 self-heal stalls right after `TRIAGED`.
+- **GFE reserves `/healthz`** → Cloud Run's frontend 404s `/healthz` before it reaches the container; use `/health`.
+- **Cloud Logging ingestion lag** (~10–20s) → after generating 5xx, wait before the agent reads them; the verify window is anchored at rollback time so post-rollback it reads 0.
+- **`LATEST` traffic target** has `revision=''` → resolve it to the newest revision when reading traffic %.
+
+## Still open (stretch)
+- [ ] Gemini fix-PR + GitHub Actions CI loop (the `FIX_PR` stage) — needs a target repo.
+- [ ] Repeatable one-click cloud demo reset (currently `./scripts/gcp-demo.sh` re-breaks the target).

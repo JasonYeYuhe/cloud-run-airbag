@@ -202,7 +202,7 @@ let live=false;
 const es = new EventSource('/events');
 es.onmessage = e => { try{ const d=JSON.parse(e.data); if(d.stage && d.stage!=='CONNECTED') live=true; addEvent(d); }catch(_){}}
 es.onerror = () => setDot('#d-sse',false);
-fetch('/healthz').then(r=>r.json()).then(j=>{ setBackend(j.backend); setDot('#d-gemini', j.gemini); }).catch(()=>{});
+fetch('/health').then(r=>r.json()).then(j=>{ setBackend(j.backend); setDot('#d-gemini', j.gemini); }).catch(()=>{});
 
 // ---- offline self-playing demo (no server needed; also a graceful fallback) ----
 const REVS=[{name:'airbag-target-00002-bad',ready:true,traffic_percent:100},
