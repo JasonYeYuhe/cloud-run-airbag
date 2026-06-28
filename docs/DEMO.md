@@ -22,6 +22,12 @@ Repeatable: Break → Heal → Reset, as many times as you like.
 > Run it locally: `./run-local.sh` → http://localhost:8080. (The dashboard also self-plays offline if the agent isn't up.)
 > Run it on live Cloud Run: open the agent URL (operator link with `?token=` pre-fills the demo token), then Break → Heal → Reset.
 
+**Demo-flow note (gcp):** a *rollback* goes to a **previous** good revision, so the bad revision
+must be the **newest** one — which is exactly what `scripts/gcp-demo-setup.sh` sets up. Break →
+Heal → Reset is infinitely repeatable (it only shifts traffic, creates no revisions). The **Verify
+& Undo** step deploys a *new* fix revision (now the newest), which inverts that ordering — so after
+demoing Verify & Undo, re-run `./scripts/gcp-demo-setup.sh` before the next full Break → Heal cycle.
+
 ## Why judges should care (the differentiation, grounded)
 - **Out-of-window detection.** Every auto-rollback tool (Argo/Harness/LaunchDarkly/Sedai) only acts inside the deploy/canary window. **78% of orgs have had an incident with *no* alert firing** — that's the gap we own: an independent production alert, hours later, still triggers a rollback.
 - **Action layer, not diagnosis layer.** Gemini Cloud Assist is officially advisory ("don't modify… human-in-the-loop required"); Jules only writes code offline. We *act* on Cloud Run and *prove* recovery. "Cloud Assist tells you what's wrong; Jules writes code; **we fix the live incident.**"
