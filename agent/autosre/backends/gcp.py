@@ -132,15 +132,51 @@ def rollback_traffic_to_revision(service: str, region: str, revision: str) -> di
     return {"status": "success", "service": service, "active_revision": revision}
 
 
-def set_traffic_split(service: str, region: str, splits: dict) -> dict:
-    """Split 100% of traffic across explicit revisions, e.g. {fix: 10, safe: 90} for a canary."""
+_CANARY_TAG = "airbagfix"
+
+
+def set_traffic_split(service: str, region: str, splits: dict, tag_revision: str | None = None) -> dict:
+    """Split 100% of traffic across explicit revisions, e.g. {fix: 10, safe: 90} for a canary.
+    Optionally TAG one revision so it gets a stable per-revision URL we can probe directly
+    (so the canary gate verifies the fix itself, not the load-balanced service)."""
     from google.cloud import run_v2
-    targets = [run_v2.TrafficTarget(
-        type_=run_v2.TrafficTargetAllocationType.TRAFFIC_TARGET_ALLOCATION_TYPE_REVISION,
-        revision=rev, percent=int(pct)) for rev, pct in splits.items() if int(pct) > 0]
+    targets = []
+    for rev, pct in splits.items():
+        if int(pct) <= 0:
+            continue
+        t = run_v2.TrafficTarget(
+            type_=run_v2.TrafficTargetAllocationType.TRAFFIC_TARGET_ALLOCATION_TYPE_REVISION,
+            revision=rev, percent=int(pct))
+        if rev == tag_revision:
+            t.tag = _CANARY_TAG
+        targets.append(t)
     _set_traffic(service, region, targets)
     return {"status": "success", "service": service,
             "traffic": {r: int(p) for r, p in splits.items() if int(p) > 0}}
+
+
+def probe_candidate(service: str, region: str, revision: str, n: int = 6) -> dict:
+    """Probe the candidate revision DIRECTLY via its per-revision tag URL (not the load-balanced
+    service URL) — so a bad fix is caught even at a low canary percentage, where the service URL
+    would almost always route to the healthy revision instead."""
+    try:
+        svc = _get_service(service, region)
+        uri = next((t.uri for t in svc.traffic_statuses
+                    if getattr(t, "uri", "") and (getattr(t, "tag", "") == _CANARY_TAG
+                                                  or _short(getattr(t, "revision", "")) == revision)), None)
+        uri = uri or svc.uri  # last resort: load-balanced service URL
+        full = uri.rstrip("/") + config.PROBE_PATH
+        errs = 0
+        with httpx.Client(timeout=5.0) as c:
+            for _ in range(n):
+                try:
+                    if c.get(full).status_code >= 500:
+                        errs += 1
+                except Exception:  # noqa: BLE001
+                    errs += 1
+        return {"ok": errs == 0, "errors": errs, "total": n, "url": uri}
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "errors": n, "total": n, "error": str(e)}
 
 
 def restore_traffic_to_latest(service: str, region: str) -> dict:

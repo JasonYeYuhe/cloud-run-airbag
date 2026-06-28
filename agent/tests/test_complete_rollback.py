@@ -62,7 +62,7 @@ def test_canary_restore_is_staged(monkeypatch):
     from autosre import tools
     calls = []
 
-    def _rec(s, r, split):
+    def _rec(s, r, split, **kw):
         calls.append(dict(split))
         return mock.set_traffic_split(s, r, split)  # keep mock healthy so each gate passes
 

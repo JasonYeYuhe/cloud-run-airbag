@@ -15,14 +15,18 @@ open a PR that fixes the exact cause. `http500` is a blunt alternative (explicit
 """
 from __future__ import annotations
 
+import hmac
 import os
 import time
 
-from fastapi import FastAPI, Response
+from fastapi import FastAPI, Request, Response
 
 app = FastAPI(title="airbag-target")
 _START = time.time()
 FAULT_MODE = os.getenv("FAULT_MODE", "off")
+# Token to gate the runtime fault toggle so a public --allow-unauthenticated target can't be
+# griefed. Empty -> open (local dev). The gcp demo breaks via revision routing, not /__fault.
+FAULT_TOKEN = os.getenv("FAULT_TOKEN", "")
 DELAY_BOMB_AFTER_S = float(os.getenv("DELAY_BOMB_AFTER_S", "90"))
 _FAULTS = ("bug", "http500")
 _runtime: dict[str, str | None] = {"fault": None}
@@ -62,8 +66,14 @@ def orders():
 
 
 @app.post("/__fault/{mode}")
-def set_fault(mode: str):
+def set_fault(mode: str, request: Request):
     """Demo harness: mode in {off, bug, http500}. `bug` triggers the KeyError that the
-    Gemini fix-PR repairs; `off` clears the fault (= healthy revision)."""
+    Gemini fix-PR repairs; `off` clears the fault (= healthy revision). Token-gated when
+    FAULT_TOKEN is set so the public target can't be toggled by anyone."""
+    if FAULT_TOKEN:
+        supplied = request.headers.get("x-fault-token") or request.query_params.get("token", "")
+        if not (supplied and hmac.compare_digest(supplied, FAULT_TOKEN)):
+            return Response(status_code=401, content='{"error":"invalid fault token"}',
+                            media_type="application/json")
     _runtime["fault"] = None if mode == "off" else mode
     return {"fault": _runtime["fault"]}

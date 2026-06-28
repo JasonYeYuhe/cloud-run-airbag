@@ -49,6 +49,12 @@ def run_self_heal(incident_id: str, service: str) -> dict:
         "action", "confidence", "reasoning", "evidence", "_source", "_adk_tools",
         "bad_revision", "rollback_revision")}
     if decision["action"] != "ROLLBACK":
+        # ESCALATE (from the safety gate or Gemini) must surface to a human — not look like a no-op.
+        if decision["action"] == "ESCALATE":
+            emit("ESCALATED", decision.get("reasoning") or "decision gate failed — needs a human")
+            incidents.record(incident_id, {"service": service, "status": "escalated",
+                                           "decision": _decision_summary, "events": run_events})
+            return {"status": "escalated", "incident_id": incident_id, "events": run_events}
         emit("DONE", "no rollback needed")
         incidents.record(incident_id, {"service": service, "status": "noop",
                                        "decision": _decision_summary, "events": run_events})
@@ -176,12 +182,18 @@ def complete_rollback(service: str, fix_revision: str | None = None,
         safe = rec.get("rolled_back_to")
         for pct in config.CANARY_STAGES:
             split = {candidate: 100} if pct >= 100 else {candidate: pct, safe: 100 - pct}
-            tools.set_traffic_split(service, config.GCP_REGION, split)
+            # tag the candidate so we can probe IT directly (not the load-balanced URL, which at
+            # 10% would almost always hit the healthy revision and miss a bad fix).
+            tools.set_traffic_split(service, config.GCP_REGION, split, tag_revision=candidate)
             stage_at = time.time()
+            cand = tools.probe_candidate(service, config.GCP_REGION, candidate)
             emit("CANARY", f"{pct}% → fix {candidate}"
-                 + ("" if pct >= 100 else f" · {100 - pct}% → {safe}") + "; gating on health",
-                 percent=pct)
-            if not _verify(service, emit, since_epoch=stage_at):
+                 + ("" if pct >= 100 else f" · {100 - pct}% → {safe}")
+                 + f"; direct fix-probe ok={cand.get('ok')} "
+                   f"({cand.get('errors')}/{cand.get('total')} 5xx)",
+                 percent=pct, candidate_ok=cand.get("ok"))
+            # gate = the fix's OWN health (direct probe) AND the service-level recovery signal
+            if not (cand.get("ok") and _verify(service, emit, since_epoch=stage_at)):
                 tools.set_traffic_split(service, config.GCP_REGION, {safe: 100})  # compensate
                 attempts = pending.bump_attempts(service)
                 emit("MANUAL_INTERVENTION",

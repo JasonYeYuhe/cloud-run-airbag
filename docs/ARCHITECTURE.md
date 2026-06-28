@@ -8,7 +8,7 @@ RECEIVED → TRIAGED → ADK(triage→decide) → DECISION
                                        └─(budget exceeded)→ ESCALATED
 
    # close the transaction (complete_rollback, triggered by the fix-PR CI or the dashboard):
-   COMPLETE_ROLLBACK → FIX_DEPLOYED → REVERIFYING ──(fix healthy)──→ ROLLBACK_UNDONE → CLOSED
+   COMPLETE_ROLLBACK → FIX_DEPLOYED → CANARY(10/50/100, direct fix-probe gate) ──(healthy)──→ ROLLBACK_UNDONE → CLOSED
                                           └─(fix unhealthy / none)──→ MANUAL_INTERVENTION (compensate: traffic back to safe revision)
 ```
 - **Fast path (deterministic, reversible):** rollback Cloud Run traffic to the last-good revision. Stops the bleeding; zero data-migration risk.
@@ -25,15 +25,19 @@ RECEIVED → TRIAGED → ADK(triage→decide) → DECISION
 | Permanent fix | GitHub REST (httpx) + fine-grained repo-scoped token + GitHub Actions | App-PR needs `on:push` |
 | State | in-process (`_seen_incidents`) + `--min-instances=1` | Firestore/Cloud SQL durable state is roadmap (P1/P2); min-instances carries the demo |
 | Secrets / IAM | Secret Manager + least-priv SA | `run.admin`, `monitoring.viewer`, `logging.viewer`, `secretmanager.secretAccessor` (AI Studio key, so no `aiplatform.user`) |
-| Dashboard (later) | Next.js | replays the event stream as a verifiable thought-chain Artifact |
+| Dashboard | `agent/static/dashboard.html` (vanilla JS + SSE) | replays the event stream as a verifiable thought-chain; links the per-incident report Artifact |
 
 ## Decision schema (Gemini structured output)
 ```python
 class IncidentDecision(BaseModel):
     action: Literal["ROLLBACK", "OBSERVE", "OPEN_FIX_PR", "ESCALATE"]
-    bad_revision: str | None
-    rollback_revision: str | None
-    confidence: float
-    evidence: list[str]
+    bad_revision: str | None = None
+    rollback_revision: str | None = None
+    confidence: float        # 0..1
+    reasoning: str = ""      # shown on the dashboard + incident report
+    evidence: list[str] = []
 ```
-The state machine only acts when `action == ROLLBACK`, `confidence ≥ threshold`, and `rollback_revision ∈ known_good_revisions`.
+The executor handles `ROLLBACK` (act), `ESCALATE` (surface to a human), and `OBSERVE` (no-op);
+`OPEN_FIX_PR` is reserved (the fix PR is opened by the deterministic slow path, not chosen by the
+LLM). The state machine only rolls back when `action == ROLLBACK`, `confidence ≥ threshold`, and
+`rollback_revision ∈ known_good_revisions`.

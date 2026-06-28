@@ -39,7 +39,7 @@ Cloud Monitoring alert ─webhook(token)→ /alerts  (Cloud Run: airbag-agent, F
 | `agent/` | The self-heal agent — FastAPI webhook + ADK 1.x state machine |
 | `target-app/` | The "delay-bomb" demo target deployed to Cloud Run (injectable faults) |
 | `infra/` | `gcloud` setup: enable APIs, service account + min IAM, alert policy, webhook channel |
-| `dashboard/` | (later) Next.js thought-chain / proof-of-recovery dashboard |
+| `agent/static/dashboard.html` | live glassbox dashboard — SSE thought-chain, proof-of-recovery curve, Break/Heal/Verify&Undo, incident-report link |
 | `docs/` | `PLAN.md` (roadmap + minimal slice), `ARCHITECTURE.md` |
 | `.github/workflows/` | CI |
 

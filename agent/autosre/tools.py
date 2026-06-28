@@ -63,16 +63,30 @@ def restore_traffic_to_latest(service: str, region: str) -> dict:
     return get_backend().restore_traffic_to_latest(service, region)
 
 
-def set_traffic_split(service: str, region: str, splits: dict) -> dict:
+def set_traffic_split(service: str, region: str, splits: dict, tag_revision: str | None = None) -> dict:
     """Split traffic across explicit revisions (e.g. {fix: 10, safe: 90}) — used for the
-    gradual canary when restoring traffic to the fix.
+    gradual canary when restoring traffic to the fix. `tag_revision` tags one revision so it
+    gets a stable per-revision URL the canary gate can probe directly.
 
     Args:
         service (str): Cloud Run service name.
         region (str): GCP region.
         splits (dict): revision name -> percent (should sum to 100).
+        tag_revision (str): optional revision to tag for direct probing.
     """
-    return get_backend().set_traffic_split(service, region, splits)
+    return get_backend().set_traffic_split(service, region, splits, tag_revision=tag_revision)
+
+
+def probe_candidate(service: str, region: str, revision: str) -> dict:
+    """Probe a specific candidate revision DIRECTLY (per-revision URL), so a canary gate can
+    verify the fix itself even at a low traffic percentage. Returns {ok, errors, total}.
+
+    Args:
+        service (str): Cloud Run service name.
+        region (str): GCP region.
+        revision (str): the candidate (fix) revision to probe directly.
+    """
+    return get_backend().probe_candidate(service, region, revision)
 
 
 # --- demo harness (not part of the heal; drives the repeatable break/heal/reset demo) ---

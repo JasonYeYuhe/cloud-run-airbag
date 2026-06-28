@@ -35,7 +35,7 @@ Gemini fix-PR; alert-driven; secure scoped token). This plan covers what's left.
    CI-reported `revision`/`git_sha`, or the newest READY revision created after the rollback that
    isn't the bad/safe one), restores traffic to it, and CLOSEs — or **compensates** back to the
    safe revision and escalates (`MANUAL_INTERVENTION`, never loops). Stages:
-   `PENDING_REVERT → COMPLETE_ROLLBACK → FIX_DEPLOYED → REVERIFYING → ROLLBACK_UNDONE → CLOSED`.
+   `PENDING_REVERT → COMPLETE_ROLLBACK → FIX_DEPLOYED → CANARY(10/50/100) → ROLLBACK_UNDONE → CLOSED`.
    Pending state is in-process (`pending.py`) + `--min-instances=1` (Firestore skipped per review).
    Triggers: the dashboard **Verify & Undo** button, or `POST /internal/complete-rollback`
    (token-gated) from the fix-PR's CI.

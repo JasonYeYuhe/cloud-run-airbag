@@ -65,6 +65,11 @@ def reset_target(service: str, region: str) -> dict:
             "active_revision": f"{service}-00001-good"}
 
 
-def set_traffic_split(service: str, region: str, splits: dict) -> dict:
+def set_traffic_split(service: str, region: str, splits: dict, tag_revision: str | None = None) -> dict:
     _STATE["rolled_back"] = True  # any healthy revision serving -> error rate 0, probe ok
     return {"status": "success", "service": service, "traffic": dict(splits)}
+
+
+def probe_candidate(service: str, region: str, revision: str) -> dict:
+    ok = _STATE["rolled_back"]
+    return {"ok": ok, "errors": 0 if ok else 1, "total": 1}

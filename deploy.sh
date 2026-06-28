@@ -27,17 +27,9 @@ gcloud projects add-iam-policy-binding "$PROJECT" --member="serviceAccount:${COM
 gcloud iam service-accounts add-iam-policy-binding "$COMPUTE_SA" \
   --member="serviceAccount:${SA}" --role="roles/iam.serviceAccountUser" -q >/dev/null
 
-echo "== deploy target-app (healthy baseline; FAULT_MODE=off so a redeploy is never faulty) =="
-# Explicit FAULT_MODE=off: scripts/gcp-demo-setup.sh later flips the service spec to
-# FAULT_MODE=bug for the bad revision, so a plain redeploy must re-assert healthy.
-gcloud run deploy airbag-target --source "$ROOT/target-app" --region "$REGION" \
-  --allow-unauthenticated --update-env-vars FAULT_MODE=off -q
-TURL="$(gcloud run services describe airbag-target --region "$REGION" --format='value(status.url)')"
-
-echo "== demo + webhook tokens -> Secret Manager (never hardcode in this public repo) =="
+echo "== compute demo + webhook tokens (real secrets — never hardcode in this public repo) =="
 # demo token: gates /demo/* once public (operator can trigger; public dashboard is watch-only).
 # webhook token: gates /alerts/* and /internal/complete-rollback (Cloud Monitoring + the fix CI).
-# Both are real secrets — reuse agent/.env values or generate, store in Secret Manager.
 mk_secret() {  # name, value
   printf '%s' "$2" | gcloud secrets create "$1" --data-file=- 2>/dev/null \
     || printf '%s' "$2" | gcloud secrets versions add "$1" --data-file=-
@@ -48,6 +40,17 @@ DEMO_TOKEN="$(grep '^AIRBAG_DEMO_TOKEN=' "$ROOT/agent/.env" 2>/dev/null | cut -d
 [ -z "$DEMO_TOKEN" ] && DEMO_TOKEN="$(openssl rand -hex 16)"
 WEBHOOK_TOKEN="$(grep '^AIRBAG_WEBHOOK_TOKEN=' "$ROOT/agent/.env" 2>/dev/null | cut -d= -f2-)"
 [ -z "$WEBHOOK_TOKEN" ] && WEBHOOK_TOKEN="$(openssl rand -hex 24)"
+
+echo "== deploy target-app (healthy baseline; FAULT_MODE=off; /__fault gated by FAULT_TOKEN) =="
+# Explicit FAULT_MODE=off: scripts/gcp-demo-setup.sh later flips the service spec to FAULT_MODE=bug
+# for the bad revision, so a plain redeploy must re-assert healthy. FAULT_TOKEN stops anyone on the
+# public internet from toggling the runtime fault (griefing the demo); the gcp demo uses revision
+# routing, not /__fault, so this never gets in the way.
+gcloud run deploy airbag-target --source "$ROOT/target-app" --region "$REGION" \
+  --allow-unauthenticated --update-env-vars "FAULT_MODE=off,FAULT_TOKEN=${DEMO_TOKEN}" -q
+TURL="$(gcloud run services describe airbag-target --region "$REGION" --format='value(status.url)')"
+
+echo "== tokens -> Secret Manager =="
 mk_secret airbag-demo-secret "$DEMO_TOKEN"
 mk_secret airbag-webhook-secret "$WEBHOOK_TOKEN"
 
@@ -79,9 +82,13 @@ fi
 echo "== deploy agent =="
 # GOTCHA 3: the background self-heal needs CPU always allocated (--no-cpu-throttling),
 # else CPU is throttled after the 202 response and the heal stalls.
+# GOTCHA 4: the agent keeps idempotency + pending-revert + incident state IN-PROCESS, so it must
+# stay a single instance. --min-instances 1 keeps it warm; --max-instances 1 keeps the in-process
+# stores authoritative (no scale-out splitting state). Concurrency default is fine (the dashboard
+# needs concurrent SSE + clicks); single-instance is about instance count, not request count.
 gcloud run deploy airbag-agent --source "$ROOT/agent" --region "$REGION" \
-  --service-account "$SA" --allow-unauthenticated --min-instances 1 --no-cpu-throttling \
-  --set-env-vars "$ENVS" --update-secrets "$SECRETS" -q
+  --service-account "$SA" --allow-unauthenticated --min-instances 1 --max-instances 1 \
+  --no-cpu-throttling --set-env-vars "$ENVS" --update-secrets "$SECRETS" -q
 
 AURL="$(gcloud run services describe airbag-agent --region "$REGION" --format='value(status.url)')"
 echo

@@ -86,16 +86,25 @@ async def events_stream(request: Request):
     return StreamingResponse(gen(), media_type="text/event-stream")
 
 
-# --- demo auth --------------------------------------------------------------
+# --- auth -------------------------------------------------------------------
+def _gate(configured: str, supplied: str, what: str) -> None:
+    """Constant-time token check that FAILS CLOSED in production: if the token isn't
+    configured, open only for local/mock dev — on the public gcp service refuse to serve
+    (a blank secret must never silently expose the heal/PR/rollback control plane)."""
+    if not configured:
+        if config.BACKEND == "gcp":
+            raise HTTPException(status_code=503,
+                                detail=f"{what} not configured — refusing unauthenticated on gcp")
+        return  # local/mock dev: open
+    if not (supplied and hmac.compare_digest(supplied, configured)):
+        raise HTTPException(status_code=401, detail=f"invalid or missing {what}")
+
+
 def require_demo_token(request: Request) -> None:
-    """Gate the /demo/* ACTION endpoints behind a shared token (header preferred,
-    ?token= fallback for one-click deep links). When AIRBAG_DEMO_TOKEN is unset the
-    endpoints are open (local demo); the read-only dashboard + SSE are always public."""
-    if not config.DEMO_TOKEN:
-        return
+    """Gate the /demo/* ACTION endpoints (header preferred, ?token= fallback for one-click
+    deep links). The read-only dashboard + SSE + /incidents stay public."""
     supplied = request.headers.get("x-airbag-demo-token") or request.query_params.get("token", "")
-    if not (supplied and hmac.compare_digest(supplied, config.DEMO_TOKEN)):
-        raise HTTPException(status_code=401, detail="invalid or missing demo token")
+    _gate(config.DEMO_TOKEN, supplied, "demo token")
 
 
 # --- demo harness: repeatable Break → Heal → Reset (works on local + gcp) -----------
@@ -198,13 +207,9 @@ def demo_trigger(background_tasks: BackgroundTasks):
 
 # --- P1: CI-triggered transaction close (the fix PR's CI calls this after deploy) -------
 def require_internal_token(request: Request) -> None:
-    """Gate the machine-to-machine endpoint with the webhook token (CI holds it). Open only
-    if no webhook token is configured (local)."""
-    if not config.WEBHOOK_TOKEN:
-        return
+    """Gate the machine-to-machine endpoint with the webhook token (CI holds it)."""
     supplied = request.headers.get("x-airbag-token") or request.query_params.get("token", "")
-    if not (supplied and hmac.compare_digest(supplied, config.WEBHOOK_TOKEN)):
-        raise HTTPException(status_code=401, detail="invalid token")
+    _gate(config.WEBHOOK_TOKEN, supplied, "webhook token")
 
 
 @app.post("/internal/complete-rollback", dependencies=[Depends(require_internal_token)])
@@ -231,8 +236,7 @@ async def internal_complete_rollback(request: Request, response: Response):
 @app.post("/alerts/cloud-monitoring", status_code=202)
 async def cloud_monitoring_alert(request: Request, background_tasks: BackgroundTasks):
     token = request.query_params.get("token") or request.headers.get("x-airbag-token", "")
-    if config.WEBHOOK_TOKEN and not hmac.compare_digest(token, config.WEBHOOK_TOKEN):
-        raise HTTPException(status_code=401, detail="invalid token")
+    _gate(config.WEBHOOK_TOKEN, token, "webhook token")
 
     payload = await request.json()
     incident = payload.get("incident", {}) or {}

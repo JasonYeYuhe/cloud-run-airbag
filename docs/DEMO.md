@@ -15,7 +15,7 @@ Repeatable: Break → Heal → Reset, as many times as you like.
 5. **Close the loop (optional, ~30s).** After the fix PR merges and a fixed revision deploys,
    click **✅ Verify & Undo** (or let the fix-PR's CI call `/internal/complete-rollback`). The
    agent verifies the new revision IS the fix, restores traffic to it, and the chain reaches
-   `FIX_DEPLOYED → REVERIFYING → ROLLBACK_UNDONE → CLOSED` — and if the "fix" were unhealthy it
+   `FIX_DEPLOYED → CANARY(10→50→100) → ROLLBACK_UNDONE → CLOSED` — and if the "fix" were unhealthy it
    would **compensate** straight back to the safe revision (`MANUAL_INTERVENTION`).
 6. **Reset (5s).** Click **↺ Reset** to route back to the healthy baseline and run it again.
 
