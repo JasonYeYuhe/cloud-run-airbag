@@ -27,6 +27,15 @@ def test_heal_then_undo_records_a_full_artifact():
     assert len(rec["events"]) > n_after_heal  # transaction events merged into the same record
 
 
+def test_get_returns_isolated_snapshot():
+    from autosre import incidents as inc
+    inc.record("iso-1", {"events": [{"ts": 1, "stage": "A"}]})
+    snap = inc.get("iso-1")
+    inc.record("iso-1", {"events": [{"ts": 2, "stage": "B"}]})  # mutate the live record after
+    assert len(snap["events"]) == 1            # the snapshot must NOT have grown
+    assert len(inc.get("iso-1")["events"]) == 2
+
+
 def test_incident_endpoints():
     mock.reset()
     run_self_heal("inc-ep", SVC)

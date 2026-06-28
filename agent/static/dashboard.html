@@ -170,7 +170,8 @@ function addEvent(ev){
   const row = document.createElement('div');
   row.className = 'ev s-'+stage;
   const t = ev.ts ? new Date(ev.ts*1000).toLocaleTimeString() : '';
-  const link = ev.pr_url ? ` <a class="prlink" href="${encodeURI(ev.pr_url)}" target="_blank" rel="noopener">↗ fix PR</a>` : '';
+  const safePr = (ev.pr_url && /^https?:\/\//i.test(ev.pr_url)) ? ev.pr_url : '';
+  const link = safePr ? ` <a class="prlink" href="${encodeURI(safePr)}" target="_blank" rel="noopener">↗ fix PR</a>` : '';
   row.innerHTML = `<span class="stg">${stage}</span><span class="msg">${esc(ev.msg||'')}${link}</span><span class="t">${t}</span>`;
   tl.appendChild(row); tl.scrollTop = tl.scrollHeight;
 

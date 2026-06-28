@@ -7,6 +7,7 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import threading
 import time
 
 import httpx
@@ -16,6 +17,11 @@ from .schemas import FixResult
 
 log = logging.getLogger("airbag.pr")
 _API = "https://api.github.com"
+
+# Only one CI watcher per branch at a time — repeated heals reuse the same open fix PR, so
+# without this two watchers could race to commit corrections (the loser 409s + false-escalates).
+_watch_lock = threading.Lock()
+_watching: set[str] = set()
 
 
 def available() -> bool:
@@ -114,6 +120,10 @@ def self_correct_ci(branch: str, pr_number: int, service: str, error_context: st
     thread — emits CI_GREEN / CI_RED / CI_CORRECTED / CI_ESCALATED to the thought-chain."""
     if not (available() and config.CI_SELF_CORRECT):
         return
+    with _watch_lock:  # one watcher per branch (repeated heals reuse the same fix PR)
+        if branch in _watching:
+            return
+        _watching.add(branch)
     repo, path = config.GITHUB_REPO, config.FIX_FILE
     try:
         with httpx.Client(timeout=30.0, headers=_headers()) as c:
@@ -122,8 +132,12 @@ def self_correct_ci(branch: str, pr_number: int, service: str, error_context: st
                 if concl == "success":
                     emit("CI_GREEN", "fix PR CI is green")
                     return
-                if concl in ("none", "timeout"):
-                    emit("CI_GREEN", f"no failing CI checks to correct ({concl})")
+                if concl == "none":
+                    emit("CI_GREEN", "no CI checks to correct")
+                    return
+                if concl == "timeout":
+                    emit("CI_WATCH", "CI did not reach a terminal state within the poll window "
+                                     "— stopping watch (not marking green)")
                     return
                 if attempt >= config.MAX_CI_RETRIES:
                     _comment(c, repo, pr_number,
@@ -146,6 +160,9 @@ def self_correct_ci(branch: str, pr_number: int, service: str, error_context: st
                 emit("CI_CORRECTED", f"pushed correction #{attempt + 1} to {branch}; re-running CI")
     except Exception as e:  # noqa: BLE001
         emit("CI_ESCALATED", f"CI self-correction error: {e}")
+    finally:
+        with _watch_lock:
+            _watching.discard(branch)
 
 
 def _comment(c: httpx.Client, repo: str, pr_number: int, body: str) -> None:

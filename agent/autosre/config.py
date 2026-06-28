@@ -51,7 +51,9 @@ TARGET_BASE_URL = os.getenv("TARGET_BASE_URL", "http://localhost:8081")
 # requests to create real 5xx in Cloud Logging, then wait this long for ingestion before
 # the agent heals (the one-click /demo/run path). Tunable for the live demo.
 DEMO_BURST_N = int(os.getenv("AIRBAG_DEMO_BURST_N", "30"))
-DEMO_HEAL_DELAY_S = float(os.getenv("AIRBAG_DEMO_HEAL_DELAY_S", "15"))
+# Short delay before the one-click /demo/run heals — gcp triage actively samples the business
+# path, so detection no longer waits on Cloud Logging ingestion (just let the traffic shift settle).
+DEMO_HEAL_DELAY_S = float(os.getenv("AIRBAG_DEMO_HEAL_DELAY_S", "8"))
 ERROR_SAMPLE_N = int(os.getenv("AIRBAG_ERROR_SAMPLE_N", "12"))
 # probe the business path (not /healthz, which can stay 200 during a fault) so the
 # "verified recovered" signal actually proves the failing endpoint is healthy again.

@@ -14,6 +14,15 @@ _lock = threading.Lock()
 _incidents: dict[str, dict] = {}
 _order: list[str] = []
 _MAX = 200
+_MAX_EVENTS = 500  # cap per-incident timeline (bounds memory + the O(n) de-dup)
+
+
+def _snapshot(v: dict) -> dict:
+    """Isolated copy — the events list is copied so callers (e.g. the report renderer running
+    outside the lock) never iterate a list the CI-watcher thread is concurrently extending."""
+    snap = dict(v)
+    snap["events"] = list(v.get("events", []))
+    return snap
 
 
 def record(incident_id: str, data: dict) -> dict:
@@ -31,14 +40,16 @@ def record(incident_id: str, data: dict) -> dict:
         if new_events:
             seen = {e.get("ts") for e in cur["events"]}
             cur["events"].extend(e for e in new_events if e.get("ts") not in seen)
+            if len(cur["events"]) > _MAX_EVENTS:
+                cur["events"] = cur["events"][-_MAX_EVENTS:]
         _incidents[incident_id] = cur
-        return dict(cur)
+        return _snapshot(cur)
 
 
 def get(incident_id: str) -> dict | None:
     with _lock:
         v = _incidents.get(incident_id)
-        return dict(v) if v else None
+        return _snapshot(v) if v else None
 
 
 def list_recent(n: int = 50) -> list[dict]:

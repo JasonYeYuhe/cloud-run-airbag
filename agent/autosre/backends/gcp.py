@@ -74,8 +74,35 @@ def query_error_rate(service: str, region: str, window_minutes: int = 5,
     client = cloud_logging.Client(project=config.GCP_PROJECT)
     errs = sum(1 for _ in client.list_entries(
         filter_=flt, resource_names=[f"projects/{config.GCP_PROJECT}"], max_results=50))
+    # Cloud Logging ingestion lags ~10-20s. For live detection (triage, since_epoch=None) don't
+    # miss a current outage that hasn't been ingested yet — actively sample the business path.
+    # The post-rollback verify (since_epoch set) stays log-based so "recovery" is proven by logs.
+    if errs == 0 and since_epoch is None:
+        s_errs, s_total = _active_sample(service)
+        if s_errs:
+            return {"service": service, "error_rate": round(s_errs / s_total, 3),
+                    "errors": s_errs, "total_requests": s_total,
+                    "window_minutes": window_minutes, "source": "active-probe"}
     return {"service": service, "error_rate": 1.0 if errs else 0.0,
-            "errors": errs, "total_requests": None, "window_minutes": window_minutes}
+            "errors": errs, "total_requests": None, "window_minutes": window_minutes,
+            "source": "cloud-logging"}
+
+
+def _active_sample(service: str, n: int = 8) -> tuple[int, int]:
+    """Hit the live business path n times, counting 5xx (incl. connection failures)."""
+    try:
+        uri = _get_service(service, config.GCP_REGION).uri.rstrip("/") + config.PROBE_PATH
+    except Exception:  # noqa: BLE001
+        return 0, 0
+    errs = 0
+    with httpx.Client(timeout=5.0) as c:
+        for _ in range(n):
+            try:
+                if c.get(uri).status_code >= 500:
+                    errs += 1
+            except Exception:  # noqa: BLE001
+                errs += 1
+    return errs, n
 
 
 def synthetic_probe(service: str, path: str | None = None) -> dict:

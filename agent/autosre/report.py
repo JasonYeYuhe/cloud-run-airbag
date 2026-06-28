@@ -41,7 +41,11 @@ def render(rec: dict) -> str:
     sc = _STATUS_COLOR.get(status, "#6b7a8d")
     d = rec.get("decision") or {}
     pr = rec.get("pr_url")
-    pr_html = f'<a href="{_esc(pr)}">{_esc(pr)}</a>' if pr else "—"
+    # only render as a link for http(s) (avoid javascript:/data: href injection); else plain text
+    if pr and str(pr).lower().startswith(("http://", "https://")):
+        pr_html = f'<a href="{_esc(pr)}" rel="noopener">{_esc(pr)}</a>'
+    else:
+        pr_html = _esc(pr) or "—"
     eb, ea = rec.get("error_before"), rec.get("error_after")
 
     rows = "".join(
