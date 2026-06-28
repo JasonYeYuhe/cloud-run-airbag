@@ -56,7 +56,9 @@ Gemini fix-PR; alert-driven; secure scoped token). This plan covers what's left.
 
 ## P2 — Depth / hardening (post-submission polish; Days 9+)
 9. **Cloud Tasks / Pub/Sub** for the webhook instead of FastAPI `BackgroundTasks` (durable work).
-10. **Gradual canary on restore** (10%→50%→100% with a metric gate) instead of a 100% flip. (in progress)
+10. ~~**Gradual canary on restore**~~ ✅ **Done** — `complete_rollback` restores traffic to the fix
+    in `AIRBAG_CANARY_STAGES` steps (default 10%→50%→100%) with a probe+error-rate gate at each;
+    compensates to 100% safe on any gate failure. The stop-the-bleeding rollback stays an instant flip.
 11. ~~**CI self-correction**~~ ✅ **Done** — `github_pr.self_correct_ci` watches the fix PR's CI
     (`validate-fix.yml` runs on `airbag/fix**` only, so main stays green); on red it feeds the failure
     to Gemini, commits a correction, retries ≤`MAX_CI_RETRIES`, then escalates (PR comment).

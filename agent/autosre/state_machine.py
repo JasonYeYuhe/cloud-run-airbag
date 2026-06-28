@@ -171,27 +171,32 @@ def complete_rollback(service: str, fix_revision: str | None = None,
         emit("FIX_DEPLOYED", f"candidate fix revision: {candidate}",
              revision=candidate, git_sha=git_sha, pr_url=pr_url or rec.get("pr_url"))
 
-        # Restore traffic to the fix, then PROVE it's healthy; compensate if it isn't.
-        tools.rollback_traffic_to_revision(service, config.GCP_REGION, candidate)
-        restore_at = time.time()
-        emit("REVERIFYING", f"100% traffic -> {candidate}; proving the fix is healthy")
-        if _verify(service, emit, since_epoch=restore_at):
-            emit("ROLLBACK_UNDONE",
-                 f"temporary rollback undone — traffic restored to the fix ({candidate})")
-            emit("CLOSED", "incident closed: rolled back, fixed, and traffic restored to the fix")
-            closed = True
-            _save("closed", restored_to=candidate, fix_git_sha=git_sha)
-            return {"status": "closed", "restored_to": candidate,
-                    "incident_id": incident_id, "events": run_events}
-        # Compensating action: route back to the known-safe rolled-back revision.
+        # Gradual canary: shift traffic to the fix in stages, gating on health at each step;
+        # compensate to the safe revision on any gate failure (catch a bad fix at low exposure).
         safe = rec.get("rolled_back_to")
-        tools.rollback_traffic_to_revision(service, config.GCP_REGION, safe)
-        attempts = pending.bump_attempts(service)
-        emit("MANUAL_INTERVENTION",
-             f"fix revision {candidate} failed verification (attempt {attempts}/"
-             f"{config.MAX_UNDO_ATTEMPTS}) — compensated: traffic back on safe revision {safe}")
-        _save("compensated", safe_revision=safe, attempts=attempts)
-        return {"status": "compensated", "safe_revision": safe, "attempts": attempts,
+        for pct in config.CANARY_STAGES:
+            split = {candidate: 100} if pct >= 100 else {candidate: pct, safe: 100 - pct}
+            tools.set_traffic_split(service, config.GCP_REGION, split)
+            stage_at = time.time()
+            emit("CANARY", f"{pct}% → fix {candidate}"
+                 + ("" if pct >= 100 else f" · {100 - pct}% → {safe}") + "; gating on health",
+                 percent=pct)
+            if not _verify(service, emit, since_epoch=stage_at):
+                tools.set_traffic_split(service, config.GCP_REGION, {safe: 100})  # compensate
+                attempts = pending.bump_attempts(service)
+                emit("MANUAL_INTERVENTION",
+                     f"fix {candidate} failed the {pct}% canary gate (attempt {attempts}/"
+                     f"{config.MAX_UNDO_ATTEMPTS}) — compensated: 100% traffic back on {safe}")
+                _save("compensated", safe_revision=safe, attempts=attempts, canary_failed_at=pct)
+                return {"status": "compensated", "safe_revision": safe, "attempts": attempts,
+                        "incident_id": incident_id, "events": run_events}
+        emit("ROLLBACK_UNDONE",
+             f"temporary rollback undone — traffic fully restored to the fix ({candidate}) "
+             f"via canary {config.CANARY_STAGES}")
+        emit("CLOSED", "incident closed: rolled back, fixed, and traffic restored to the fix")
+        closed = True
+        _save("closed", restored_to=candidate, fix_git_sha=git_sha)
+        return {"status": "closed", "restored_to": candidate,
                 "incident_id": incident_id, "events": run_events}
     finally:
         pending.end_complete(service, closed=closed)

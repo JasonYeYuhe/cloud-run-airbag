@@ -77,6 +77,9 @@ VERIFY_ATTEMPTS = int(os.getenv("AIRBAG_VERIFY_ATTEMPTS", "6"))
 VERIFY_INTERVAL_S = float(os.getenv("AIRBAG_VERIFY_INTERVAL_S", "2"))
 # P1 close-the-transaction: cap failed undo/compensation retries (then require a human)
 MAX_UNDO_ATTEMPTS = int(os.getenv("AIRBAG_MAX_UNDO_ATTEMPTS", "2"))
+# Gradual canary on RESTORE: percent of traffic to the fix at each gated step. "100" = single
+# flip. The stop-the-bleeding rollback stays an instant 100% flip (you want to stop bleeding fast).
+CANARY_STAGES = [int(x) for x in os.getenv("AIRBAG_CANARY_STAGES", "10,50,100").split(",") if x.strip()]
 
 # CI self-correction: after the fix PR opens, watch its CI; if red, feed the failure back to
 # Gemini, re-commit a correction to the branch, retry up to N times, then escalate (PR comment).

@@ -63,6 +63,18 @@ def restore_traffic_to_latest(service: str, region: str) -> dict:
     return get_backend().restore_traffic_to_latest(service, region)
 
 
+def set_traffic_split(service: str, region: str, splits: dict) -> dict:
+    """Split traffic across explicit revisions (e.g. {fix: 10, safe: 90}) — used for the
+    gradual canary when restoring traffic to the fix.
+
+    Args:
+        service (str): Cloud Run service name.
+        region (str): GCP region.
+        splits (dict): revision name -> percent (should sum to 100).
+    """
+    return get_backend().set_traffic_split(service, region, splits)
+
+
 # --- demo harness (not part of the heal; drives the repeatable break/heal/reset demo) ---
 def break_target(service: str, region: str) -> dict:
     """Put the target into the faulty state (gcp: route 100% to the bad revision carrying

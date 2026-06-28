@@ -89,10 +89,10 @@ def synthetic_probe(service: str, path: str | None = None) -> dict:
         return {"ok": False, "path": path, "status": 0, "error": str(e)}
 
 
-def _set_traffic(service: str, region: str, target):
+def _set_traffic(service: str, region: str, targets):
     from google.cloud import run_v2
     svc = _get_service(service, region)
-    svc.traffic = [target]
+    svc.traffic = targets if isinstance(targets, list) else [targets]
     run_v2.ServicesClient().update_service(
         service=svc, update_mask={"paths": ["traffic"]}).result(timeout=120)
 
@@ -103,6 +103,17 @@ def rollback_traffic_to_revision(service: str, region: str, revision: str) -> di
         type_=run_v2.TrafficTargetAllocationType.TRAFFIC_TARGET_ALLOCATION_TYPE_REVISION,
         revision=revision, percent=100))
     return {"status": "success", "service": service, "active_revision": revision}
+
+
+def set_traffic_split(service: str, region: str, splits: dict) -> dict:
+    """Split 100% of traffic across explicit revisions, e.g. {fix: 10, safe: 90} for a canary."""
+    from google.cloud import run_v2
+    targets = [run_v2.TrafficTarget(
+        type_=run_v2.TrafficTargetAllocationType.TRAFFIC_TARGET_ALLOCATION_TYPE_REVISION,
+        revision=rev, percent=int(pct)) for rev, pct in splits.items() if int(pct) > 0]
+    _set_traffic(service, region, targets)
+    return {"status": "success", "service": service,
+            "traffic": {r: int(p) for r, p in splits.items() if int(p) > 0}}
 
 
 def restore_traffic_to_latest(service: str, region: str) -> dict:

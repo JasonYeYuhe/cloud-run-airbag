@@ -87,3 +87,11 @@ def reset_target(service: str, region: str) -> dict:
         c.post(_url("/__fault/off"))
     return {"status": "success", "service": service,
             "active_revision": f"{service}-00001-good"}
+
+
+def set_traffic_split(service: str, region: str, splits: dict) -> dict:
+    # local target is a single process — model the canary by clearing the fault once the fix
+    # gets any traffic (so the probe/error-rate read healthy at each stage).
+    with httpx.Client(timeout=3.0) as c:
+        c.post(_url("/__fault/off"))
+    return {"status": "success", "service": service, "traffic": dict(splits)}

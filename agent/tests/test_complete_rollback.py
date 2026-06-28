@@ -58,6 +58,23 @@ def test_compensates_when_fix_unhealthy(monkeypatch):
     assert res["safe_revision"] == f"{SVC}-00001-good"
 
 
+def test_canary_restore_is_staged(monkeypatch):
+    from autosre import tools
+    calls = []
+
+    def _rec(s, r, split):
+        calls.append(dict(split))
+        return mock.set_traffic_split(s, r, split)  # keep mock healthy so each gate passes
+
+    monkeypatch.setattr(tools, "set_traffic_split", _rec)
+    _heal_then_pending()
+    mock.deploy_fix()
+    res = complete_rollback(SVC, fix_revision=f"{SVC}-00003-fix")
+    assert res["status"] == "closed"
+    fix = f"{SVC}-00003-fix"
+    assert [c.get(fix) for c in calls] == [10, 50, 100]  # gradual canary to the fix
+
+
 def test_idempotent_noop_without_pending():
     assert complete_rollback(SVC)["status"] == "noop"  # nothing pending
     _heal_then_pending()
