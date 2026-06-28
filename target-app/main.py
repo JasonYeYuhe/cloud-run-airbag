@@ -1,14 +1,3 @@
-"""Target demo app (deploys to Cloud Run).
-
-A healthy service with an injectable fault so we can reproduce "a bad revision
-shipped and starts erroring" — including the 'delay bomb' (errors begin only N
-seconds after start, i.e. outside the deploy/canary window).
-
-Fault sources:
-  - env FAULT_MODE = off | http500 | delay_bomb  (a 'bad revision' ships with this)
-  - runtime POST /__fault/{mode}                 (demo harness: flip faults live)
-/healthz stays 200 so Cloud Run readiness and the agent's synthetic probe work.
-"""
 from __future__ import annotations
 
 import os
@@ -42,7 +31,7 @@ ORDERS = [{"id": 1, "price": 10}, {"id": 2, "price": 25}]
 def total_revenue(orders, buggy=False):
     # A "bad deploy" ships buggy=True, which reads a key that doesn't exist on the order
     # dicts -> KeyError -> HTTP 500. The fix is to read the correct "price" key.
-    key = "amount" if buggy else "price"
+    key = "price" # FIX: Always read the correct "price" key
     return sum(o[key] for o in orders)
 
 
