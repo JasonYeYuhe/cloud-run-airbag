@@ -1,5 +1,22 @@
 """Runtime configuration, read from environment (see .env.example)."""
 import os
+from pathlib import Path
+
+
+def _load_dotenv() -> None:
+    """Minimal .env loader (agent/.env) — no dependency; existing env wins."""
+    env_path = Path(__file__).resolve().parent.parent / ".env"
+    if not env_path.exists():
+        return
+    for line in env_path.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, _, v = line.partition("=")
+        os.environ.setdefault(k.strip(), v.strip())
+
+
+_load_dotenv()
 
 
 def _bool(name: str, default: str = "false") -> bool:
@@ -32,10 +49,10 @@ PROBE_PATH = os.getenv("AIRBAG_PROBE_PATH", "/api/orders")
 
 # Gemini (AI Studio API key). Empty -> deterministic fallback decision.
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_AI_API_KEY") or ""
-# "*-latest" aliases auto-point to the newest Gemini (3.x) and avoid 400s from guessing
-# a version string; override via env if you want to pin.
-GEMINI_DECISION_MODEL = os.getenv("GEMINI_DECISION_MODEL", "gemini-flash-latest")
-GEMINI_PATCH_MODEL = os.getenv("GEMINI_PATCH_MODEL", "gemini-pro-latest")
+# GA gemini-2.5-flash is the reliable default (the 3.x/"-latest" aliases were 503/429
+# on the free tier when tested 2026-06-28). Override via env to use a newer model.
+GEMINI_DECISION_MODEL = os.getenv("GEMINI_DECISION_MODEL", "gemini-2.5-flash")
+GEMINI_PATCH_MODEL = os.getenv("GEMINI_PATCH_MODEL", "gemini-2.5-pro")
 
 CONFIDENCE_THRESHOLD = float(os.getenv("AIRBAG_CONFIDENCE_THRESHOLD", "0.7"))
 ERROR_RATE_THRESHOLD = float(os.getenv("AIRBAG_ERROR_RATE_THRESHOLD", "0.05"))

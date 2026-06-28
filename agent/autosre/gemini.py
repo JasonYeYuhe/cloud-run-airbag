@@ -15,8 +15,21 @@ from .schemas import IncidentDecision
 log = logging.getLogger("airbag.gemini")
 
 
+_client_singleton = None
+
+
 def available() -> bool:
     return bool(config.GEMINI_API_KEY)
+
+
+def _client():
+    """Cached client — must hold a reference, else it's GC'd mid-request
+    ('client has been closed')."""
+    global _client_singleton
+    if _client_singleton is None:
+        from google import genai
+        _client_singleton = genai.Client(api_key=config.GEMINI_API_KEY)
+    return _client_singleton
 
 
 def decide(service: str, revs: dict, err: dict) -> dict | None:
@@ -24,7 +37,6 @@ def decide(service: str, revs: dict, err: dict) -> dict | None:
     if not available():
         return None
     try:
-        from google import genai
         from google.genai import types
 
         prompt = (
@@ -37,7 +49,7 @@ def decide(service: str, revs: dict, err: dict) -> dict | None:
             "revision exists; set rollback_revision to that healthy revision's name. "
             "Otherwise OBSERVE. Be concise and set confidence honestly."
         )
-        resp = genai.Client(api_key=config.GEMINI_API_KEY).models.generate_content(
+        resp = _client().models.generate_content(
             model=config.GEMINI_DECISION_MODEL,
             contents=prompt,
             config=types.GenerateContentConfig(
@@ -59,9 +71,7 @@ def explain_recovery(service: str, before: dict, after: dict) -> str | None:
     if not available():
         return None
     try:
-        from google import genai
-
-        resp = genai.Client(api_key=config.GEMINI_API_KEY).models.generate_content(
+        resp = _client().models.generate_content(
             model=config.GEMINI_DECISION_MODEL,
             contents=(
                 f"In one short sentence, confirm recovery for Cloud Run service {service}. "
