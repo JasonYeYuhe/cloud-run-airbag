@@ -52,6 +52,8 @@ The **deployed agent autonomously heals the deployed target** on real Cloud Run,
 
 **Fully autonomous:** a real **Cloud Monitoring 5xx alert** fires on its own and triggers the heal with **no human in the loop** (verified — target rolled back ~3 min after the alert, triggered by Cloud Monitoring incident, not a button). Wire it with `./infra/alert-setup.sh`.
 
+**Dual-path heal:** after the rollback stops the bleeding, the slow path has **Gemini open a real fix PR** (root-cause) that passes CI — e.g. [PR #1](https://github.com/JasonYeYuhe/cloud-run-airbag/pull/1) fixed the planted `KeyError` (`amount`→`price`), `on: push` CI green. (Validated locally; on the deployed agent, enable with a fine-grained, repo-scoped token.)
+
 **Cloud demo:** `./scripts/gcp-demo.sh` (breaks the target), then either wait for the alert, or open the agent URL and click **🚨 Trigger incident** for the instant path.
 **Reproduce the deploy from scratch:** `gcloud auth login` once, then `PROJECT=<id> ./deploy.sh`.
 

@@ -47,6 +47,6 @@ Reproduce with `./deploy.sh`. Real deploy gotchas hit & fixed (all encoded in de
 - **`LATEST` traffic target** has `revision=''` → resolve it to the newest revision when reading traffic %.
 
 ## Still open (stretch)
-- [ ] Gemini fix-PR + GitHub Actions CI loop (the `FIX_PR` stage) — needs a target repo.
+- [x] **Gemini fix-PR + CI loop** (the `FIX_PR` stage) — after rollback, Gemini reads the buggy file, opens a real fix PR, CI passes (e.g. PR #1). On the *deployed* agent, enable with a **fine-grained repo-scoped** GitHub token (not the broad classic token).
 - [x] **Alert-driven autonomous trigger** — real Cloud Monitoring 5xx alert → webhook → agent self-heal, no human (`./infra/alert-setup.sh`). Verified.
 - [ ] Repeatable one-click cloud demo reset (currently `./scripts/gcp-demo.sh` re-breaks the target).
