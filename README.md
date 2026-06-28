@@ -50,7 +50,9 @@ The **deployed agent autonomously heals the deployed target** on real Cloud Run,
 | **Agent + dashboard** | https://airbag-agent-946577240607.asia-northeast1.run.app |
 | **Target (demo app)** | https://airbag-target-946577240607.asia-northeast1.run.app |
 
-**Cloud demo:** `./scripts/gcp-demo.sh` (breaks the target), then open the agent URL and click **🚨 Trigger incident**.
+**Fully autonomous:** a real **Cloud Monitoring 5xx alert** fires on its own and triggers the heal with **no human in the loop** (verified — target rolled back ~3 min after the alert, triggered by Cloud Monitoring incident, not a button). Wire it with `./infra/alert-setup.sh`.
+
+**Cloud demo:** `./scripts/gcp-demo.sh` (breaks the target), then either wait for the alert, or open the agent URL and click **🚨 Trigger incident** for the instant path.
 **Reproduce the deploy from scratch:** `gcloud auth login` once, then `PROJECT=<id> ./deploy.sh`.
 
 It also runs fully **locally with no GCP** (see below). See [docs/PLAN.md](docs/PLAN.md) and [docs/DEMO.md](docs/DEMO.md).

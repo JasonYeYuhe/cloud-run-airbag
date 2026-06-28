@@ -48,4 +48,5 @@ Reproduce with `./deploy.sh`. Real deploy gotchas hit & fixed (all encoded in de
 
 ## Still open (stretch)
 - [ ] Gemini fix-PR + GitHub Actions CI loop (the `FIX_PR` stage) — needs a target repo.
+- [x] **Alert-driven autonomous trigger** — real Cloud Monitoring 5xx alert → webhook → agent self-heal, no human (`./infra/alert-setup.sh`). Verified.
 - [ ] Repeatable one-click cloud demo reset (currently `./scripts/gcp-demo.sh` re-breaks the target).
