@@ -12,7 +12,7 @@ from __future__ import annotations
 import logging
 import time
 
-from . import adk_brain, config, events, gemini, pending, tools
+from . import adk_brain, config, events, gemini, incidents, pending, tools
 
 log = logging.getLogger("airbag.sm")
 
@@ -45,8 +45,13 @@ def run_self_heal(incident_id: str, service: str) -> dict:
         decision = gemini.decide(service, revs, err) or _heuristic(revs, err)
     decision = _validate(decision, revs)
     emit("DECISION", decision["action"], **decision)
+    _decision_summary = {k: decision.get(k) for k in (
+        "action", "confidence", "reasoning", "evidence", "_source", "_adk_tools",
+        "bad_revision", "rollback_revision")}
     if decision["action"] != "ROLLBACK":
         emit("DONE", "no rollback needed")
+        incidents.record(incident_id, {"service": service, "status": "noop",
+                                       "decision": _decision_summary, "events": run_events})
         return {"status": "noop", "incident_id": incident_id, "events": run_events}
 
     # --- ROLLBACK (deterministic stop-the-bleeding) -----------------------
@@ -58,6 +63,9 @@ def run_self_heal(incident_id: str, service: str) -> dict:
     # --- VERIFY (error-rate -> 0 AND synthetic probe ok), measured from rollback --
     if not _verify(service, emit, since_epoch=rollback_at):
         emit("ESCALATED", "rollback did not clear errors within budget")
+        incidents.record(incident_id, {"service": service, "status": "escalated",
+                                       "decision": _decision_summary, "rolled_back_to": target,
+                                       "error_before": before.get("error_rate"), "events": run_events})
         return {"status": "escalated", "incident_id": incident_id, "events": run_events}
 
     after = tools.query_error_rate(service, config.GCP_REGION, window_minutes=2,
@@ -90,6 +98,10 @@ def run_self_heal(incident_id: str, service: str) -> dict:
     emit("PENDING_REVERT", "rollback held until the fix deploys + is verified",
          rolled_back_to=target, pr_url=pr_url)
 
+    incidents.record(incident_id, {
+        "service": service, "status": "mitigated", "decision": _decision_summary,
+        "rolled_back_to": target, "error_before": before.get("error_rate"),
+        "error_after": after.get("error_rate"), "pr_url": pr_url, "events": run_events})
     return {"status": "mitigated", "incident_id": incident_id,
             "rolled_back_to": target, "events": run_events}
 
@@ -115,6 +127,10 @@ def complete_rollback(service: str, fix_revision: str | None = None,
                              "stage": stage, "msg": msg, **data})
         run_events.append(ev)
 
+    def _save(status: str, **extra) -> None:
+        incidents.record(incident_id, {"service": service, "status": status,
+                                       "events": run_events, **extra})
+
     closed = False
     # Cap compensation retries: after MAX failed undos, stop (traffic is already on the safe
     # revision) and require a human — don't keep re-shifting traffic on every re-trigger.
@@ -123,6 +139,7 @@ def complete_rollback(service: str, fix_revision: str | None = None,
              f"giving up after {rec.get('attempts')} failed undo attempts — traffic stays on the "
              f"safe revision {rec.get('rolled_back_to')}; needs a human")
         pending.clear_pending(service)  # terminal: no further auto-undo
+        _save("manual_intervention")
         return {"status": "manual_intervention", "reason": "max attempts", "terminal": True,
                 "incident_id": incident_id, "events": run_events}
     try:
@@ -134,6 +151,7 @@ def complete_rollback(service: str, fix_revision: str | None = None,
         if not candidate:
             emit("MANUAL_INTERVENTION",
                  "no healthy fix revision found after the rollback — not restoring traffic")
+            _save("manual_intervention")
             return {"status": "manual_intervention", "reason": "no candidate fix revision",
                     "incident_id": incident_id, "events": run_events}
         emit("FIX_DEPLOYED", f"candidate fix revision: {candidate}",
@@ -148,6 +166,7 @@ def complete_rollback(service: str, fix_revision: str | None = None,
                  f"temporary rollback undone — traffic restored to the fix ({candidate})")
             emit("CLOSED", "incident closed: rolled back, fixed, and traffic restored to the fix")
             closed = True
+            _save("closed", restored_to=candidate, fix_git_sha=git_sha)
             return {"status": "closed", "restored_to": candidate,
                     "incident_id": incident_id, "events": run_events}
         # Compensating action: route back to the known-safe rolled-back revision.
@@ -157,6 +176,7 @@ def complete_rollback(service: str, fix_revision: str | None = None,
         emit("MANUAL_INTERVENTION",
              f"fix revision {candidate} failed verification (attempt {attempts}/"
              f"{config.MAX_UNDO_ATTEMPTS}) — compensated: traffic back on safe revision {safe}")
+        _save("compensated", safe_revision=safe, attempts=attempts)
         return {"status": "compensated", "safe_revision": safe, "attempts": attempts,
                 "incident_id": incident_id, "events": run_events}
     finally:

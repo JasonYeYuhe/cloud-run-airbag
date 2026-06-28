@@ -1,0 +1,95 @@
+"""Render a persisted incident record as a self-contained HTML "incident report" Artifact —
+the verifiable thought-chain a judge or on-call human can audit: the decision, the signals,
+before/after metrics, the fix PR, and the full timeline. No JS, no external assets."""
+from __future__ import annotations
+
+import datetime
+import html
+import json
+
+_STAGE_COLOR = {
+    "RUN_START": "#6b7a8d", "RECEIVED": "#f85149", "FAULT_INJECTED": "#f85149",
+    "TRIAGED": "#58a6ff", "ADK": "#bc8cff", "DECISION": "#bc8cff",
+    "ROLLBACK_APPLIED": "#58a6ff", "VERIFYING": "#e3b341", "MITIGATED": "#3fb950",
+    "FIX_PR": "#6b7a8d", "PENDING_REVERT": "#e3b341", "ESCALATED": "#e3b341",
+    "COMPLETE_ROLLBACK": "#e3b341", "FIX_DEPLOYED": "#58a6ff", "REVERIFYING": "#e3b341",
+    "ROLLBACK_UNDONE": "#3fb950", "CLOSED": "#3fb950", "MANUAL_INTERVENTION": "#f85149",
+    "DONE": "#6b7a8d",
+}
+_STATUS_COLOR = {"mitigated": "#3fb950", "closed": "#3fb950", "noop": "#6b7a8d",
+                 "escalated": "#e3b341", "compensated": "#e3b341", "manual_intervention": "#f85149"}
+
+
+def _ts(t) -> str:
+    if not t:
+        return ""
+    try:
+        return datetime.datetime.fromtimestamp(float(t), datetime.timezone.utc).strftime("%H:%M:%S")
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _esc(s) -> str:
+    return html.escape(str(s)) if s is not None else ""
+
+
+def render(rec: dict) -> str:
+    iid = _esc(rec.get("incident_id"))
+    status = rec.get("status", "—")
+    sc = _STATUS_COLOR.get(status, "#6b7a8d")
+    d = rec.get("decision") or {}
+    pr = rec.get("pr_url")
+    pr_html = f'<a href="{_esc(pr)}">{_esc(pr)}</a>' if pr else "—"
+    eb, ea = rec.get("error_before"), rec.get("error_after")
+
+    rows = "".join(
+        f'<tr><td class="t">{_ts(e.get("ts"))}</td>'
+        f'<td class="s" style="color:{_STAGE_COLOR.get(e.get("stage"), "#c9d4e0")}">{_esc(e.get("stage"))}</td>'
+        f'<td class="m">{_esc(e.get("msg"))}</td></tr>'
+        for e in rec.get("events", []))
+
+    evidence = d.get("evidence") or []
+    evidence_html = "".join(f"<li>{_esc(x)}</li>" for x in evidence) or "<li>—</li>"
+    tools = d.get("_adk_tools")
+    return f"""<!doctype html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Airbag incident {iid}</title><style>
+ body{{margin:0;background:#0a0e14;color:#c9d4e0;font:14px/1.55 system-ui,-apple-system,Segoe UI,sans-serif;padding:24px}}
+ .wrap{{max-width:960px;margin:0 auto}}
+ h1{{font-size:18px;margin:0 0 4px}} h1 b{{color:#3fb950}}
+ .mono{{font-family:SFMono-Regular,ui-monospace,Menlo,Consolas,monospace}}
+ .badge{{display:inline-block;padding:3px 10px;border-radius:999px;font-size:12px;font-weight:700;
+   color:#0a0e14;background:{sc}}}
+ .grid{{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin:18px 0}}
+ .card{{background:#0e141d;border:1px solid #1d2733;border-radius:12px;padding:14px}}
+ .card h2{{margin:0 0 10px;font-size:11px;letter-spacing:1.4px;text-transform:uppercase;color:#6b7a8d}}
+ .kv{{display:flex;justify-content:space-between;gap:12px;margin:5px 0}} .kv span:first-child{{color:#6b7a8d}}
+ .act{{font-size:16px;font-weight:800;color:#58a6ff}} .chip{{color:#bc8cff;font-size:12px}}
+ table{{width:100%;border-collapse:collapse;font-family:SFMono-Regular,ui-monospace,Menlo,monospace;font-size:12.5px}}
+ td{{padding:7px 8px;border-bottom:1px solid #141c26;vertical-align:top}}
+ td.t{{color:#6b7a8d;white-space:nowrap;width:74px}} td.s{{font-weight:700;width:160px}}
+ a{{color:#58a6ff}} ul{{margin:6px 0;padding-left:18px}} .foot{{color:#6b7a8d;font-size:12px;margin-top:18px}}
+</style></head><body><div class="wrap">
+ <h1>🛟 <b>Airbag</b> — incident report</h1>
+ <div class="mono" style="color:#6b7a8d">{iid} · {_esc(rec.get("service"))} · <span class="badge">{_esc(status).upper()}</span></div>
+ <div class="grid">
+  <div class="card"><h2>Decision (Gemini via ADK)</h2>
+   <div class="act">{_esc(d.get("action") or "—")} <span class="chip">conf {_esc(d.get("confidence"))} · {_esc(d.get("_source") or "—")}</span></div>
+   <div style="margin:8px 0">{_esc(d.get("reasoning"))}</div>
+   <div class="kv"><span>tools called</span><span class="mono">{_esc(tools) if tools else "—"}</span></div>
+   <div style="color:#6b7a8d;margin-top:8px">evidence</div><ul>{evidence_html}</ul>
+  </div>
+  <div class="card"><h2>Proof of recovery</h2>
+   <div class="kv"><span>5xx error-rate before</span><span class="mono" style="color:#f85149">{_esc(eb)}</span></div>
+   <div class="kv"><span>5xx error-rate after</span><span class="mono" style="color:#3fb950">{_esc(ea)}</span></div>
+   <div class="kv"><span>rolled back to</span><span class="mono">{_esc(rec.get("rolled_back_to") or "—")}</span></div>
+   <div class="kv"><span>restored to (fix)</span><span class="mono">{_esc(rec.get("restored_to") or "—")}</span></div>
+   <div class="kv"><span>fix PR</span><span class="mono">{pr_html}</span></div>
+  </div>
+ </div>
+ <div class="card"><h2>Thought-chain timeline</h2>
+  <table><tbody>{rows}</tbody></table>
+ </div>
+ <div class="foot">Generated by Airbag. Machine-readable JSON: <a href="/incidents/{iid}">/incidents/{iid}</a> ·
+  the deterministic state machine executed every action; Gemini only decided.</div>
+</div></body></html>"""

@@ -121,6 +121,7 @@
 
     <h2 style="margin-top:18px">Decision</h2>
     <div class="dec" id="decision"><span class="muted">waiting for an incident…</span></div>
+    <div id="report" style="margin-top:12px"></div>
   </div>
 </div>
 
@@ -129,6 +130,8 @@ const $ = s => document.querySelector(s);
 const tl = $('#timeline');
 let series = [];                  // error-rate points
 let badRev=null, goodRev=null;   // chosen by the DECISION (gcp revision names are opaque)
+let currentIncident=null;        // for the downloadable incident-report Artifact
+const TERMINAL=new Set(['MITIGATED','CLOSED','ROLLBACK_UNDONE','MANUAL_INTERVENTION','ESCALATED']);
 
 // --- demo token (gates action endpoints when the service is public) ---
 const TOKEN_KEY = 'airbag_demo_token';
@@ -150,7 +153,9 @@ function setDot(id,on){ $(id).classList.toggle('on', !!on); }
 
 function addEvent(ev){
   const stage = ev.stage || '';
-  if(stage==='RUN_START'){ tl.innerHTML=''; series=[]; badRev=goodRev=null; drawCurve(); $('#gate').className='badge pending'; $('#gate').textContent='PENDING'; $('#rate').textContent='—'; $('#decision').innerHTML='<span class="muted">analyzing…</span>'; }
+  if(stage==='RUN_START'){ tl.innerHTML=''; series=[]; badRev=goodRev=null; drawCurve(); $('#gate').className='badge pending'; $('#gate').textContent='PENDING'; $('#rate').textContent='—'; $('#decision').innerHTML='<span class="muted">analyzing…</span>'; $('#report').innerHTML=''; }
+  if(ev.incident_id) currentIncident=ev.incident_id;
+  if(TERMINAL.has(stage)) showReport();
   if(stage==='CONNECTED'){ setDot('#d-sse',true); setBackend(ev.backend); return; }
 
   const row = document.createElement('div');
@@ -193,6 +198,12 @@ function drawCurve(){
 }
 function verified(ev){
   const g=$('#gate'); g.className='badge verified'; g.textContent='✓ VERIFIED RESOLVED';
+}
+function showReport(){
+  if(!currentIncident || !live) return;   // only for real (live) incidents, not the offline self-play
+  $('#report').innerHTML = `<a href="/incidents/${encodeURIComponent(currentIncident)}/report" target="_blank"
+    style="display:inline-block;font-size:12.5px;color:var(--cyan);text-decoration:none;border:1px solid var(--line);
+    border-radius:8px;padding:7px 11px">📄 Open incident report — verifiable evidence (Artifact)</a>`;
 }
 function isBad(name, pct){
   // names are opaque on gcp: prefer the DECISION's pick, else the serving revision during

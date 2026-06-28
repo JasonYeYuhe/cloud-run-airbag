@@ -22,7 +22,7 @@ from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request, R
 from fastapi.responses import HTMLResponse, StreamingResponse
 from starlette.concurrency import run_in_threadpool
 
-from autosre import config, events, tools
+from autosre import config, events, incidents, report, tools
 from autosre.state_machine import complete_rollback, run_self_heal
 
 logging.basicConfig(level=logging.INFO)
@@ -42,6 +42,28 @@ def dashboard():
 @app.get("/health")  # NB: Cloud Run's frontend reserves /healthz, so use /health
 def health():
     return {"status": "ok", "backend": config.BACKEND, "gemini": bool(config.GEMINI_API_KEY)}
+
+
+# --- incident reports (read-only Artifact; safe to be public) ----------------
+@app.get("/incidents")
+def list_incidents():
+    return {"incidents": incidents.list_recent()}
+
+
+@app.get("/incidents/{incident_id}")
+def get_incident(incident_id: str):
+    rec = incidents.get(incident_id)
+    if not rec:
+        raise HTTPException(status_code=404, detail="unknown incident")
+    return rec
+
+
+@app.get("/incidents/{incident_id}/report", response_class=HTMLResponse)
+def incident_report(incident_id: str):
+    rec = incidents.get(incident_id)
+    if not rec:
+        raise HTTPException(status_code=404, detail="unknown incident")
+    return report.render(rec)
 
 
 @app.get("/events")
