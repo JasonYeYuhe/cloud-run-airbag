@@ -73,10 +73,17 @@ never freely touches prod. Judges see a governed control loop, not a chatbot wit
 - One-click repeatable demo: **Break → Heal → (deploy fix) → Verify & Undo → Reset** from the dashboard.
 - **Close the transaction:** verify the deployed revision **is** the fix (the CI-reported
   revision/sha, or a post-rollback healthy candidate), restore traffic to it, and CLOSE — or
-  **compensate** back to the safe revision if the fix fails (`complete_rollback`, 5 tests).
+  **compensate** back to the safe revision if the fix fails (`complete_rollback`).
   Triggered by `/internal/complete-rollback` (token-gated) or the dashboard's **Verify & Undo**.
+- **Gradual canary on restore:** traffic rolls forward to the fix 10%→50%→100% with a health
+  gate at each step (compensate on any failure) — catch a bad fix at low exposure.
+- **CI self-correction:** the agent watches its own fix PR's CI (`validate-fix` runs on the
+  `airbag/fix**` branch only, so `main` stays green); on red it feeds the failure to Gemini,
+  commits a correction, retries, then escalates — "the agent verifies and corrects its own work".
+- **Verifiable incident-report Artifact:** every run is persisted and rendered at
+  `/incidents/{id}/report` (decision + signals + before/after + full timeline) — *AI isn't guessing*.
 - Three execution backends (mock / local / gcp) behind one agent codebase; `/demo/*` is
-  token-gated so the public dashboard is watch-only.
+  token-gated so the public dashboard is watch-only. 18 tests, CI green.
 
 **Roadmap (P2, honestly not done):**
 - **Fully-unattended CI close:** the included `.github/workflows/complete-rollback.yml` deploys
