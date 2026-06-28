@@ -52,6 +52,11 @@ ERROR_SAMPLE_N = int(os.getenv("AIRBAG_ERROR_SAMPLE_N", "12"))
 # "verified recovered" signal actually proves the failing endpoint is healthy again.
 PROBE_PATH = os.getenv("AIRBAG_PROBE_PATH", "/api/orders")
 
+# Route the decision through the ADK SequentialAgent (triage->decide; Gemini calls the
+# tools itself) when a Gemini key is present. Falls back to a direct Gemini decision, then
+# a heuristic, on any failure. Set AIRBAG_USE_ADK=false to use the direct Gemini path.
+USE_ADK = _bool("AIRBAG_USE_ADK", "true")
+
 # Gemini (AI Studio API key). Empty -> deterministic fallback decision.
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_AI_API_KEY") or ""
 # GA gemini-2.5-flash is the reliable default (the 3.x/"-latest" aliases were 503/429

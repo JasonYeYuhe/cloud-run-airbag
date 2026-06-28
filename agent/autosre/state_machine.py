@@ -12,7 +12,7 @@ from __future__ import annotations
 import logging
 import time
 
-from . import config, events, gemini, tools
+from . import adk_brain, config, events, gemini, tools
 
 log = logging.getLogger("airbag.sm")
 
@@ -36,8 +36,13 @@ def run_self_heal(incident_id: str, service: str) -> dict:
     emit("TRIAGED", "collected revisions + error rate",
          error_rate=err.get("error_rate"), revisions=revs.get("revisions"))
 
-    # --- DECISION (Gemini, with deterministic fallback) -------------------
-    decision = gemini.decide(service, revs, err) or _heuristic(revs, err)
+    # --- DECISION: ADK SequentialAgent (Gemini calls the tools) -> direct Gemini -> heuristic --
+    decision = adk_brain.decide(service)
+    if decision:
+        emit("ADK", f"ADK SequentialAgent (triage→decide) ran; "
+                    f"tools called: {decision.get('_adk_tools') or '—'}")
+    else:
+        decision = gemini.decide(service, revs, err) or _heuristic(revs, err)
     decision = _validate(decision, revs)
     emit("DECISION", decision["action"], **decision)
     if decision["action"] != "ROLLBACK":
