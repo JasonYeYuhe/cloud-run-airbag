@@ -1,18 +1,3 @@
-"""Target demo app (deploys to Cloud Run).
-
-A healthy service with an injectable fault so we can reproduce "a bad revision
-shipped and starts erroring" — including the 'delay bomb' (errors begin only N
-seconds after start, i.e. outside the deploy/canary window).
-
-Fault sources:
-  - env FAULT_MODE = off | bug | http500 | delay_bomb  (a 'bad revision' ships with this)
-  - runtime POST /__fault/{mode}                        (demo harness: flip faults live)
-The canonical demo fault is `bug`: a real KeyError in total_revenue() (reads "amount"
-instead of "price") -> unhandled exception -> HTTP 500. This is the SAME root-cause bug
-the Gemini fix-PR repairs, so the story is coherent: we roll back the bad revision AND
-open a PR that fixes the exact cause. `http500` is a blunt alternative (explicit 500).
-/healthz stays 200 so Cloud Run readiness and the agent's synthetic probe work.
-"""
 from __future__ import annotations
 
 import os
@@ -48,17 +33,8 @@ ORDERS = [{"id": 1, "price": 10}, {"id": 2, "price": 25}]
 def total_revenue(orders, buggy=False):
     # A "bad deploy" ships buggy=True, which reads a key that doesn't exist on the order
     # dicts -> KeyError -> HTTP 500. The fix is to read the correct "price" key.
-    key = "amount" if buggy else "price"
+    key = "price" # Always use the correct "price" key.
     return sum(o[key] for o in orders)
-
-
-@app.get("/api/orders")
-def orders():
-    fault = _active_fault()
-    if fault == "http500":
-        return Response(status_code=500, content='{"error":"simulated outage"}',
-                        media_type="application/json")
-    return {"orders": ORDERS, "revenue": total_revenue(ORDERS, buggy=(fault == "bug"))}
 
 
 @app.post("/__fault/{mode}")
