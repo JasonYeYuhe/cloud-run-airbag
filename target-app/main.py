@@ -1,7 +1,7 @@
 """Target demo app (deploys to Cloud Run).
 
 A healthy service with an injectable fault so we can reproduce "a bad revision
-shipped and starts erroring" — including the 'delay bomb' (errors begin only N
+shipped and starts erroring" \u2014 including the 'delay bomb' (errors begin only N
 seconds after start, i.e. outside the deploy/canary window).
 
 Fault sources:
@@ -42,7 +42,7 @@ ORDERS = [{"id": 1, "price": 10}, {"id": 2, "price": 25}]
 def total_revenue(orders, buggy=False):
     # A "bad deploy" ships buggy=True, which reads a key that doesn't exist on the order
     # dicts -> KeyError -> HTTP 500. The fix is to read the correct "price" key.
-    key = "amount" if buggy else "price"
+    key = "price" # Always use the correct "price" key
     return sum(o[key] for o in orders)
 
 
