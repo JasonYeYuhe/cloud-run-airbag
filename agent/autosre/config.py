@@ -78,6 +78,13 @@ VERIFY_INTERVAL_S = float(os.getenv("AIRBAG_VERIFY_INTERVAL_S", "2"))
 # P1 close-the-transaction: cap failed undo/compensation retries (then require a human)
 MAX_UNDO_ATTEMPTS = int(os.getenv("AIRBAG_MAX_UNDO_ATTEMPTS", "2"))
 
+# CI self-correction: after the fix PR opens, watch its CI; if red, feed the failure back to
+# Gemini, re-commit a correction to the branch, retry up to N times, then escalate (PR comment).
+CI_SELF_CORRECT = _bool("AIRBAG_CI_SELF_CORRECT", "true")
+MAX_CI_RETRIES = int(os.getenv("AIRBAG_MAX_CI_RETRIES", "2"))
+CI_POLL_INTERVAL_S = float(os.getenv("AIRBAG_CI_POLL_INTERVAL_S", "15"))
+CI_POLL_TIMEOUT_S = float(os.getenv("AIRBAG_CI_POLL_TIMEOUT_S", "300"))
+
 # fix-PR slow path (optional). Empty token -> the FIX_PR stage is a no-op note.
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "")
 GITHUB_REPO = os.getenv("GITHUB_REPO", "")          # "owner/repo"

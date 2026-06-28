@@ -1,0 +1,23 @@
+name: validate-fix
+# Validates Airbag's auto-authored fix PRs: does the fix actually resolve the planted bug?
+# Runs ONLY on the agent's `airbag/fix**` branches, so main stays green (main keeps the gated
+# demo bug on purpose). A red check here is the signal for the agent's CI self-correction loop.
+on:
+  push:
+    branches: ['airbag/fix**']
+
+jobs:
+  validate-fix:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: target-app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install target-app deps
+        run: pip install -r requirements.txt
+      - name: Assert the fix resolves the bug
+        run: python validate_fix.py

@@ -56,13 +56,14 @@ Gemini fix-PR; alert-driven; secure scoped token). This plan covers what's left.
 
 ## P2 — Depth / hardening (post-submission polish; Days 9+)
 9. **Cloud Tasks / Pub/Sub** for the webhook instead of FastAPI `BackgroundTasks` (durable work).
-10. **Gradual canary on restore** (10%→50%→100% with a metric gate) instead of a 100% flip.
-11. **CI self-correction**: if the fix PR's CI goes red, feed the failure back to Gemini, retry ≤2,
-    then escalate. (Strong "agent verifies its own work" story.)
-12. **Per-incident Artifact**: persist each run's evidence (decision, signals, before/after curves) and
-    render a downloadable "incident report" in the dashboard — the verifiable thought-chain Artifact.
+10. **Gradual canary on restore** (10%→50%→100% with a metric gate) instead of a 100% flip. (in progress)
+11. ~~**CI self-correction**~~ ✅ **Done** — `github_pr.self_correct_ci` watches the fix PR's CI
+    (`validate-fix.yml` runs on `airbag/fix**` only, so main stays green); on red it feeds the failure
+    to Gemini, commits a correction, retries ≤`MAX_CI_RETRIES`, then escalates (PR comment).
+12. ~~**Per-incident Artifact**~~ ✅ **Done** — `incidents.py` + `report.py`: each run persisted and
+    rendered at `/incidents/{id}/report` (decision, signals, before/after, timeline); linked from the dashboard.
 13. **Tests**: unit-test the gcp traffic-resolution (LATEST → newest) + a local-backend integration test;
-    expand CI beyond the mock smoke test.
+    expand CI beyond the mock smoke test. *(17 tests now; growing.)*
 
 ## Risks / watch-items
 - Fine-grained GitHub token **expires 2026-07-28** — fine for the hackathon, note for after.

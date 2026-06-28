@@ -85,6 +85,20 @@ def run_self_heal(incident_id: str, service: str) -> dict:
         if pr:
             pr_url = pr["pr_url"]
             emit("FIX_PR", f"opened fix PR — {pr['summary']}", pr_url=pr_url)
+            # CI self-correction: watch the PR's CI in the background; on red, Gemini re-fixes.
+            if config.CI_SELF_CORRECT and pr.get("number"):
+                import threading
+
+                def _watch_emit(stage: str, msg: str, **data):
+                    ev = events.publish({"incident_id": incident_id, "service": service,
+                                         "stage": stage, "msg": msg, **data})
+                    incidents.record(incident_id, {"events": [ev]})
+
+                threading.Thread(
+                    target=github_pr.self_correct_ci,
+                    args=(pr["branch"], pr["number"], service, ctx, _watch_emit),
+                    daemon=True).start()
+                emit("CI_WATCH", "watching the fix PR's CI — will self-correct on red")
         else:
             emit("FIX_PR", "no fix PR opened (no change or error)")
     else:

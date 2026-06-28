@@ -49,8 +49,9 @@
   .s-FIX_PR .stg,.s-DONE .stg{color:var(--muted)}
   .s-PENDING_REVERT .stg,.s-COMPLETE_ROLLBACK .stg,.s-REVERIFYING .stg{color:var(--amber)}
   .s-FIX_DEPLOYED .stg{color:var(--cyan)}
-  .s-ROLLBACK_UNDONE .stg,.s-CLOSED .stg{color:var(--green)}
-  .s-MANUAL_INTERVENTION .stg{color:var(--red)}
+  .s-ROLLBACK_UNDONE .stg,.s-CLOSED .stg,.s-CI_GREEN .stg{color:var(--green)}
+  .s-MANUAL_INTERVENTION .stg,.s-CI_ESCALATED .stg{color:var(--red)}
+  .s-CI_WATCH .stg,.s-CI_RED .stg,.s-CI_CORRECTED .stg{color:var(--amber)}
   /* gate */
   .gate{display:flex;align-items:center;gap:14px;margin-bottom:14px}
   .big{font-size:46px;font-weight:800;font-family:var(--mono);line-height:1}

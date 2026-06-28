@@ -41,6 +41,7 @@ def open_fix_pr(service: str, error_context: str) -> dict | None:
                     if (pr.get("head", {}).get("ref", "") or "").startswith("airbag/fix"):
                         log.info("fix PR already open, reusing: %s", pr["html_url"])
                         return {"pr_url": pr["html_url"], "branch": pr["head"]["ref"],
+                                "number": pr["number"],
                                 "summary": "existing open fix PR (reused — not re-opened)"}
 
             meta = c.get(f"{_API}/repos/{repo}/contents/{path}", params={"ref": base})
@@ -69,20 +70,105 @@ def open_fix_pr(service: str, error_context: str) -> dict | None:
             pr.raise_for_status()
             url = pr.json()["html_url"]
             log.info("opened fix PR: %s", url)
-            return {"pr_url": url, "branch": branch, "summary": fix["summary"]}
+            return {"pr_url": url, "branch": branch, "number": pr.json()["number"],
+                    "summary": fix["summary"]}
     except Exception as e:  # noqa: BLE001
         log.warning("open_fix_pr failed: %s", e)
         return None
 
 
-def _gemini_fix(service: str, path: str, source: str, error_context: str) -> dict | None:
+def branch_ci(ref_runs: dict) -> tuple[str, str]:
+    """Reduce a GitHub check-runs payload to (conclusion, failure_summary).
+    conclusion ∈ {success, failure, pending, none}. Pure -> easy to unit-test."""
+    runs = ref_runs.get("check_runs", []) if ref_runs else []
+    if not runs:
+        return "none", ""
+    if any(cr.get("status") != "completed" for cr in runs):
+        return "pending", ""
+    failed = [cr for cr in runs
+              if cr.get("conclusion") not in ("success", "neutral", "skipped")]
+    if failed:
+        summary = "; ".join(
+            f"{cr.get('name')}: {((cr.get('output') or {}).get('summary') or cr.get('conclusion') or 'failed')[:200]}"
+            for cr in failed)
+        return "failure", summary
+    return "success", ""
+
+
+def _poll_ci(c: httpx.Client, repo: str, ref: str) -> tuple[str, str]:
+    """Poll the branch head's checks until terminal (success/failure) or timeout."""
+    deadline = time.time() + config.CI_POLL_TIMEOUT_S
+    while True:
+        r = c.get(f"{_API}/repos/{repo}/commits/{ref}/check-runs")
+        concl, summary = branch_ci(r.json() if r.status_code == 200 else {})
+        if concl in ("success", "failure"):
+            return concl, summary
+        if time.time() >= deadline:
+            return "timeout", ""
+        time.sleep(config.CI_POLL_INTERVAL_S)
+
+
+def self_correct_ci(branch: str, pr_number: int, service: str, error_context: str, emit) -> None:
+    """Watch the fix PR's CI; on red, feed the failure back to Gemini, commit a correction to
+    the branch, retry up to MAX_CI_RETRIES, then escalate (PR comment). Runs in a background
+    thread — emits CI_GREEN / CI_RED / CI_CORRECTED / CI_ESCALATED to the thought-chain."""
+    if not (available() and config.CI_SELF_CORRECT):
+        return
+    repo, path = config.GITHUB_REPO, config.FIX_FILE
+    try:
+        with httpx.Client(timeout=30.0, headers=_headers()) as c:
+            for attempt in range(config.MAX_CI_RETRIES + 1):
+                concl, summary = _poll_ci(c, repo, branch)
+                if concl == "success":
+                    emit("CI_GREEN", "fix PR CI is green")
+                    return
+                if concl in ("none", "timeout"):
+                    emit("CI_GREEN", f"no failing CI checks to correct ({concl})")
+                    return
+                if attempt >= config.MAX_CI_RETRIES:
+                    _comment(c, repo, pr_number,
+                             f"🛟 Airbag: CI still red after {attempt} self-correction "
+                             f"attempt(s) — needs a human. Last failure: {summary}")
+                    emit("CI_ESCALATED", f"CI still red after {attempt} attempts — escalated")
+                    return
+                emit("CI_RED", f"fix PR CI failed (attempt {attempt + 1}): {summary}")
+                meta = c.get(f"{_API}/repos/{repo}/contents/{path}", params={"ref": branch}).json()
+                source = base64.b64decode(meta["content"]).decode()
+                fix = _gemini_fix(service, path, source, error_context, ci_failure=summary)
+                if not fix or fix["fixed_content"].strip() == source.strip():
+                    emit("CI_ESCALATED", "Gemini produced no new correction — escalated")
+                    return
+                c.put(f"{_API}/repos/{repo}/contents/{path}", json={
+                    "message": f"airbag: CI self-correction #{attempt + 1}", "branch": branch,
+                    "sha": meta["sha"],
+                    "content": base64.b64encode(fix["fixed_content"].encode()).decode(),
+                }).raise_for_status()
+                emit("CI_CORRECTED", f"pushed correction #{attempt + 1} to {branch}; re-running CI")
+    except Exception as e:  # noqa: BLE001
+        emit("CI_ESCALATED", f"CI self-correction error: {e}")
+
+
+def _comment(c: httpx.Client, repo: str, pr_number: int, body: str) -> None:
+    try:
+        c.post(f"{_API}/repos/{repo}/issues/{pr_number}/comments", json={"body": body})
+    except Exception as e:  # noqa: BLE001
+        log.warning("PR comment failed: %s", e)
+
+
+def _gemini_fix(service: str, path: str, source: str, error_context: str,
+                ci_failure: str | None = None) -> dict | None:
     try:
         from google.genai import types
 
+        retry = (f"\n\nYour PREVIOUS fix did NOT pass CI. The CI failure was:\n{ci_failure}\n"
+                 "The check runs `total_revenue(ORDERS, buggy=True)` and it must NOT raise. "
+                 "Correct the file so the business path never throws in any mode.\n"
+                 if ci_failure else "")
         prompt = (
             f"A Cloud Run service '{service}' shipped a bad revision that returns HTTP 500.\n"
             f"Incident: {error_context}\n\n"
-            f"Here is `{path}`:\n```\n{source}\n```\n\n"
+            f"Here is `{path}`:\n```\n{source}\n```\n"
+            f"{retry}\n"
             "Find the bug that causes the 500 and return the FULL corrected file content "
             "(no markdown fences), plus a concise PR title and body explaining the root "
             "cause and fix. Make the minimal change that fixes it."

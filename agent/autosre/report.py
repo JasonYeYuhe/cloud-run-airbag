@@ -14,7 +14,8 @@ _STAGE_COLOR = {
     "FIX_PR": "#6b7a8d", "PENDING_REVERT": "#e3b341", "ESCALATED": "#e3b341",
     "COMPLETE_ROLLBACK": "#e3b341", "FIX_DEPLOYED": "#58a6ff", "REVERIFYING": "#e3b341",
     "ROLLBACK_UNDONE": "#3fb950", "CLOSED": "#3fb950", "MANUAL_INTERVENTION": "#f85149",
-    "DONE": "#6b7a8d",
+    "DONE": "#6b7a8d", "CI_WATCH": "#e3b341", "CI_RED": "#e3b341", "CI_CORRECTED": "#e3b341",
+    "CI_GREEN": "#3fb950", "CI_ESCALATED": "#f85149",
 }
 _STATUS_COLOR = {"mitigated": "#3fb950", "closed": "#3fb950", "noop": "#6b7a8d",
                  "escalated": "#e3b341", "compensated": "#e3b341", "manual_intervention": "#f85149"}
