@@ -59,6 +59,9 @@
     border:1px solid var(--line);color:var(--muted)}
   .badge.pending{color:var(--amber);border-color:#4a3c17;background:#1c1708}
   .badge.verified{color:#0a0e14;background:var(--green);border-color:var(--green);box-shadow:0 0 16px rgba(63,185,80,.5)}
+  .badge.manual{color:#fff;background:var(--red);border-color:var(--red)}
+  .prlink{color:var(--cyan);text-decoration:none;border-bottom:1px dotted var(--cyan)}
+  @media(max-width:880px){.wrap{grid-template-columns:1fr}#timeline{height:380px}}
   svg{width:100%;height:120px;display:block}
   .axis{stroke:var(--line);stroke-width:1}
   .curve{fill:none;stroke:var(--red);stroke-width:2.5;transition:.3s}
@@ -110,6 +113,7 @@
     <div class="gate">
       <div class="big" id="rate">—</div>
       <div class="badge pending" id="gate">PENDING</div>
+      <span class="badge" id="txn" style="display:none"></span>
     </div>
     <svg viewBox="0 0 300 120" preserveAspectRatio="none">
       <line class="axis" x1="0" y1="119" x2="300" y2="119"/>
@@ -154,15 +158,20 @@ function setDot(id,on){ $(id).classList.toggle('on', !!on); }
 
 function addEvent(ev){
   const stage = ev.stage || '';
-  if(stage==='RUN_START'){ tl.innerHTML=''; series=[]; badRev=goodRev=null; drawCurve(); $('#gate').className='badge pending'; $('#gate').textContent='PENDING'; $('#rate').textContent='—'; $('#decision').innerHTML='<span class="muted">analyzing…</span>'; $('#report').innerHTML=''; }
+  if(stage==='RUN_START'){ tl.innerHTML=''; series=[]; badRev=goodRev=null; drawCurve(); $('#gate').className='badge pending'; $('#gate').textContent='PENDING'; $('#rate').textContent='—'; $('#decision').innerHTML='<span class="muted">analyzing…</span>'; $('#report').innerHTML=''; $('#txn').style.display='none'; }
   if(ev.incident_id) currentIncident=ev.incident_id;
   if(TERMINAL.has(stage)) showReport();
+  if(stage==='PENDING_REVERT') setTxn('⏳ ROLLBACK HELD','pending');
+  if(['COMPLETE_ROLLBACK','FIX_DEPLOYED','REVERIFYING','CANARY'].includes(stage)) setTxn('↻ RESTORING','pending');
+  if(stage==='CLOSED') setTxn('🔒 TXN CLOSED','verified');
+  if(stage==='MANUAL_INTERVENTION') setTxn('⚠ MANUAL','manual');
   if(stage==='CONNECTED'){ setDot('#d-sse',true); setBackend(ev.backend); return; }
 
   const row = document.createElement('div');
   row.className = 'ev s-'+stage;
   const t = ev.ts ? new Date(ev.ts*1000).toLocaleTimeString() : '';
-  row.innerHTML = `<span class="stg">${stage}</span><span class="msg">${esc(ev.msg||'')}</span><span class="t">${t}</span>`;
+  const link = ev.pr_url ? ` <a class="prlink" href="${encodeURI(ev.pr_url)}" target="_blank" rel="noopener">↗ fix PR</a>` : '';
+  row.innerHTML = `<span class="stg">${stage}</span><span class="msg">${esc(ev.msg||'')}${link}</span><span class="t">${t}</span>`;
   tl.appendChild(row); tl.scrollTop = tl.scrollHeight;
 
   if(stage==='TRIAGED'){ renderRevs(ev.revisions); pushRate(ev.error_rate); }
@@ -200,6 +209,7 @@ function drawCurve(){
 function verified(ev){
   const g=$('#gate'); g.className='badge verified'; g.textContent='✓ VERIFIED RESOLVED';
 }
+function setTxn(text,cls){ const t=$('#txn'); t.style.display='inline-block'; t.className='badge '+(cls||''); t.textContent=text; }
 function showReport(){
   if(!currentIncident || !live) return;   // only for real (live) incidents, not the offline self-play
   $('#report').innerHTML = `<a href="/incidents/${encodeURIComponent(currentIncident)}/report" target="_blank"
@@ -276,7 +286,17 @@ const SCRIPT=[
   [900, {stage:'VERIFYING',msg:'attempt 2/6',error_rate:0.15,probe_ok:true}],
   [900, {stage:'VERIFYING',msg:'attempt 3/6',error_rate:0.0,probe_ok:true}],
   [700, {stage:'MITIGATED',msg:'error rate back to zero — recovery proven',before:1.0,after:0.0}],
-  [700, {stage:'FIX_PR',msg:'Gemini opened a fix PR for the KeyError → real CI green'}],
+  [600, {stage:'FIX_PR',msg:'Gemini opened a fix PR for the KeyError',pr_url:'https://github.com/JasonYeYuhe/cloud-run-airbag/pull/3'}],
+  [400, {stage:'CI_WATCH',msg:'watching the fix PR CI — will self-correct on red'}],
+  [800, {stage:'CI_GREEN',msg:'fix PR CI is green'}],
+  [500, {stage:'PENDING_REVERT',msg:'rollback held until the fix deploys + is verified'}],
+  [800, {stage:'COMPLETE_ROLLBACK',msg:'fix deployed — verifying before restoring traffic'}],
+  [500, {stage:'FIX_DEPLOYED',msg:'candidate fix revision: airbag-target-00003-fix'}],
+  [600, {stage:'CANARY',msg:'10% → fix · 90% → healthy; gating on health'}],
+  [600, {stage:'CANARY',msg:'50% → fix · 50% → healthy; gating on health'}],
+  [600, {stage:'CANARY',msg:'100% → fix; gating on health'}],
+  [600, {stage:'ROLLBACK_UNDONE',msg:'temporary rollback undone — traffic restored to the fix'}],
+  [400, {stage:'CLOSED',msg:'incident closed: rolled back, fixed, and traffic restored'}],
 ];
 function playScript(){
   if(live) return;
