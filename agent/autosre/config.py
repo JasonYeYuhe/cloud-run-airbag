@@ -60,3 +60,9 @@ ERROR_RATE_THRESHOLD = float(os.getenv("AIRBAG_ERROR_RATE_THRESHOLD", "0.05"))
 # verify loop
 VERIFY_ATTEMPTS = int(os.getenv("AIRBAG_VERIFY_ATTEMPTS", "6"))
 VERIFY_INTERVAL_S = float(os.getenv("AIRBAG_VERIFY_INTERVAL_S", "2"))
+
+# fix-PR slow path (optional). Empty token -> the FIX_PR stage is a no-op note.
+GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "")
+GITHUB_REPO = os.getenv("GITHUB_REPO", "")          # "owner/repo"
+FIX_FILE = os.getenv("AIRBAG_FIX_FILE", "target-app/main.py")
+FIX_BASE = os.getenv("AIRBAG_FIX_BASE", "main")

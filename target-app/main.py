@@ -36,12 +36,23 @@ def healthz():
     return {"status": "ok"}
 
 
+ORDERS = [{"id": 1, "price": 10}, {"id": 2, "price": 25}]
+
+
+def total_revenue(orders, buggy=False):
+    # A "bad deploy" ships buggy=True, which reads a key that doesn't exist on the order
+    # dicts -> KeyError -> HTTP 500. The fix is to read the correct "price" key.
+    key = "amount" if buggy else "price"
+    return sum(o[key] for o in orders)
+
+
 @app.get("/api/orders")
 def orders():
-    if _active_fault() == "http500":
+    fault = _active_fault()
+    if fault == "http500":
         return Response(status_code=500, content='{"error":"simulated outage"}',
                         media_type="application/json")
-    return {"orders": [{"id": 1}, {"id": 2}]}
+    return {"orders": ORDERS, "revenue": total_revenue(ORDERS, buggy=(fault == "bug"))}
 
 
 @app.post("/__fault/{mode}")

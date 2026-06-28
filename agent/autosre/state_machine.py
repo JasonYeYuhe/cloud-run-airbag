@@ -61,8 +61,18 @@ def run_self_heal(incident_id: str, service: str) -> dict:
     emit("MITIGATED", note or "error rate back to zero — recovery proven",
          before=before.get("error_rate"), after=after.get("error_rate"))
 
-    # --- FIX PR (stretch) -------------------------------------------------
-    emit("FIX_PR", "stretch: Gemini-authored fix PR + real CI not yet wired")
+    # --- FIX PR (slow path): Gemini opens a real fix PR through CI ---------
+    from . import github_pr
+    if github_pr.available():
+        ctx = (f"bad revision {decision.get('bad_revision')} on {service} returned HTTP 500; "
+               f"evidence: {decision.get('evidence')}")
+        pr = github_pr.open_fix_pr(service, ctx)
+        if pr:
+            emit("FIX_PR", f"opened fix PR — {pr['summary']}", pr_url=pr["pr_url"])
+        else:
+            emit("FIX_PR", "no fix PR opened (no change or error)")
+    else:
+        emit("FIX_PR", "fix-PR slow path not configured (set GITHUB_TOKEN/GITHUB_REPO)")
 
     return {"status": "mitigated", "incident_id": incident_id,
             "rolled_back_to": target, "events": run_events}

@@ -13,3 +13,10 @@ class IncidentDecision(BaseModel):
     confidence: float = Field(ge=0, le=1)
     reasoning: str = ""
     evidence: List[str] = []
+
+
+class FixResult(BaseModel):
+    fixed_content: str  # the full corrected file
+    pr_title: str
+    pr_body: str
+    summary: str        # one-line root cause + fix
