@@ -12,7 +12,7 @@ from __future__ import annotations
 import logging
 import time
 
-from . import adk_brain, config, events, gemini, tools
+from . import adk_brain, config, events, gemini, pending, tools
 
 log = logging.getLogger("airbag.sm")
 
@@ -68,20 +68,114 @@ def run_self_heal(incident_id: str, service: str) -> dict:
 
     # --- FIX PR (slow path): Gemini opens a real fix PR through CI ---------
     from . import github_pr
+    pr_url = None
     if github_pr.available():
         ctx = (f"bad revision {decision.get('bad_revision')} on {service} returned HTTP 500 on the "
                f"business path {config.PROBE_PATH} (unhandled exception, not an explicit error "
                f"response); evidence: {decision.get('evidence')}")
         pr = github_pr.open_fix_pr(service, ctx)
         if pr:
-            emit("FIX_PR", f"opened fix PR — {pr['summary']}", pr_url=pr["pr_url"])
+            pr_url = pr["pr_url"]
+            emit("FIX_PR", f"opened fix PR — {pr['summary']}", pr_url=pr_url)
         else:
             emit("FIX_PR", "no fix PR opened (no change or error)")
     else:
         emit("FIX_PR", "fix-PR slow path not configured (set GITHUB_TOKEN/GITHUB_REPO)")
 
+    # Remember the temporary rollback so it can be UNDONE once the fix deploys + verifies
+    # (the fix-PR's CI calls /internal/complete-rollback; or the dashboard's Verify & Undo).
+    pending.set_pending(service, {
+        "incident_id": incident_id, "bad_revision": decision.get("bad_revision"),
+        "rolled_back_to": target, "rollback_at_epoch": rollback_at, "pr_url": pr_url})
+    emit("PENDING_REVERT", "rollback held until the fix deploys + is verified",
+         rolled_back_to=target, pr_url=pr_url)
+
     return {"status": "mitigated", "incident_id": incident_id,
             "rolled_back_to": target, "events": run_events}
+
+
+# --- P1: close the transaction (undo the temporary rollback once the fix ships) --------
+def complete_rollback(service: str, fix_revision: str | None = None,
+                      git_sha: str | None = None, pr_url: str | None = None) -> dict:
+    """Undo the temporary rollback after the fix deploys. Verify the candidate IS the fix (a
+    new, post-rollback, healthy revision — or the exact revision CI deployed), restore traffic
+    to it, and CLOSE the transaction. On failure, compensate by routing back to the safe
+    rolled-back revision and escalate (never loop)."""
+    rec = pending.try_begin_complete(service)
+    if rec is None:
+        return {"status": "noop",
+                "reason": "no pending rollback (or a completion is already running)",
+                "service": service}
+    incident_id = rec.get("incident_id", "unknown")
+    run_events: list[dict] = []
+
+    def emit(stage: str, msg: str, **data):
+        log.info("[%s] %s %s", stage, msg, data or "")
+        ev = events.publish({"incident_id": incident_id, "service": service,
+                             "stage": stage, "msg": msg, **data})
+        run_events.append(ev)
+
+    closed = False
+    try:
+        emit("COMPLETE_ROLLBACK",
+             f"fix reported (revision={fix_revision or 'auto'}, sha={git_sha or '—'}); "
+             f"verifying before restoring traffic")
+        revs = tools.list_cloud_run_revisions(service, config.GCP_REGION)
+        candidate = _select_fix_revision(revs, rec, fix_revision)
+        if not candidate:
+            emit("MANUAL_INTERVENTION",
+                 "no healthy fix revision found after the rollback — not restoring traffic")
+            return {"status": "manual_intervention", "reason": "no candidate fix revision",
+                    "incident_id": incident_id, "events": run_events}
+        emit("FIX_DEPLOYED", f"candidate fix revision: {candidate}",
+             revision=candidate, git_sha=git_sha, pr_url=pr_url or rec.get("pr_url"))
+
+        # Restore traffic to the fix, then PROVE it's healthy; compensate if it isn't.
+        tools.rollback_traffic_to_revision(service, config.GCP_REGION, candidate)
+        restore_at = time.time()
+        emit("REVERIFYING", f"100% traffic -> {candidate}; proving the fix is healthy")
+        if _verify(service, emit, since_epoch=restore_at):
+            emit("ROLLBACK_UNDONE",
+                 f"temporary rollback undone — traffic restored to the fix ({candidate})")
+            emit("CLOSED", "incident closed: rolled back, fixed, and traffic restored to the fix")
+            closed = True
+            return {"status": "closed", "restored_to": candidate,
+                    "incident_id": incident_id, "events": run_events}
+        # Compensating action: route back to the known-safe rolled-back revision.
+        safe = rec.get("rolled_back_to")
+        tools.rollback_traffic_to_revision(service, config.GCP_REGION, safe)
+        emit("MANUAL_INTERVENTION",
+             f"fix revision {candidate} failed verification — compensated: traffic back on "
+             f"safe revision {safe}")
+        return {"status": "compensated", "safe_revision": safe,
+                "incident_id": incident_id, "events": run_events}
+    finally:
+        pending.end_complete(service, closed=closed)
+
+
+def _select_fix_revision(revs: dict, rec: dict, fix_revision: str | None) -> str | None:
+    """The fix is either the exact revision CI deployed, or the newest READY revision created
+    after the rollback that isn't the bad or the rolled-back-to revision."""
+    ready = {r["name"] for r in revs.get("revisions", []) if r.get("ready")}
+    bad, safe = rec.get("bad_revision"), rec.get("rolled_back_to")
+    if fix_revision:
+        return fix_revision if (fix_revision in ready and fix_revision not in (bad, safe)) else None
+    rollback_at = rec.get("rollback_at_epoch") or 0.0
+    cands = [r for r in revs.get("revisions", [])
+             if r.get("ready") and r["name"] not in (bad, safe)
+             and _epoch(r.get("create_time")) > rollback_at]
+    cands.sort(key=lambda r: _epoch(r.get("create_time")), reverse=True)
+    return cands[0]["name"] if cands else None
+
+
+def _epoch(iso: str | None) -> float:
+    if not iso:
+        return 0.0
+    try:
+        import datetime as _dt
+        return _dt.datetime.fromisoformat(iso.replace("Z", "+00:00")).timestamp()
+    except Exception:  # noqa: BLE001
+        return 0.0
 
 
 def _heuristic(revs: dict, err: dict) -> dict:

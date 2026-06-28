@@ -2,7 +2,8 @@
 
 ## The 90-second live flow (what the dashboard shows)
 Dashboard controls: **💣 Break** (route traffic to the bad revision) · **🚑 Heal** (trigger the
-agent) · **↺ Reset** (route back to healthy) · **▶ Run demo** (Break then Heal, one click).
+agent) · **✅ Verify & Undo** (verify the deployed fix, then undo the temporary rollback) ·
+**↺ Reset** (route back to healthy) · **▶ Run demo** (Break then Heal, one click).
 Repeatable: Break → Heal → Reset, as many times as you like.
 
 1. **Set the scene (10s).** "A bad revision shipped hours ago. The canary window is long gone. Nobody's watching." Target app is green.
@@ -11,7 +12,12 @@ Repeatable: Break → Heal → Reset, as many times as you like.
    `RECEIVED → TRIAGED → ADK(triage→decide) → DECISION(ROLLBACK, conf ~0.9) → ROLLBACK_APPLIED → VERIFYING… → MITIGATED → FIX_PR`.
    The revision traffic bar flips healthy→100%, the error-rate curve drops to 0, the gate turns green **✓ VERIFIED RESOLVED**. No human touched it.
 4. **The point (15s).** "Traffic is back on the healthy revision, and we *proved* the 5xx rate hit zero — not 'metrics didn't get worse'. The decision ran through the **ADK SequentialAgent** (Gemini calling Cloud Run tools itself); the deterministic state machine executed it. Then Gemini opened a **fix PR for that same `KeyError`** — rolled back *and* root-cause fixed."
-5. **Reset (5s).** Click **↺ Reset** to route back to the healthy baseline and run it again.
+5. **Close the loop (optional, ~30s).** After the fix PR merges and a fixed revision deploys,
+   click **✅ Verify & Undo** (or let the fix-PR's CI call `/internal/complete-rollback`). The
+   agent verifies the new revision IS the fix, restores traffic to it, and the chain reaches
+   `FIX_DEPLOYED → REVERIFYING → ROLLBACK_UNDONE → CLOSED` — and if the "fix" were unhealthy it
+   would **compensate** straight back to the safe revision (`MANUAL_INTERVENTION`).
+6. **Reset (5s).** Click **↺ Reset** to route back to the healthy baseline and run it again.
 
 > Run it locally: `./run-local.sh` → http://localhost:8080. (The dashboard also self-plays offline if the agent isn't up.)
 > Run it on live Cloud Run: open the agent URL (operator link with `?token=` pre-fills the demo token), then Break → Heal → Reset.
@@ -33,5 +39,5 @@ governance. (ADK can be disabled with `AIRBAG_USE_ADK=false`, falling back to a 
 call then a heuristic — the heal never blocks on the LLM.)
 
 ## Real vs stretch (be honest with judges)
-- **Real now:** detection → **ADK/Gemini decision** → **rollback** → **verified recovery** → **Gemini fix PR through real CI**, end-to-end on a live target. Three execution backends (mock/local/gcp); same agent code. The fix PR is real (e.g. PR #3, CI green).
-- **Stretch / roadmap (P1):** auto-**undo** the temporary rollback once the fix deploys and is verified (CI calls `/internal/complete-rollback`). Today the rollback is held until the fix ships — the safe core stands on its own.
+- **Real now:** detection → **ADK/Gemini decision** → **rollback** → **verified recovery** → **Gemini fix PR through real CI** → **verify the fix + undo the rollback (or compensate)**, end-to-end on a live target. Three execution backends (mock/local/gcp); same agent code. The fix PR is real (e.g. PR #3, CI green); the close-the-transaction step is `complete_rollback` (5 tests), triggered by the dashboard or `/internal/complete-rollback`.
+- **Stretch / roadmap (P2):** the *fully-unattended* CI trigger (`complete-rollback.yml` deploys the fix then calls the endpoint) needs a one-time Workload Identity Federation binding; durable Firestore state; canary restore.

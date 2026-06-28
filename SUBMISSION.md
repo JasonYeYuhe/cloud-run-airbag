@@ -43,7 +43,7 @@ independent prod alert (Cloud Monitoring 5xx, even out-of-window)
   → rollback Cloud Run traffic to the last-good revision     [STOP THE BLEEDING — reversible]
   → prove error-rate == 0 (Cloud Logging) AND business-path probe ok   [PROOF OF RECOVERY]
   → Gemini opens a fix PR for the root cause → real GitHub Actions CI   [PERMANENT FIX]
-  → (roadmap, P1) on CI-green + deploy + verified, undo the temporary rollback   [CLOSE THE TRANSACTION]
+  → fix deploys → verify it IS the fix → undo the temporary rollback (compensate if it fails)   [CLOSE THE TRANSACTION]
 ```
 **Design rule (the governance story):** a deterministic FastAPI state machine executes every
 production action; **Gemini only diagnoses and emits a structured decision** through ADK. The LLM
@@ -70,15 +70,19 @@ never freely touches prod. Judges see a governed control loop, not a chatbot wit
 - A real **Cloud Monitoring 5xx alert** auto-triggers the heal with **no human** (~3–4 min).
 - Gemini opens a real **fix PR** for the planted `KeyError` → GitHub Actions **CI green**
   (e.g. [PR #3](https://github.com/JasonYeYuhe/cloud-run-airbag/pull/3)).
-- One-click repeatable demo: **Break → Heal → Reset** from the dashboard.
+- One-click repeatable demo: **Break → Heal → (deploy fix) → Verify & Undo → Reset** from the dashboard.
+- **Close the transaction:** verify the deployed revision **is** the fix (the CI-reported
+  revision/sha, or a post-rollback healthy candidate), restore traffic to it, and CLOSE — or
+  **compensate** back to the safe revision if the fix fails (`complete_rollback`, 5 tests).
+  Triggered by `/internal/complete-rollback` (token-gated) or the dashboard's **Verify & Undo**.
 - Three execution backends (mock / local / gcp) behind one agent codebase; `/demo/*` is
   token-gated so the public dashboard is watch-only.
 
-**Roadmap (P1/P2, not yet claimed as done):**
-- **Close the transaction:** auto-undo the temporary rollback once the fix deploys + verifies
-  (the fix-PR's CI calls `/internal/complete-rollback`; verify the new revision *is* the fix
-  before restoring; compensating action on mismatch). Today the rollback is held until the fix
-  ships — deliberate, and the safe core stands alone.
+**Roadmap (P2, honestly not done):**
+- **Fully-unattended CI close:** the included `.github/workflows/complete-rollback.yml` deploys
+  the fix and calls `/internal/complete-rollback`, but is gated on a one-time **Workload Identity
+  Federation** binding (GitHub Actions → GCP deploy). Until that's wired, the close is triggered
+  by the dashboard button (or a manual `curl`/`workflow_dispatch`).
 - Durable state (Firestore) instead of in-process idempotency; Cloud Tasks/Pub-Sub worker;
   gradual canary on restore; CI self-correction loop.
 

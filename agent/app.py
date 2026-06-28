@@ -22,7 +22,7 @@ from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, StreamingResponse
 
 from autosre import config, events, tools
-from autosre.state_machine import run_self_heal
+from autosre.state_machine import complete_rollback, run_self_heal
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("airbag")
@@ -154,6 +154,14 @@ def demo_run(background_tasks: BackgroundTasks):
             "broke_to": res.get("active_revision")}
 
 
+@app.post("/demo/complete-rollback", dependencies=[Depends(require_demo_token)])
+def demo_complete_rollback(background_tasks: BackgroundTasks):
+    """Dashboard 'Verify & Undo Rollback' button: verify the deployed fix, restore traffic
+    to it, close the transaction (or compensate). Half-automated trigger for the demo."""
+    background_tasks.add_task(complete_rollback, config.TARGET_SERVICE, None, None, None)
+    return {"status": "accepted", "service": config.TARGET_SERVICE}
+
+
 # legacy aliases (scripts/gcp-demo.sh + older docs)
 @app.post("/demo/inject", dependencies=[Depends(require_demo_token)])
 def demo_inject(background_tasks: BackgroundTasks):
@@ -163,6 +171,33 @@ def demo_inject(background_tasks: BackgroundTasks):
 @app.post("/demo/trigger", dependencies=[Depends(require_demo_token)])
 def demo_trigger(background_tasks: BackgroundTasks):
     return demo_heal(background_tasks)
+
+
+# --- P1: CI-triggered transaction close (the fix PR's CI calls this after deploy) -------
+def require_internal_token(request: Request) -> None:
+    """Gate the machine-to-machine endpoint with the webhook token (CI holds it). Open only
+    if no webhook token is configured (local)."""
+    if not config.WEBHOOK_TOKEN:
+        return
+    supplied = request.headers.get("x-airbag-token") or request.query_params.get("token", "")
+    if not (supplied and hmac.compare_digest(supplied, config.WEBHOOK_TOKEN)):
+        raise HTTPException(status_code=401, detail="invalid token")
+
+
+@app.post("/internal/complete-rollback", status_code=202,
+          dependencies=[Depends(require_internal_token)])
+async def internal_complete_rollback(request: Request, background_tasks: BackgroundTasks):
+    """Called by the fix PR's GitHub Action after it deploys the fix. Body (all optional):
+    {service, revision, git_sha, pr_url}. Verifies the fix is healthy before restoring
+    traffic; compensates on failure. Idempotent (a duplicate call is a no-op)."""
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        body = {}
+    service = body.get("service") or config.TARGET_SERVICE
+    background_tasks.add_task(complete_rollback, service, body.get("revision"),
+                             body.get("git_sha"), body.get("pr_url"))
+    return {"status": "accepted", "service": service}
 
 
 # --- production webhooks -----------------------------------------------------

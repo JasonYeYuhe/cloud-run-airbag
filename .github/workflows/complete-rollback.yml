@@ -1,0 +1,52 @@
+name: complete-rollback
+# P1 "close the transaction": after a fix is merged, deploy it and ask Airbag to verify the
+# fix is healthy and UNDO the temporary rollback (restore traffic to the fix). This is the
+# CI-trigger path (the review consensus' "trigger via CI, not webhooks").
+#
+# GATED on `vars.AIRBAG_AGENT_URL` being set, so it stays a no-op (CI green) until you wire it.
+# One-time setup (repo Settings → Secrets and variables → Actions):
+#   vars:    AIRBAG_AGENT_URL, TARGET_SERVICE, GCP_REGION, GCP_WIF_PROVIDER, GCP_DEPLOY_SA
+#   secrets: AIRBAG_WEBHOOK_TOKEN
+# GCP_WIF_PROVIDER/GCP_DEPLOY_SA come from a Workload Identity Federation binding for this repo
+# (gcloud iam workload-identity-pools ...). Until then, run it manually (workflow_dispatch) or
+# use the dashboard's "Verify & Undo Rollback" button.
+on:
+  push:
+    branches: [main]
+    paths: ['target-app/**']      # a merged fix to the target app
+  workflow_dispatch:
+    inputs:
+      revision:
+        description: "Fix revision name (optional; auto-detected from latest if blank)"
+        required: false
+
+jobs:
+  deploy-and-close:
+    if: ${{ vars.AIRBAG_AGENT_URL != '' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write            # for Workload Identity Federation
+    steps:
+      - uses: actions/checkout@v4
+      - id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOY_SA }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - name: Deploy the fix to Cloud Run
+        id: deploy
+        run: |
+          gcloud run deploy "${{ vars.TARGET_SERVICE }}" --source target-app \
+            --region "${{ vars.GCP_REGION }}" --allow-unauthenticated \
+            --update-env-vars FAULT_MODE=off -q
+          REV="$(gcloud run services describe "${{ vars.TARGET_SERVICE }}" \
+            --region "${{ vars.GCP_REGION }}" --format='value(status.latestCreatedRevisionName)')"
+          echo "revision=${{ github.event.inputs.revision || '' }}${REV}" >> "$GITHUB_OUTPUT"
+      - name: Ask Airbag to verify the fix + undo the temporary rollback
+        run: |
+          curl -fsS -X POST "${{ vars.AIRBAG_AGENT_URL }}/internal/complete-rollback" \
+            -H "x-airbag-token: ${{ secrets.AIRBAG_WEBHOOK_TOKEN }}" \
+            -H "content-type: application/json" \
+            -d "{\"service\":\"${{ vars.TARGET_SERVICE }}\",\"revision\":\"${{ steps.deploy.outputs.revision }}\",\"git_sha\":\"${GITHUB_SHA}\"}"

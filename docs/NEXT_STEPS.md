@@ -29,14 +29,30 @@ Gemini fix-PR; alert-driven; secure scoped token). This plan covers what's left.
    confirm LICENSE. Verify the registration/submission form requirements on the Findy site.
 6. **Cost & teardown**: document min-instances cost; a `teardown.sh` to delete services/secrets/policy.
 
-## P1 — Close the transaction (marquee differentiation completion; Days 5–8)
-7. **Undo the temporary rollback after the fix ships.** Today the rollback is permanent until manual.
-   Complete the "one transaction, two compensating actions" story: when the fix PR merges and a new
-   healthy revision deploys, the agent verifies it and shifts traffic back to the fixed revision
-   (`--to-latest`). Trigger via a **GitHub merge/deploy webhook** (or a bounded poll on the PR + new
-   revision health). New stages: `FIX_DEPLOYED → REVERIFIED → ROLLBACK_UNDONE → CLOSED`.
-8. **Durable state (Firestore).** Replace in-process `_seen_incidents` + the "pending-revert" state
-   with Firestore (idempotent across restarts / multi-instance). Removes the biggest production caveat.
+## P1 — Close the transaction ✅ DONE (marquee differentiation completed)
+7. ~~**Undo the temporary rollback after the fix ships.**~~ **Done.** `complete_rollback`
+   (`agent/autosre/state_machine.py`) verifies the deployed revision **is** the fix (the
+   CI-reported `revision`/`git_sha`, or the newest READY revision created after the rollback that
+   isn't the bad/safe one), restores traffic to it, and CLOSEs — or **compensates** back to the
+   safe revision and escalates (`MANUAL_INTERVENTION`, never loops). Stages:
+   `PENDING_REVERT → COMPLETE_ROLLBACK → FIX_DEPLOYED → REVERIFYING → ROLLBACK_UNDONE → CLOSED`.
+   Pending state is in-process (`pending.py`) + `--min-instances=1` (Firestore skipped per review).
+   Triggers: the dashboard **Verify & Undo** button, or `POST /internal/complete-rollback`
+   (token-gated) from the fix-PR's CI.
+   - **Remaining for *fully-unattended* CI close:** wire `.github/workflows/complete-rollback.yml`
+     (provided, gated on `vars.AIRBAG_AGENT_URL`). One-time Workload Identity Federation setup:
+     ```bash
+     gcloud iam workload-identity-pools create github --location=global
+     gcloud iam workload-identity-pools providers create-oidc github \
+       --workload-identity-pool=github --location=global \
+       --issuer-uri=https://token.actions.githubusercontent.com \
+       --attribute-mapping="google.subject=assertion.sub,attribute.repository=assertion.repository"
+     # bind the deploy SA to the repo, then set repo Actions vars/secrets (see the workflow header)
+     ```
+
+## P1.5 — Durable state (Firestore) — optional, post-submission
+8. Replace in-process `_seen_incidents` + `pending.py` with Firestore (idempotent across restarts /
+   multi-instance). Skipped for the hackathon per the review (min-instances=1 carries the demo).
 
 ## P2 — Depth / hardening (post-submission polish; Days 9+)
 9. **Cloud Tasks / Pub/Sub** for the webhook instead of FastAPI `BackgroundTasks` (durable work).

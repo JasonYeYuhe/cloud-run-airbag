@@ -1,21 +1,33 @@
-"""In-memory backend (CI/tests). Simulates a bad revision serving, then recovery."""
+"""In-memory backend (CI/tests). Simulates a bad revision serving, then recovery, and
+(for the P1 transaction) a later fix revision deployed after the rollback."""
 from __future__ import annotations
 
-_STATE = {"rolled_back": False}
+_STATE = {"rolled_back": False, "fix_deployed": False}
 
 
 def reset() -> None:
     _STATE["rolled_back"] = False
+    _STATE["fix_deployed"] = False
+
+
+def deploy_fix() -> None:
+    """Simulate the fix PR's CI deploying a new healthy revision after the rollback."""
+    _STATE["fix_deployed"] = True
 
 
 def list_cloud_run_revisions(service: str, region: str) -> dict:
     rb = _STATE["rolled_back"]
-    return {"service": service, "revisions": [
+    revs = [
         {"name": f"{service}-00002-bad", "ready": True,
          "traffic_percent": 0 if rb else 100, "create_time": "2026-06-28T00:00:00Z"},
         {"name": f"{service}-00001-good", "ready": True,
          "traffic_percent": 100 if rb else 0, "create_time": "2026-06-27T22:00:00Z"},
-    ]}
+    ]
+    if _STATE["fix_deployed"]:
+        # far-future create_time so it sorts as "created after the rollback"
+        revs.insert(0, {"name": f"{service}-00003-fix", "ready": True,
+                        "traffic_percent": 0, "create_time": "2099-01-01T00:00:00Z"})
+    return {"service": service, "revisions": revs}
 
 
 def query_error_rate(service: str, region: str, window_minutes: int = 5,

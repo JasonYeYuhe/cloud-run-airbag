@@ -2,15 +2,18 @@
 
 ## State machine (the transaction)
 ```
-RECEIVED → LOCKED(idempotent) → TRIAGED → DECISION
+RECEIVED → TRIAGED → ADK(triage→decide) → DECISION
    ├─ OBSERVE → DONE
-   └─ ROLLBACK → ROLLBACK_APPLIED → VERIFYING ──(error→0 & probe ok)──→ MITIGATED
+   └─ ROLLBACK → ROLLBACK_APPLIED → VERIFYING ──(error→0 & probe ok)──→ MITIGATED → FIX_PR → PENDING_REVERT
                                        └─(budget exceeded)→ ESCALATED
-   MITIGATED → FIX_PR_OPEN → CI_GREEN → DEPLOY_FIXED → VERIFIED → REVERT_TEMP_ROLLBACK → CLOSED   (stretch)
+
+   # close the transaction (complete_rollback, triggered by the fix-PR CI or the dashboard):
+   COMPLETE_ROLLBACK → FIX_DEPLOYED → REVERIFYING ──(fix healthy)──→ ROLLBACK_UNDONE → CLOSED
+                                          └─(fix unhealthy / none)──→ MANUAL_INTERVENTION (compensate: traffic back to safe revision)
 ```
 - **Fast path (deterministic, reversible):** rollback Cloud Run traffic to the last-good revision. Stops the bleeding; zero data-migration risk.
-- **Slow path (probabilistic, human-gated):** Gemini writes a fix → real GitHub Actions CI → deploy → verify → undo the temporary rollback.
-- The two paths are one transaction with compensating actions (undo rollback only after the permanent fix is verified).
+- **Slow path:** Gemini writes a fix → real GitHub Actions CI → deploy → **verify the deployed revision IS the fix** → undo the temporary rollback.
+- The two paths are one transaction with a **compensating action**: traffic is restored to the fix only after it's proven healthy; otherwise it routes straight back to the safe rolled-back revision. The undo is triggered by `/internal/complete-rollback` (the fix-PR's CI) or the dashboard's **Verify & Undo** button. State lives in-process (`pending.py`) + `--min-instances=1`; durable Firestore is roadmap.
 
 ## Components
 | Concern | Tech | Notes |

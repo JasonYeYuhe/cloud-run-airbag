@@ -1,6 +1,6 @@
 # Airbag — autonomous release airbag for Cloud Run
 
-> Detects a bad Cloud Run deploy **even hours after it shipped**, instantly rolls traffic back to the last healthy revision, **proves recovery** via Cloud Monitoring/Logging, then has Gemini open a real fix PR through CI/CD. *(Closing the loop — auto-undoing the temporary rollback once the fix is verified — is the next milestone; see [Roadmap](docs/NEXT_STEPS.md). Today the rollback is held until the fix ships.)*
+> Detects a bad Cloud Run deploy **even hours after it shipped**, instantly rolls traffic back to the last healthy revision, **proves recovery** via Cloud Monitoring/Logging, has Gemini open a real fix PR through CI/CD — then, once the fix deploys, **verifies it and undoes the temporary rollback** to close the loop (compensating back to safety if the fix fails). Triggered by the fix-PR's CI or one click in the dashboard.
 
 Built for the **DevOps × AI Agent Hackathon 2026** (Google Cloud Japan / Findy). Stack: **Gemini + ADK + Cloud Run** (required), FastAPI, Cloud Monitoring/Logging, GitHub App + Actions.
 
@@ -12,9 +12,9 @@ independent prod alert (even out-of-window)
   → auto rollback Cloud Run traffic to last-good revision   (deterministic, reversible — STOP THE BLEEDING)  ✅ live
   → prove error-rate == 0 via Monitoring/Logging + synthetic probe   (PROOF OF RECOVERY)                    ✅ live
   → Gemini/ADK open a fix PR → real GitHub Actions CI         (PERMANENT FIX)                                ✅ live
-  → on green + deploy + verified, undo the temporary rollback (CLOSE THE TRANSACTION)                        🚧 roadmap (P1)
+  → on deploy + verified, undo the temporary rollback (CLOSE THE TRANSACTION)                                ✅ verify + undo + compensate
 ```
-The first three steps run unattended on live Cloud Run today; closing the transaction (the last step) is the next milestone.
+All four steps run on live Cloud Run. The close-the-transaction step verifies the deployed revision **is** the fix (matches the CI-reported revision/sha, or a post-rollback healthy candidate) before restoring traffic, and **compensates** back to the safe revision if the fix fails — triggered by the fix-PR's CI (`/internal/complete-rollback`) or the dashboard's **Verify & Undo** button. *(Fully-unattended CI deploy needs a one-time Workload Identity Federation binding; see [docs/NEXT_STEPS.md](docs/NEXT_STEPS.md).)*
 
 **Design rule:** a deterministic state machine executes production actions; **Gemini only diagnoses and emits a structured decision** — the LLM never freely touches prod.
 
