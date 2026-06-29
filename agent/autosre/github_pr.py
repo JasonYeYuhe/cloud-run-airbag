@@ -120,6 +120,10 @@ def _poll_ci(c: httpx.Client, repo: str, ref: str) -> tuple[str, str]:
     deadline = time.time() + config.CI_POLL_TIMEOUT_S
     while True:
         r = c.get(f"{_API}/repos/{repo}/commits/{ref}/check-runs")
+        if r.status_code in (401, 403):
+            # the token can't read check-runs (fine-grained token needs Checks: read) — bail
+            # immediately instead of polling uselessly until the timeout.
+            return "unreadable", f"cannot read CI status (HTTP {r.status_code}; token needs Checks:read)"
         concl, summary = branch_ci(r.json() if r.status_code == 200 else {})
         if concl in ("success", "failure"):
             return concl, summary
@@ -152,6 +156,9 @@ def self_correct_ci(branch: str, pr_number: int, service: str, error_context: st
                 if concl == "timeout":
                     emit("CI_WATCH", "CI did not reach a terminal state within the poll window "
                                      "— stopping watch (not marking green)")
+                    return
+                if concl == "unreadable":
+                    emit("CI_WATCH", f"can't watch CI: {summary} — fix PR opened, CI runs on GitHub")
                     return
                 if attempt >= config.MAX_CI_RETRIES:
                     _comment(c, repo, pr_number,

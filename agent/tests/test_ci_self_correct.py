@@ -22,6 +22,16 @@ def test_branch_ci_reduces_check_runs():
     assert "validate-fix" in summary and "FIX NOT APPLIED" in summary
 
 
+def test_poll_ci_bails_on_auth_error():
+    class _FakeResp:
+        status_code = 403
+    class _FakeClient:
+        def get(self, url):
+            return _FakeResp()
+    concl, summary = github_pr._poll_ci(_FakeClient(), "owner/repo", "airbag/fix-1")
+    assert concl == "unreadable" and "Checks:read" in summary  # bails, doesn't poll to timeout
+
+
 def test_self_correct_noop_when_unavailable(monkeypatch):
     monkeypatch.setattr(config, "GITHUB_TOKEN", "")  # available() -> False
     seen = []
