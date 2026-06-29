@@ -17,7 +17,8 @@ gcloud services enable run.googleapis.com cloudbuild.googleapis.com artifactregi
 
 echo "== agent service account + least-priv roles =="
 gcloud iam service-accounts create airbag-agent --display-name="Airbag self-heal agent" 2>/dev/null || true
-for R in run.admin monitoring.viewer logging.viewer secretmanager.secretAccessor; do
+# datastore.user: durable state store (AIRBAG_STATE=firestore) reads/writes Firestore.
+for R in run.admin monitoring.viewer logging.viewer secretmanager.secretAccessor datastore.user; do
   gcloud projects add-iam-policy-binding "$PROJECT" --member="serviceAccount:${SA}" --role="roles/$R" --condition=None -q >/dev/null
 done
 # GOTCHA 1: new projects' default compute SA lacks build perms -> source deploys fail.
