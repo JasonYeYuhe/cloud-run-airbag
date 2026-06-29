@@ -12,7 +12,7 @@ from __future__ import annotations
 import logging
 import time
 
-from . import adk_brain, config, events, gemini, incidents, pending, tools
+from . import adk_brain, analyzer, config, events, gemini, incidents, pending, tools
 
 log = logging.getLogger("airbag.sm")
 
@@ -36,6 +36,14 @@ def run_self_heal(incident_id: str, service: str) -> dict:
     emit("TRIAGED", "collected revisions + error rate",
          error_rate=err.get("error_rate"), revisions=revs.get("revisions"))
 
+    # --- STATISTICAL SIGNAL: Wilson-CI verdict on a fresh business-path sample (gates ROLLBACK) --
+    stat = None
+    if config.STAT_GATE_ENABLED:
+        s = tools.sample_business_path(service, config.GCP_REGION, config.STAT_SAMPLE_N)
+        stat = analyzer.analyze(s["errs"], s["total"], config.STAT_BASELINE_RATE,
+                                z=config.STAT_Z, min_fail_errors=config.STAT_MIN_FAIL_ERRORS)
+        emit("ANALYZED", f"statistical verdict {stat['verdict']} — {stat['reason']}", **stat)
+
     # --- DECISION: ADK SequentialAgent (Gemini calls the tools) -> direct Gemini -> heuristic --
     decision = adk_brain.decide(service)
     if decision:
@@ -43,7 +51,7 @@ def run_self_heal(incident_id: str, service: str) -> dict:
                     f"tools called: {decision.get('_adk_tools') or '—'}")
     else:
         decision = gemini.decide(service, revs, err) or _heuristic(revs, err)
-    decision = _validate(decision, revs)
+    decision = _validate(decision, revs, stat)
     emit("DECISION", decision["action"], **decision)
     _decision_summary = {k: decision.get(k) for k in (
         "action", "confidence", "reasoning", "evidence", "_source", "_adk_tools",
@@ -259,10 +267,28 @@ def _heuristic(revs: dict, err: dict) -> dict:
             "reasoning": "no clear bad-revision/healthy-revision pair", "_source": "heuristic"}
 
 
-def _validate(decision: dict, revs: dict) -> dict:
-    """Safety gate: only act on a known-good revision above the confidence threshold."""
+def _validate(decision: dict, revs: dict, stat: dict | None = None) -> dict:
+    """Safety gate: only roll back to a known-good revision above the confidence threshold AND
+    when the statistical analyzer confidently confirms the degradation. The gate is a CONSTRAINT
+    on ROLLBACK — it never forces action (so an INCONCLUSIVE signal with a Gemini OBSERVE stays a
+    quiet OBSERVE, not an alarm)."""
     if decision.get("action") != "ROLLBACK":
         return decision
+    # Statistical gate FIRST (per review): a statistically-healthy service must OBSERVE even if the
+    # LLM hallucinated a bad rollback target — don't escalate a healthy service over a bad target.
+    # PASS -> don't roll back; INCONCLUSIVE -> human; FAIL -> fall through to the confidence/target check.
+    if stat is not None:
+        v = stat.get("verdict")
+        if v == "PASS":
+            return {**decision, "action": "OBSERVE",
+                    "reasoning": f"statistical gate PASS — {stat.get('reason')}; rollback withheld. "
+                                 f"{decision.get('reasoning', '')}"}
+        if v == "INCONCLUSIVE":
+            return {**decision, "action": "ESCALATE",
+                    "reasoning": f"statistical gate INCONCLUSIVE — {stat.get('reason')}; insufficient "
+                                 f"evidence to auto-roll-back. {decision.get('reasoning', '')}"}
+    # then the confidence + known-good-target gate (reached only when stat is FAIL or absent)
+    revs = revs or {}
     known = {r["name"] for r in revs.get("revisions", []) if r.get("ready")}
     target = decision.get("rollback_revision")
     if decision.get("confidence", 0) < config.CONFIDENCE_THRESHOLD or target not in known:

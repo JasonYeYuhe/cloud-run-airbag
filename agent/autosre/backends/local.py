@@ -62,6 +62,11 @@ def fetch_error_logs(service: str, region: str, n: int = 10) -> list[str]:
             "KeyError: 'amount'"]
 
 
+def sample_business_path(service: str, region: str, n: int = 20) -> dict:
+    errs, total = _sample(n)
+    return {"errs": errs, "total": total}
+
+
 def synthetic_probe(service: str, path: str = "/healthz") -> dict:
     try:
         with httpx.Client(timeout=3.0) as c:

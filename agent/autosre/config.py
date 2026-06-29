@@ -74,6 +74,14 @@ GEMINI_PATCH_MODEL = os.getenv("GEMINI_PATCH_MODEL", "gemini-2.5-pro")
 CONFIDENCE_THRESHOLD = float(os.getenv("AIRBAG_CONFIDENCE_THRESHOLD", "0.7"))
 ERROR_RATE_THRESHOLD = float(os.getenv("AIRBAG_ERROR_RATE_THRESHOLD", "0.05"))
 
+# Statistical decision gate (v2): the serving revision's sampled 5xx proportion is turned into a
+# FAIL/PASS/INCONCLUSIVE verdict (Wilson CI) that gates the rollback — see analyzer.py.
+STAT_GATE_ENABLED = _bool("AIRBAG_STAT_GATE", "true")
+STAT_SAMPLE_N = int(os.getenv("AIRBAG_STAT_SAMPLE_N", "20"))
+STAT_BASELINE_RATE = float(os.getenv("AIRBAG_STAT_BASELINE_RATE", "0.02"))  # TODO: per-service learned baseline
+STAT_Z = float(os.getenv("AIRBAG_STAT_Z", "1.96"))                          # 95% CI
+STAT_MIN_FAIL_ERRORS = int(os.getenv("AIRBAG_STAT_MIN_FAIL_ERRORS", "3"))
+
 # verify loop
 VERIFY_ATTEMPTS = int(os.getenv("AIRBAG_VERIFY_ATTEMPTS", "6"))
 VERIFY_INTERVAL_S = float(os.getenv("AIRBAG_VERIFY_INTERVAL_S", "2"))

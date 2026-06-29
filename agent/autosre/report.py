@@ -8,7 +8,7 @@ import html
 
 _STAGE_COLOR = {
     "RUN_START": "#6b7a8d", "RECEIVED": "#f85149", "FAULT_INJECTED": "#f85149",
-    "TRIAGED": "#58a6ff", "ADK": "#bc8cff", "DECISION": "#bc8cff",
+    "TRIAGED": "#58a6ff", "ANALYZED": "#58a6ff", "ADK": "#bc8cff", "DECISION": "#bc8cff",
     "ROLLBACK_APPLIED": "#58a6ff", "VERIFYING": "#e3b341", "MITIGATED": "#3fb950",
     "FIX_PR": "#6b7a8d", "PENDING_REVERT": "#e3b341", "ESCALATED": "#e3b341",
     "COMPLETE_ROLLBACK": "#e3b341", "FIX_DEPLOYED": "#58a6ff", "REVERIFYING": "#e3b341",

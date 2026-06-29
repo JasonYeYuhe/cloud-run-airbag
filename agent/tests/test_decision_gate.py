@@ -36,6 +36,44 @@ def test_validate_passes_known_confident_rollback():
     assert _validate(d, _revs())["action"] == "ROLLBACK"
 
 
+def _rollback():
+    return {"action": "ROLLBACK", "rollback_revision": "svc-00001-good", "confidence": 0.99}
+
+
+def test_stat_gate_allows_rollback_on_fail():
+    d = _validate(_rollback(), _revs(), {"verdict": "FAIL", "reason": "elevated"})
+    assert d["action"] == "ROLLBACK"
+
+
+def test_stat_gate_withholds_rollback_on_pass():
+    d = _validate(_rollback(), _revs(), {"verdict": "PASS", "reason": "healthy"})
+    assert d["action"] == "OBSERVE"  # statistically healthy -> don't roll back
+
+
+def test_stat_gate_escalates_rollback_on_inconclusive():
+    d = _validate(_rollback(), _revs(), {"verdict": "INCONCLUSIVE", "reason": "too few"})
+    assert d["action"] == "ESCALATE"  # not enough evidence to auto-act
+
+
+def test_stat_pass_overrides_a_hallucinated_target():
+    # PASS + invalid target -> OBSERVE (healthy service; don't escalate over the LLM's bad target)
+    d = _validate({"action": "ROLLBACK", "rollback_revision": "ghost", "confidence": 0.99},
+                  _revs(), {"verdict": "PASS", "reason": "healthy"})
+    assert d["action"] == "OBSERVE"
+
+
+def test_stat_fail_with_bad_target_escalates():
+    d = _validate({"action": "ROLLBACK", "rollback_revision": "ghost", "confidence": 0.99},
+                  _revs(), {"verdict": "FAIL", "reason": "elevated"})
+    assert d["action"] == "ESCALATE"  # broken AND bad target -> page a human
+
+
+def test_stat_gate_is_constraint_only_leaves_observe_alone():
+    d = _validate({"action": "OBSERVE", "confidence": 0.4}, _revs(),
+                  {"verdict": "INCONCLUSIVE", "reason": "x"})
+    assert d["action"] == "OBSERVE"  # gate only constrains ROLLBACK -> no alert fatigue
+
+
 def test_run_self_heal_surfaces_escalation(monkeypatch):
     """A gate failure must surface as ESCALATED + status=escalated, not a silent no-op."""
     mock.reset()

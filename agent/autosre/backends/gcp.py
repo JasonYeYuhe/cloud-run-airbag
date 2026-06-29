@@ -131,6 +131,11 @@ def fetch_error_logs(service: str, region: str, n: int = 10) -> list[str]:
     return out
 
 
+def sample_business_path(service: str, region: str, n: int = 20) -> dict:
+    errs, total = _active_sample(service, n=n)
+    return {"errs": errs, "total": total}
+
+
 def synthetic_probe(service: str, path: str | None = None) -> dict:
     path = path or config.PROBE_PATH
     try:

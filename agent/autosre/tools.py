@@ -43,6 +43,18 @@ def fetch_error_logs(service: str, region: str, n: int = 10) -> list[str]:
     return get_backend().fetch_error_logs(service, region, n)
 
 
+def sample_business_path(service: str, region: str, n: int = 20) -> dict:
+    """Actively sample the business path n times and count 5xx — the statistical decision
+    analyzer (analyzer.analyze) turns {errs, total} into a FAIL/PASS/INCONCLUSIVE verdict.
+
+    Args:
+        service (str): Cloud Run service name.
+        region (str): GCP region.
+        n (int): number of probe requests.
+    """
+    return get_backend().sample_business_path(service, region, n)
+
+
 def synthetic_probe(service: str, path: str | None = None) -> dict:
     """Actively hit the service to confirm it is really serving the business path
     (zero-traffic guard + proves the failing endpoint recovered).

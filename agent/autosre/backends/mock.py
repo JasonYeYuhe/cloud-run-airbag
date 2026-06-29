@@ -43,6 +43,11 @@ def fetch_error_logs(service: str, region: str, n: int = 10) -> list[str]:
             "    return sum(o[key] for o in orders)\nKeyError: 'amount'"]
 
 
+def sample_business_path(service: str, region: str, n: int = 20) -> dict:
+    # bad revision serving -> total outage in the sample; healthy -> clean
+    return {"errs": 0 if _STATE["rolled_back"] else n, "total": n}
+
+
 def synthetic_probe(service: str, path: str = "/healthz") -> dict:
     ok = _STATE["rolled_back"]
     return {"ok": ok, "path": path, "status": 200 if ok else 503}
