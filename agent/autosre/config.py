@@ -93,6 +93,13 @@ STAT_BASELINE_RATE = float(os.getenv("AIRBAG_STAT_BASELINE_RATE", "0.02"))  # TO
 STAT_Z = float(os.getenv("AIRBAG_STAT_Z", "1.96"))                          # 95% CI
 STAT_MIN_FAIL_ERRORS = int(os.getenv("AIRBAG_STAT_MIN_FAIL_ERRORS", "3"))
 
+# Cross-incident memory + learned per-service baseline (v2). See memory.py.
+BASELINE_ALPHA = float(os.getenv("AIRBAG_BASELINE_ALPHA", "0.2"))          # EMA weight for new healthy samples
+STAT_BASELINE_FLOOR = float(os.getenv("AIRBAG_STAT_BASELINE_FLOOR", "0.01"))  # learned baseline never below this
+RECUR_WINDOW_S = float(os.getenv("AIRBAG_RECUR_WINDOW_S", "3600"))          # recurrence look-back window
+RECUR_THRESHOLD = int(os.getenv("AIRBAG_RECUR_THRESHOLD", "5"))             # N incidents in window -> RECURRING
+MEMORY_RECENT_MAX = int(os.getenv("AIRBAG_MEMORY_RECENT_MAX", "20"))        # bounded recent-incident history
+
 # verify loop
 VERIFY_ATTEMPTS = int(os.getenv("AIRBAG_VERIFY_ATTEMPTS", "6"))
 VERIFY_INTERVAL_S = float(os.getenv("AIRBAG_VERIFY_INTERVAL_S", "2"))

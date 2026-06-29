@@ -12,9 +12,15 @@ from __future__ import annotations
 import logging
 import time
 
-from . import adk_brain, analyzer, autonomy, config, events, gemini, incidents, pending, tools
+from . import (adk_brain, analyzer, autonomy, config, events, gemini, incidents, memory,
+               pending, tools)
 
 log = logging.getLogger("airbag.sm")
+
+
+def _incident_signature() -> str:
+    """A coarse, stable failure fingerprint for recurrence detection across incidents."""
+    return f"5xx:{config.PROBE_PATH}"
 
 
 def run_self_heal(incident_id: str, service: str) -> dict:
@@ -37,12 +43,16 @@ def run_self_heal(incident_id: str, service: str) -> dict:
          error_rate=err.get("error_rate"), revisions=revs.get("revisions"))
 
     # --- STATISTICAL SIGNAL: Wilson-CI verdict on a fresh business-path sample (gates ROLLBACK) --
+    # baseline is the per-service LEARNED rate (memory), not a hardcoded global (Theme-1 follow-up).
     stat = None
     if config.STAT_GATE_ENABLED:
         s = tools.sample_business_path(service, config.GCP_REGION, config.STAT_SAMPLE_N)
-        stat = analyzer.analyze(s["errs"], s["total"], config.STAT_BASELINE_RATE,
+        baseline = memory.baseline_for(service)
+        stat = analyzer.analyze(s["errs"], s["total"], baseline,
                                 z=config.STAT_Z, min_fail_errors=config.STAT_MIN_FAIL_ERRORS)
         emit("ANALYZED", f"statistical verdict {stat['verdict']} — {stat['reason']}", **stat)
+        if stat["verdict"] == "PASS":  # confirmed healthy -> teach the per-service baseline
+            memory.observe_healthy(service, stat["rate"])
 
     # --- DECISION: ADK SequentialAgent (Gemini calls the tools) -> direct Gemini -> heuristic --
     decision = adk_brain.decide(service)
@@ -64,9 +74,18 @@ def run_self_heal(incident_id: str, service: str) -> dict:
                                            "decision": _decision_summary, "events": run_events})
             return {"status": "escalated", "incident_id": incident_id, "events": run_events}
         emit("DONE", "no rollback needed")
+        # OBSERVE = the service is healthy at real traffic -> a genuine steady-state baseline sample
+        memory.observe_healthy(service, stat["rate"] if stat else (before.get("error_rate") or 0.0))
         incidents.record(incident_id, {"service": service, "status": "noop",
                                        "decision": _decision_summary, "events": run_events})
         return {"status": "noop", "incident_id": incident_id, "events": run_events}
+
+    # --- CROSS-INCIDENT MEMORY: is this failure recurring? (advisory — doesn't change the action) --
+    signature = _incident_signature()
+    recur = memory.recurrence(service, signature)
+    if recur >= config.RECUR_THRESHOLD:
+        emit("RECURRING", f"{recur} similar incidents on {service} within the window — the fix "
+                          f"may not be holding; a human should look", count=recur)
 
     # --- AUTONOMY GATE: how much may Airbag do on its own for THIS service? ---------------
     level = autonomy.level_for(service)
@@ -74,6 +93,7 @@ def run_self_heal(incident_id: str, service: str) -> dict:
     if level == "L0":  # observe-only: decide + report, never touch prod
         emit("OBSERVE_ONLY", f"autonomy L0 — would roll back to {target}, but acting is disabled",
              rollback_revision=target)
+        memory.record_incident(service, signature, "observed")
         incidents.record(incident_id, {"service": service, "status": "observed", "autonomy": level,
                                        "decision": _decision_summary, "events": run_events})
         return {"status": "observed", "incident_id": incident_id, "events": run_events}
@@ -82,6 +102,8 @@ def run_self_heal(incident_id: str, service: str) -> dict:
                                              "decision": decision, "before": before, "target": target})
         emit("AWAITING_APPROVAL", f"autonomy L1 — rollback to {target} needs operator approval",
              kind="rollback", rollback_revision=target)
+        # NB: don't record_incident here — the gate isn't a terminal outcome; the single memory
+        # record happens when the heal actually resolves (mitigated on approve, or denied).
         incidents.record(incident_id, {"service": service, "status": "awaiting_approval",
                                        "autonomy": level, "decision": _decision_summary,
                                        "rollback_revision": target, "events": run_events})
@@ -108,6 +130,7 @@ def _mitigate(service: str, incident_id: str, decision: dict, decision_summary: 
             "incident_id": incident_id, "bad_revision": decision.get("bad_revision"),
             "rolled_back_to": target, "rollback_at_epoch": rollback_at, "pr_url": None})
         emit("ESCALATED", "rollback did not clear errors within budget — held for a fix / manual revert")
+        memory.record_incident(service, _incident_signature(), "escalated", target)
         incidents.record(incident_id, {"service": service, "status": "escalated", "autonomy": level,
                                        "decision": decision_summary, "rolled_back_to": target,
                                        "error_before": before.get("error_rate"), "events": run_events})
@@ -128,6 +151,7 @@ def _mitigate(service: str, incident_id: str, decision: dict, decision_summary: 
                                              "target": target, "rollback_at_epoch": rollback_at})
         _arm_pending(service, incident_id, decision, target, rollback_at, None, emit)
         emit("AWAITING_APPROVAL", "autonomy L2 — fix PR needs approval before it's opened", kind="fix_pr")
+        memory.record_incident(service, _incident_signature(), "awaiting_fix_approval", target)
         incidents.record(incident_id, {
             "service": service, "status": "awaiting_fix_approval", "autonomy": level,
             "decision": decision_summary, "rolled_back_to": target,
@@ -138,6 +162,7 @@ def _mitigate(service: str, incident_id: str, decision: dict, decision_summary: 
 
     pr_url = _open_fix_pr(service, incident_id, ctx, emit)
     _arm_pending(service, incident_id, decision, target, rollback_at, pr_url, emit)
+    memory.record_incident(service, _incident_signature(), "mitigated", target)
     incidents.record(incident_id, {
         "service": service, "status": "mitigated", "autonomy": level, "decision": decision_summary,
         "rolled_back_to": target, "error_before": before.get("error_rate"),
@@ -202,6 +227,7 @@ def apply_approval(incident_id: str, approve: bool) -> dict:
 
     if not approve:
         emit("DENIED", f"{kind} denied by operator")
+        memory.record_incident(service, _incident_signature(), f"{kind}_denied")
         incidents.record(incident_id, {"service": service, "status": f"{kind}_denied",
                                        "events": run_events})
         return {"status": "denied", "kind": kind, "incident_id": incident_id, "events": run_events}

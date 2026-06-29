@@ -17,7 +17,7 @@ _STAGE_COLOR = {
     "DONE": "#6b7a8d", "CI_WATCH": "#e3b341", "CI_RED": "#e3b341", "CI_CORRECTED": "#e3b341",
     "CI_GREEN": "#3fb950", "CI_ESCALATED": "#f85149",
     "OBSERVE_ONLY": "#6b7a8d", "AWAITING_APPROVAL": "#e3b341", "APPROVED": "#3fb950",
-    "DENIED": "#f85149", "AUTONOMY": "#bc8cff",
+    "DENIED": "#f85149", "AUTONOMY": "#bc8cff", "RECURRING": "#e3b341",
 }
 _STATUS_COLOR = {"mitigated": "#3fb950", "closed": "#3fb950", "noop": "#6b7a8d",
                  "escalated": "#e3b341", "compensated": "#e3b341", "manual_intervention": "#f85149",

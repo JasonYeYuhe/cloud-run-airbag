@@ -22,7 +22,7 @@ from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request, R
 from fastapi.responses import HTMLResponse, StreamingResponse
 from starlette.concurrency import run_in_threadpool
 
-from autosre import autonomy, config, events, incidents, report, state_store, tools
+from autosre import autonomy, config, events, incidents, memory, report, state_store, tools
 from autosre.state_machine import apply_approval, complete_rollback, run_self_heal
 
 logging.basicConfig(level=logging.INFO)
@@ -239,6 +239,13 @@ def autonomy_status():
     return {"default_level": config.AUTONOMY_LEVEL,
             "service": autonomy.status(config.TARGET_SERVICE),
             "pending_approvals": autonomy.pending_approvals()}
+
+
+@app.get("/memory")
+def memory_status():
+    """Watch-only: the per-service learned baseline + cross-incident memory (count, recent
+    failures, recurrence)."""
+    return memory.summary(config.TARGET_SERVICE)
 
 
 @app.post("/autonomy/{service}", dependencies=[Depends(require_demo_token)])
