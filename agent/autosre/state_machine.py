@@ -12,7 +12,7 @@ from __future__ import annotations
 import logging
 import time
 
-from . import adk_brain, analyzer, config, events, gemini, incidents, pending, tools
+from . import adk_brain, analyzer, autonomy, config, events, gemini, incidents, pending, tools
 
 log = logging.getLogger("airbag.sm")
 
@@ -68,70 +68,160 @@ def run_self_heal(incident_id: str, service: str) -> dict:
                                        "decision": _decision_summary, "events": run_events})
         return {"status": "noop", "incident_id": incident_id, "events": run_events}
 
-    # --- ROLLBACK (deterministic stop-the-bleeding) -----------------------
+    # --- AUTONOMY GATE: how much may Airbag do on its own for THIS service? ---------------
+    level = autonomy.level_for(service)
     target = decision["rollback_revision"]
+    if level == "L0":  # observe-only: decide + report, never touch prod
+        emit("OBSERVE_ONLY", f"autonomy L0 — would roll back to {target}, but acting is disabled",
+             rollback_revision=target)
+        incidents.record(incident_id, {"service": service, "status": "observed", "autonomy": level,
+                                       "decision": _decision_summary, "events": run_events})
+        return {"status": "observed", "incident_id": incident_id, "events": run_events}
+    if level == "L1":  # gate BEFORE the rollback — wait for a human to approve touching prod
+        autonomy.save_approval(incident_id, {"service": service, "kind": "rollback",
+                                             "decision": decision, "before": before, "target": target})
+        emit("AWAITING_APPROVAL", f"autonomy L1 — rollback to {target} needs operator approval",
+             kind="rollback", rollback_revision=target)
+        incidents.record(incident_id, {"service": service, "status": "awaiting_approval",
+                                       "autonomy": level, "decision": _decision_summary,
+                                       "rollback_revision": target, "events": run_events})
+        return {"status": "awaiting_approval", "incident_id": incident_id, "events": run_events}
+
+    # L2 / L3 — auto-rollback now (stop the bleeding; reversible). L2 then gates the forward fix-PR.
+    return _mitigate(service, incident_id, decision, _decision_summary, before, target,
+                     emit, run_events, gate_fix_pr=(level == "L2"), level=level)
+
+
+def _mitigate(service: str, incident_id: str, decision: dict, decision_summary: dict, before: dict,
+              target: str, emit, run_events: list, *, gate_fix_pr: bool, level: str) -> dict:
+    """Apply the rollback, prove recovery, then either open the fix-PR (L3 / approved L1) or gate it
+    for approval (L2). Shared by run_self_heal and apply_approval so the L1 resume replays it."""
     result = tools.rollback_traffic_to_revision(service, config.GCP_REGION, target)
     rollback_at = time.time()
     emit("ROLLBACK_APPLIED", f"100% traffic -> {target}", result=result)
 
-    # --- VERIFY (error-rate -> 0 AND synthetic probe ok), measured from rollback --
     if not _verify(service, emit, since_epoch=rollback_at):
-        emit("ESCALATED", "rollback did not clear errors within budget")
-        incidents.record(incident_id, {"service": service, "status": "escalated",
-                                       "decision": _decision_summary, "rolled_back_to": target,
+        autonomy.record_outcome(service, success=False)  # fail-safe: a bad heal demotes autonomy
+        # the rollback DID shift traffic; track it so a later fix can still complete (or undo) it
+        # instead of stranding the routing (complete_rollback re-verifies health before acting).
+        pending.set_pending(service, {
+            "incident_id": incident_id, "bad_revision": decision.get("bad_revision"),
+            "rolled_back_to": target, "rollback_at_epoch": rollback_at, "pr_url": None})
+        emit("ESCALATED", "rollback did not clear errors within budget — held for a fix / manual revert")
+        incidents.record(incident_id, {"service": service, "status": "escalated", "autonomy": level,
+                                       "decision": decision_summary, "rolled_back_to": target,
                                        "error_before": before.get("error_rate"), "events": run_events})
         return {"status": "escalated", "incident_id": incident_id, "events": run_events}
 
-    after = tools.query_error_rate(service, config.GCP_REGION, window_minutes=2,
-                                   since_epoch=rollback_at)
+    after = tools.query_error_rate(service, config.GCP_REGION, window_minutes=2, since_epoch=rollback_at)
     note = gemini.explain_recovery(service, before, after)
     emit("MITIGATED", note or "error rate back to zero — recovery proven",
          before=before.get("error_rate"), after=after.get("error_rate"))
+    autonomy.record_outcome(service, success=True)  # trust ramp: a verified heal builds the streak
 
-    # --- FIX PR (slow path): Gemini opens a real fix PR through CI ---------
+    ctx = (f"bad revision {decision.get('bad_revision')} on {service} returned HTTP 500 on the "
+           f"business path {config.PROBE_PATH} (unhandled exception, not an explicit error "
+           f"response); evidence: {decision.get('evidence')}")
+
+    if gate_fix_pr:  # L2: the rollback is applied + held, but the forward fix-PR waits for approval
+        autonomy.save_approval(incident_id, {"service": service, "kind": "fix_pr", "ctx": ctx,
+                                             "target": target, "rollback_at_epoch": rollback_at})
+        _arm_pending(service, incident_id, decision, target, rollback_at, None, emit)
+        emit("AWAITING_APPROVAL", "autonomy L2 — fix PR needs approval before it's opened", kind="fix_pr")
+        incidents.record(incident_id, {
+            "service": service, "status": "awaiting_fix_approval", "autonomy": level,
+            "decision": decision_summary, "rolled_back_to": target,
+            "error_before": before.get("error_rate"), "error_after": after.get("error_rate"),
+            "events": run_events})
+        return {"status": "awaiting_fix_approval", "incident_id": incident_id,
+                "rolled_back_to": target, "events": run_events}
+
+    pr_url = _open_fix_pr(service, incident_id, ctx, emit)
+    _arm_pending(service, incident_id, decision, target, rollback_at, pr_url, emit)
+    incidents.record(incident_id, {
+        "service": service, "status": "mitigated", "autonomy": level, "decision": decision_summary,
+        "rolled_back_to": target, "error_before": before.get("error_rate"),
+        "error_after": after.get("error_rate"), "pr_url": pr_url, "events": run_events})
+    return {"status": "mitigated", "incident_id": incident_id, "rolled_back_to": target,
+            "events": run_events}
+
+
+def _open_fix_pr(service: str, incident_id: str, ctx: str, emit) -> str | None:
+    """Gemini opens a real fix PR through CI; on red CI it self-corrects in the background."""
     from . import github_pr
-    pr_url = None
-    if github_pr.available():
-        ctx = (f"bad revision {decision.get('bad_revision')} on {service} returned HTTP 500 on the "
-               f"business path {config.PROBE_PATH} (unhandled exception, not an explicit error "
-               f"response); evidence: {decision.get('evidence')}")
-        pr = github_pr.open_fix_pr(service, ctx)
-        if pr:
-            pr_url = pr["pr_url"]
-            emit("FIX_PR", f"opened fix PR — {pr['summary']}", pr_url=pr_url)
-            # CI self-correction: watch the PR's CI in the background; on red, Gemini re-fixes.
-            if config.CI_SELF_CORRECT and pr.get("number"):
-                import threading
-
-                def _watch_emit(stage: str, msg: str, **data):
-                    ev = events.publish({"incident_id": incident_id, "service": service,
-                                         "stage": stage, "msg": msg, **data})
-                    incidents.record(incident_id, {"events": [ev]})
-
-                threading.Thread(
-                    target=github_pr.self_correct_ci,
-                    args=(pr["branch"], pr["number"], service, ctx, _watch_emit),
-                    daemon=True).start()
-                emit("CI_WATCH", "watching the fix PR's CI — will self-correct on red")
-        else:
-            emit("FIX_PR", "no fix PR opened (no change or error)")
-    else:
+    if not github_pr.available():
         emit("FIX_PR", "fix-PR slow path not configured (set GITHUB_TOKEN/GITHUB_REPO)")
+        return None
+    pr = github_pr.open_fix_pr(service, ctx)
+    if not pr:
+        emit("FIX_PR", "no fix PR opened (no change or error)")
+        return None
+    pr_url = pr["pr_url"]
+    emit("FIX_PR", f"opened fix PR — {pr['summary']}", pr_url=pr_url)
+    if config.CI_SELF_CORRECT and pr.get("number"):
+        import threading
 
-    # Remember the temporary rollback so it can be UNDONE once the fix deploys + verifies
-    # (the fix-PR's CI calls /internal/complete-rollback; or the dashboard's Verify & Undo).
+        def _watch_emit(stage: str, msg: str, **data):
+            ev = events.publish({"incident_id": incident_id, "service": service,
+                                 "stage": stage, "msg": msg, **data})
+            incidents.record(incident_id, {"events": [ev]})
+
+        threading.Thread(target=github_pr.self_correct_ci,
+                         args=(pr["branch"], pr["number"], service, ctx, _watch_emit),
+                         daemon=True).start()
+        emit("CI_WATCH", "watching the fix PR's CI — will self-correct on red")
+    return pr_url
+
+
+def _arm_pending(service: str, incident_id: str, decision: dict, target: str,
+                 rollback_at: float, pr_url: str | None, emit) -> None:
+    """Remember the temporary rollback so it can be UNDONE once the fix deploys + verifies
+    (the fix-PR's CI calls /internal/complete-rollback; or the dashboard's Verify & Undo)."""
     pending.set_pending(service, {
         "incident_id": incident_id, "bad_revision": decision.get("bad_revision"),
         "rolled_back_to": target, "rollback_at_epoch": rollback_at, "pr_url": pr_url})
     emit("PENDING_REVERT", "rollback held until the fix deploys + is verified",
          rolled_back_to=target, pr_url=pr_url)
 
-    incidents.record(incident_id, {
-        "service": service, "status": "mitigated", "decision": _decision_summary,
-        "rolled_back_to": target, "error_before": before.get("error_rate"),
-        "error_after": after.get("error_rate"), "pr_url": pr_url, "events": run_events})
-    return {"status": "mitigated", "incident_id": incident_id,
-            "rolled_back_to": target, "events": run_events}
+
+def apply_approval(incident_id: str, approve: bool) -> dict:
+    """Resume an L1 rollback or L2 fix-PR that was gated for a human decision. Durable: the approval
+    was persisted in the store, so this works even after the deciding instance was recycled."""
+    appr = autonomy.claim_approval(incident_id)  # atomic read+delete: a double-click resumes once
+    if appr is None:
+        return {"status": "noop", "reason": "no pending approval (or it expired)",
+                "incident_id": incident_id}
+    service, kind = appr["service"], appr.get("kind")
+    run_events: list[dict] = []
+
+    def emit(stage: str, msg: str, **data):
+        log.info("[%s] %s %s", stage, msg, data or "")
+        ev = events.publish({"incident_id": incident_id, "service": service,
+                             "stage": stage, "msg": msg, **data})
+        run_events.append(ev)
+
+    if not approve:
+        emit("DENIED", f"{kind} denied by operator")
+        incidents.record(incident_id, {"service": service, "status": f"{kind}_denied",
+                                       "events": run_events})
+        return {"status": "denied", "kind": kind, "incident_id": incident_id, "events": run_events}
+
+    emit("APPROVED", f"{kind} approved by operator")
+    if kind == "rollback":  # L1: now apply the rollback + the full mitigation (operator approved)
+        decision = appr.get("decision", {})
+        before = appr.get("before") or {"error_rate": None}
+        return _mitigate(service, incident_id, decision, decision, before, appr["target"],
+                         emit, run_events, gate_fix_pr=False, level="L1")
+    if kind == "fix_pr":  # L2: rollback already applied + held; now open the approved fix-PR
+        pr_url = _open_fix_pr(service, incident_id, appr.get("ctx", ""), emit)
+        pend = pending.get_pending(service)
+        if pend:
+            pending.set_pending(service, {**pend, "pr_url": pr_url})
+        incidents.record(incident_id, {"service": service, "status": "mitigated",
+                                       "pr_url": pr_url, "events": run_events})
+        return {"status": "mitigated", "kind": "fix_pr", "pr_url": pr_url,
+                "incident_id": incident_id, "events": run_events}
+    return {"status": "noop", "reason": f"unknown approval kind {kind}", "incident_id": incident_id}
 
 
 # --- P1: close the transaction (undo the temporary rollback once the fix ships) --------

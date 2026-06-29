@@ -22,8 +22,8 @@ from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request, R
 from fastapi.responses import HTMLResponse, StreamingResponse
 from starlette.concurrency import run_in_threadpool
 
-from autosre import config, events, incidents, report, state_store, tools
-from autosre.state_machine import complete_rollback, run_self_heal
+from autosre import autonomy, config, events, incidents, report, state_store, tools
+from autosre.state_machine import apply_approval, complete_rollback, run_self_heal
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("airbag")
@@ -228,6 +228,58 @@ async def internal_complete_rollback(request: Request, response: Response):
     response.status_code = {"closed": 200, "noop": 200,
                             "compensated": 422, "manual_intervention": 422}.get(
                                 result.get("status"), 200)
+    return result
+
+
+# --- graduated autonomy: per-service trust level + the L1/L2 approval gate ---------------
+@app.get("/autonomy")
+def autonomy_status():
+    """Watch-only: the target service's autonomy level, trust-ramp streak, and any pending
+    approvals waiting on a human."""
+    return {"default_level": config.AUTONOMY_LEVEL,
+            "service": autonomy.status(config.TARGET_SERVICE),
+            "pending_approvals": autonomy.pending_approvals()}
+
+
+@app.post("/autonomy/{service}", dependencies=[Depends(require_demo_token)])
+async def autonomy_set(service: str, request: Request):
+    """Set a service's autonomy level (L0 observe / L1 approve-rollback / L2 gate-fix / L3 full)."""
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        body = {}
+    level = (body.get("level") or request.query_params.get("level") or "").upper()
+    try:
+        rec = autonomy.set_level(service, level)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    events.publish({"stage": "AUTONOMY", "msg": f"{service} autonomy set to {level}",
+                    "service": service})
+    return {"status": "ok", "autonomy": rec}
+
+
+@app.post("/demo/approve", dependencies=[Depends(require_demo_token)])
+def demo_approve(background_tasks: BackgroundTasks, incident_id: str, approve: bool = True):
+    """Dashboard Approve/Deny for a gated rollback (L1) or fix-PR (L2)."""
+    background_tasks.add_task(apply_approval, incident_id, approve)
+    return {"status": "accepted", "incident_id": incident_id, "approve": approve}
+
+
+@app.post("/internal/approve", dependencies=[Depends(require_internal_token)])
+async def internal_approve(request: Request, response: Response):
+    """Machine approval (e.g. a ChatOps bot). Body: {incident_id, approve}. Runs synchronously so
+    the caller sees the real outcome."""
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        body = {}
+    incident_id = body.get("incident_id") or request.query_params.get("incident_id", "")
+    approve = bool(body.get("approve", True))
+    result = await run_in_threadpool(apply_approval, incident_id, approve)
+    # noop = the approval expired or was never queued -> 409 so the caller knows nothing happened
+    # (don't let an expired L1 approval read as success while the bad revision keeps serving).
+    response.status_code = {"mitigated": 200, "denied": 200, "escalated": 422,
+                            "noop": 409}.get(result.get("status"), 200)
     return result
 
 

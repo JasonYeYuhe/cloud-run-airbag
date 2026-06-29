@@ -51,7 +51,11 @@
   .s-PENDING_REVERT .stg,.s-COMPLETE_ROLLBACK .stg,.s-REVERIFYING .stg,.s-CANARY .stg{color:var(--amber)}
   .s-FIX_DEPLOYED .stg{color:var(--cyan)}
   .s-ROLLBACK_UNDONE .stg,.s-CLOSED .stg,.s-CI_GREEN .stg{color:var(--green)}
-  .s-MANUAL_INTERVENTION .stg,.s-CI_ESCALATED .stg{color:var(--red)}
+  .s-MANUAL_INTERVENTION .stg,.s-CI_ESCALATED .stg,.s-DENIED .stg{color:var(--red)}
+  .s-AWAITING_APPROVAL .stg{color:var(--amber)}
+  .s-APPROVED .stg{color:var(--green)}
+  .s-OBSERVE_ONLY .stg{color:var(--muted)}
+  .s-AUTONOMY .stg{color:var(--violet)}
   .s-CI_WATCH .stg,.s-CI_RED .stg,.s-CI_CORRECTED .stg{color:var(--amber)}
   /* gate */
   .gate{display:flex;align-items:center;gap:14px;margin-bottom:14px}
@@ -101,9 +105,17 @@
       <button onclick="api('/demo/heal')">🚑 Heal</button>
       <button onclick="api('/demo/complete-rollback')" title="Verify the deployed fix, then undo the temporary rollback">✅ Verify &amp; Undo</button>
       <button onclick="api('/demo/reset')">↺ Reset</button>
+      <span style="display:flex;gap:4px;align-items:center;margin-left:8px" title="How much Airbag may do on its own for this service">
+        <span class="muted" style="font-size:11px">autonomy</span><span id="autbtns"></span>
+      </span>
       <input id="token" type="password" placeholder="demo token" autocomplete="off" spellcheck="false"
              title="Required to run actions when the service is public (watching is open to all)"
              style="font:inherit;font-size:12px;color:var(--txt);background:#0c121a;border:1px solid var(--line);border-radius:9px;padding:9px 10px;width:120px;margin-left:auto"/>
+    </div>
+    <div id="approve" style="display:none;margin:0 0 8px;padding:9px 11px;border:1px solid var(--amber);border-radius:9px;background:#1a1408;font-size:13px">
+      <span id="approve-msg">Approval required</span>
+      <button class="primary" onclick="decide(true)" style="margin-left:8px">✓ Approve</button>
+      <button class="danger" onclick="decide(false)">✕ Deny</button>
     </div>
     <h2>Incident timeline · agent thought-chain</h2>
     <div id="timeline"></div>
@@ -157,6 +169,16 @@ function api(path){
 
 function setDot(id,on){ $(id).classList.toggle('on', !!on); }
 
+let SVC='airbag-target', CURLVL='L3';
+const LVL_HINT={L0:'observe only',L1:'approve before rollback',L2:'auto-rollback, approve fix-PR',L3:'fully autonomous'};
+function renderAut(){
+  $('#autbtns').innerHTML = ['L0','L1','L2','L3'].map(l=>
+    `<button class="${l===CURLVL?'primary':''}" style="padding:4px 7px;font-size:11px" title="${LVL_HINT[l]}" onclick="setLvl('${l}')">${l}</button>`).join('');
+}
+function setLvl(l){ api('/autonomy/'+encodeURIComponent(SVC)+'?level='+l); CURLVL=l; renderAut(); }
+function decide(ok){ if(!currentIncident) return; api('/demo/approve?incident_id='+encodeURIComponent(currentIncident)+'&approve='+(ok?'true':'false')); $('#approve').style.display='none'; }
+function loadAut(){ fetch('/autonomy').then(r=>r.json()).then(j=>{ if(j.service){ SVC=j.service.service||SVC; CURLVL=j.service.level||CURLVL; } renderAut(); }).catch(()=>{}); }
+
 function addEvent(ev){
   const stage = ev.stage || '';
   if(stage==='RUN_START'){ tl.innerHTML=''; series=[]; badRev=goodRev=null; drawCurve(); $('#gate').className='badge pending'; $('#gate').textContent='PENDING'; $('#rate').textContent='—'; $('#decision').innerHTML='<span class="muted">analyzing…</span>'; $('#report').innerHTML=''; $('#txn').style.display='none'; }
@@ -166,6 +188,9 @@ function addEvent(ev){
   if(['COMPLETE_ROLLBACK','FIX_DEPLOYED','REVERIFYING','CANARY'].includes(stage)) setTxn('↻ RESTORING','pending');
   if(stage==='CLOSED') setTxn('🔒 TXN CLOSED','verified');
   if(stage==='MANUAL_INTERVENTION') setTxn('⚠ MANUAL','manual');
+  if(stage==='AWAITING_APPROVAL'){ $('#approve-msg').textContent = ev.msg||'Approval required'; $('#approve').style.display='block'; }
+  if(['APPROVED','DENIED','MITIGATED','CLOSED','OBSERVE_ONLY','ESCALATED'].includes(stage)){ $('#approve').style.display='none'; }
+  if(stage==='AUTONOMY') loadAut();
   if(stage==='CONNECTED'){ setDot('#d-sse',true); setBackend(ev.backend); return; }
 
   const row = document.createElement('div');
@@ -262,6 +287,7 @@ const es = new EventSource('/events');
 es.onmessage = e => { try{ const d=JSON.parse(e.data); if(d.stage && d.stage!=='CONNECTED') live=true; addEvent(d); }catch(_){}}
 es.onerror = () => setDot('#d-sse',false);
 fetch('/health').then(r=>r.json()).then(j=>{ setBackend(j.backend); setDot('#d-gemini', j.gemini); }).catch(()=>{});
+loadAut();
 
 // token field: hydrate from ?token= deep-link (then strip it) or localStorage; persist on edit
 (function initToken(){

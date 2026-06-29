@@ -45,6 +45,12 @@ GCP_PROJECT = os.getenv("GOOGLE_CLOUD_PROJECT", "")
 GCP_REGION = os.getenv("GOOGLE_CLOUD_LOCATION", "asia-northeast1")
 TARGET_SERVICE = os.getenv("TARGET_SERVICE", "airbag-target")
 
+# Graduated autonomy (v2): per-service trust level enforced in the state machine. See autonomy.py.
+# L0 observe | L1 approve-before-rollback | L2 auto-rollback+gate-fix-PR | L3 full (default).
+AUTONOMY_LEVEL = os.getenv("AIRBAG_AUTONOMY", "L3")
+AUTONOMY_PROMOTE_AFTER = int(os.getenv("AIRBAG_AUTONOMY_PROMOTE_AFTER", "5"))  # advisory threshold
+APPROVAL_TTL_S = float(os.getenv("AIRBAG_APPROVAL_TTL_S", "3600"))            # pending-approval window
+
 # Durable state store (v2): memory (default) | firestore. See state_store.py.
 STATE_BACKEND = os.getenv("AIRBAG_STATE", "memory")
 COMPLETE_LEASE_S = float(os.getenv("AIRBAG_COMPLETE_LEASE_S", "300"))  # complete-rollback lock lease
