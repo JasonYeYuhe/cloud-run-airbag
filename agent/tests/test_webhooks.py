@@ -12,8 +12,7 @@ from autosre import config
 def test_cloud_monitoring_intake(monkeypatch):
     monkeypatch.setattr(config, "WEBHOOK_TOKEN", "wh")
     monkeypatch.setattr(appmod, "run_self_heal", lambda *a, **k: None)  # don't run the real heal
-    appmod._seen_incidents.clear()
-    c = TestClient(appmod.app)
+    c = TestClient(appmod.app)  # dedup store reset by the conftest autouse fixture
 
     assert c.post("/alerts/cloud-monitoring",
                   json={"incident": {"state": "open"}}).status_code == 401          # no token

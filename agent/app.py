@@ -22,7 +22,7 @@ from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request, R
 from fastapi.responses import HTMLResponse, StreamingResponse
 from starlette.concurrency import run_in_threadpool
 
-from autosre import config, events, incidents, report, tools
+from autosre import config, events, incidents, report, state_store, tools
 from autosre.state_machine import complete_rollback, run_self_heal
 
 logging.basicConfig(level=logging.INFO)
@@ -30,7 +30,6 @@ log = logging.getLogger("airbag")
 
 app = FastAPI(title="Airbag — Cloud Run self-heal agent")
 _DASHBOARD = (Path(__file__).parent / "static" / "dashboard.html").read_text(encoding="utf-8")
-_seen_incidents: set[str] = set()
 
 
 # --- dashboard --------------------------------------------------------------
@@ -247,11 +246,9 @@ async def cloud_monitoring_alert(request: Request, background_tasks: BackgroundT
 
     if state != "open":
         return {"status": "ignored", "reason": f"state={state}", "incident_id": incident_id}
-    if incident_id in _seen_incidents:
+    # exactly-once dedup via the durable store (lazy expires_at; multi-instance safe)
+    if state_store.seen_and_mark("dedup", incident_id, config.DEDUP_TTL_S):
         return {"status": "duplicate", "incident_id": incident_id}
-    if len(_seen_incidents) > 1000:  # bound memory (Day-0; replace with TTLCache/Firestore)
-        _seen_incidents.clear()
-    _seen_incidents.add(incident_id)
 
     background_tasks.add_task(run_self_heal, incident_id, service)
     return {"status": "accepted", "incident_id": incident_id, "service": service}

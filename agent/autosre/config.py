@@ -45,6 +45,11 @@ GCP_PROJECT = os.getenv("GOOGLE_CLOUD_PROJECT", "")
 GCP_REGION = os.getenv("GOOGLE_CLOUD_LOCATION", "asia-northeast1")
 TARGET_SERVICE = os.getenv("TARGET_SERVICE", "airbag-target")
 
+# Durable state store (v2): memory (default) | firestore. See state_store.py.
+STATE_BACKEND = os.getenv("AIRBAG_STATE", "memory")
+COMPLETE_LEASE_S = float(os.getenv("AIRBAG_COMPLETE_LEASE_S", "300"))  # complete-rollback lock lease
+DEDUP_TTL_S = float(os.getenv("AIRBAG_DEDUP_TTL_S", "3600"))           # webhook dedup window
+
 # local backend: where the target-app is reachable
 TARGET_BASE_URL = os.getenv("TARGET_BASE_URL", "http://localhost:8081")
 # demo harness (gcp): after 'break' shifts traffic to the bad revision, generate this many
