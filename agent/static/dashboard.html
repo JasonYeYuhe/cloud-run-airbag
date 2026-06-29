@@ -117,6 +117,7 @@
       <button class="primary" onclick="decide(true)" style="margin-left:8px">✓ Approve</button>
       <button class="danger" onclick="decide(false)">✕ Deny</button>
     </div>
+    <div id="intel" style="display:flex;flex-wrap:wrap;gap:6px;margin:0 0 8px;font-size:11.5px"></div>
     <h2>Incident timeline · agent thought-chain</h2>
     <div id="timeline"></div>
   </div>
@@ -179,6 +180,26 @@ function setLvl(l){ api('/autonomy/'+encodeURIComponent(SVC)+'?level='+l); CURLV
 function decide(ok){ if(!currentIncident) return; api('/demo/approve?incident_id='+encodeURIComponent(currentIncident)+'&approve='+(ok?'true':'false')); $('#approve').style.display='none'; }
 function loadAut(){ fetch('/autonomy').then(r=>r.json()).then(j=>{ if(j.service){ SVC=j.service.service||SVC; CURLVL=j.service.level||CURLVL; } renderAut(); }).catch(()=>{}); }
 
+function chip(txt,col){ return `<span style="padding:3px 8px;border:1px solid var(--line);border-radius:9px;color:${col||'var(--muted)'}">${txt}</span>`; }
+function loadIntel(){
+  Promise.all([fetch('/memory').then(r=>r.json()).catch(()=>null), fetch('/autonomy').then(r=>r.json()).catch(()=>null)])
+   .then(([m,a])=>{
+    const el=$('#intel'); if(!el) return; const out=[];
+    if(m){
+      out.push(chip(`🧠 learned baseline <b>${(m.baseline_rate*100).toFixed(1)}%</b>`, 'var(--cyan)'));
+      out.push(chip(`${m.incident_count||0} incidents remembered`));
+      const rec=(m.recent||[]).slice(-1)[0]; if(rec) out.push(chip(`last: ${esc(rec.status)}`));
+    }
+    if(a&&a.service){
+      const s=a.service; out.push(chip(`autonomy <b>${s.level}</b>`, 'var(--violet)'));
+      if(s.streak) out.push(chip(`trust streak ${s.streak}/${s.promote_after}`, 'var(--green)'));
+      if(s.advise_promote) out.push(chip(`⭐ ready to promote`, 'var(--green)'));
+      if(s.demoted_from) out.push(chip(`⚠ auto-demoted from ${s.demoted_from}`, 'var(--amber)'));
+    }
+    el.innerHTML=out.join('');
+   });
+}
+
 function addEvent(ev){
   const stage = ev.stage || '';
   if(stage==='RUN_START'){ tl.innerHTML=''; series=[]; badRev=goodRev=null; drawCurve(); $('#gate').className='badge pending'; $('#gate').textContent='PENDING'; $('#rate').textContent='—'; $('#decision').innerHTML='<span class="muted">analyzing…</span>'; $('#report').innerHTML=''; $('#txn').style.display='none'; }
@@ -191,6 +212,7 @@ function addEvent(ev){
   if(stage==='AWAITING_APPROVAL'){ $('#approve-msg').textContent = ev.msg||'Approval required'; $('#approve').style.display='block'; }
   if(['APPROVED','DENIED','MITIGATED','CLOSED','OBSERVE_ONLY','ESCALATED'].includes(stage)){ $('#approve').style.display='none'; }
   if(stage==='AUTONOMY') loadAut();
+  if(['MITIGATED','CLOSED','OBSERVE_ONLY','DENIED','RECURRING','AUTONOMY','ESCALATED','APPROVED'].includes(stage)) loadIntel();
   if(stage==='CONNECTED'){ setDot('#d-sse',true); setBackend(ev.backend); return; }
 
   const row = document.createElement('div');
@@ -288,6 +310,7 @@ es.onmessage = e => { try{ const d=JSON.parse(e.data); if(d.stage && d.stage!=='
 es.onerror = () => setDot('#d-sse',false);
 fetch('/health').then(r=>r.json()).then(j=>{ setBackend(j.backend); setDot('#d-gemini', j.gemini); }).catch(()=>{});
 loadAut();
+loadIntel();
 
 // token field: hydrate from ?token= deep-link (then strip it) or localStorage; persist on edit
 (function initToken(){
