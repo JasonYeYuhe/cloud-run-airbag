@@ -23,12 +23,14 @@ All four steps run on live Cloud Run. The close-the-transaction step verifies th
 Cloud Monitoring alert ─webhook(token)→ /alerts  (Cloud Run: airbag-agent, FastAPI)
                                             │ 202 then async
                             ┌───────────────┴───────────────┐
-                            │  ADK SequentialAgent           │
-                            │  triage → decide → rollback    │
-                            │        → verify(loop) → fix-PR  │
-                            └───────────────┬───────────────┘
+                            │  ADK SequentialAgent                  │
+                            │  triage → analyze(Wilson CI) → decide │
+                            │    → autonomy gate → rollback         │
+                            │    → verify(loop) → fix-PR            │
+                            └───────────────┬───────────────────────┘
    tools: Cloud Run Admin (run_v2) · Cloud Monitoring/Logging · GitHub App
-   state: in-process + --min-instances=1 (durable Firestore = roadmap)   secrets: Secret Manager
+   state: durable Firestore store (AIRBAG_STATE=memory|firestore) — survives recycles,
+          multi-instance-ready   secrets: Secret Manager
                                             │
    target demo app (Cloud Run) ←rollback traffic / ←fix deploy
 ```
@@ -60,6 +62,21 @@ The **deployed agent autonomously heals the deployed target** on real Cloud Run,
 
 **Cloud demo:** `./scripts/gcp-demo.sh` (breaks the target), then either wait for the alert, or open the agent URL and click **🚑 Heal** for the instant path.
 **Reproduce the deploy from scratch:** `gcloud auth login` once, then `PROJECT=<id> ./deploy.sh`.
+
+## v2 — production-grade autonomy (live)
+Four upgrades take Airbag from "impressive demo" toward "a thing a team would actually run." Each
+was built against an adversarial review (Gemini 3.1 Pro + 3.5 Flash, and/or a multi-agent review
+workflow) and verified on live Cloud Run:
+
+| Upgrade | What it does | Where |
+|---|---|---|
+| **Statistical decision gate** | The rollback trigger is a **Wilson confidence-interval** verdict (`FAIL`/`PASS`/`INCONCLUSIVE`), not a static `5xx ≥ 5%`. `PASS`→withhold, `INCONCLUSIVE`→escalate (don't auto-act on weak evidence), `FAIL`→proceed. A low-traffic 4/4 outage still fires; a single blip never does. | [`analyzer.py`](agent/autosre/analyzer.py) |
+| **Durable state** | Pending reverts, incidents, and webhook dedup live in **Firestore** (`AIRBAG_STATE=firestore`), behind one atomic `transact`. Self-healing **lease** lock (a crashed heal can't lock a revert forever); survives container recycles + multi-instance. | [`state_store.py`](agent/autosre/state_store.py) |
+| **Graduated autonomy** | Per-service trust levels enforced **deterministically**: `L0` observe · `L1` approve-before-rollback · `L2` auto-rollback + approve-the-fix-PR · `L3` full. Durable approval gate (`/internal/approve`, dashboard Approve/Deny); advisory promotion + automatic demotion on a failed heal. | [`autonomy.py`](agent/autosre/autonomy.py) |
+| **Learned baseline + memory** | The analyzer's baseline is **learned per service** (EMA of steady-state healthy samples), not hardcoded. Cross-incident memory tracks failures + flags a **recurring** incident ("the fix isn't holding"). | [`memory.py`](agent/autosre/memory.py) |
+
+The deterministic-core / LLM-advisory rule still holds throughout: Gemini decides, the state machine
+(now with a statistical gate **and** an autonomy gate) validates and acts.
 
 It also runs fully **locally with no GCP** (see below). See [docs/PLAN.md](docs/PLAN.md) and [docs/DEMO.md](docs/DEMO.md).
 

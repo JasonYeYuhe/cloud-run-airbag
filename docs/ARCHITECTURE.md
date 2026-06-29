@@ -13,7 +13,13 @@ RECEIVED → TRIAGED → ADK(triage→decide) → DECISION
 ```
 - **Fast path (deterministic, reversible):** rollback Cloud Run traffic to the last-good revision. Stops the bleeding; zero data-migration risk.
 - **Slow path:** Gemini writes a fix → real GitHub Actions CI → deploy → **verify the deployed revision IS the fix** → undo the temporary rollback.
-- The two paths are one transaction with a **compensating action**: traffic is restored to the fix only after it's proven healthy; otherwise it routes straight back to the safe rolled-back revision. The undo is triggered by `/internal/complete-rollback` (the fix-PR's CI) or the dashboard's **Verify & Undo** button. State lives in-process (`pending.py`) + `--min-instances=1`; durable Firestore is roadmap.
+- The two paths are one transaction with a **compensating action**: traffic is restored to the fix only after it's proven healthy; otherwise it routes straight back to the safe rolled-back revision. The undo is triggered by `/internal/complete-rollback` (the fix-PR's CI) or the dashboard's **Verify & Undo** button. State is held in a pluggable durable store (`state_store.py`, `AIRBAG_STATE=memory|firestore`) with a self-healing lease lock — running live on **Firestore**.
+
+## v2 — autonomous-SRE upgrades (live)
+- **Statistical gate** (`analyzer.py`) — the rollback decision is gated by a **Wilson confidence-interval** verdict (`FAIL`/`PASS`/`INCONCLUSIVE`) over a fresh business-path sample, with a per-service **learned baseline** (`memory.py`, EMA of healthy samples). Replaces the static `5xx ≥ 5%`.
+- **Durable state** (`state_store.py`) — pending reverts / incidents / webhook-dedup behind one atomic `transact`; Firestore transaction for the exactly-once completion **lease** (self-healing if a heal crashes). Multi-instance-ready.
+- **Graduated autonomy** (`autonomy.py`) — per-service `L0` observe / `L1` approve-before-rollback / `L2` auto-rollback + approve-fix / `L3` full, enforced in the deterministic state machine; durable approval gate (`/internal/approve`); advisory promotion + automatic demotion.
+- **Cross-incident memory** (`memory.py`) — incident history + **recurrence** detection (advisory "the fix isn't holding" signal).
 
 ## Components
 | Concern | Tech | Notes |
@@ -23,7 +29,8 @@ RECEIVED → TRIAGED → ADK(triage→decide) → DECISION
 | Stop-the-bleeding | `google-cloud-run` `run_v2` traffic split | explicit revision, `.result()` the op |
 | Proof of recovery | Cloud Logging 5xx scan + synthetic **business-path** (`/api/orders`) probe | zero-traffic guard (probe, not `/healthz`, which can stay 200 during the fault) |
 | Permanent fix (v2 pipeline) | `fix_pipeline`: RCA from the real stack trace → discover the culprit file → patch + author a regression test (Gemini patch model) → **sandbox-verify** (test fails on the bug, passes on the fix) → PR commits the fix **and** the test via GitHub REST (httpx) | self-proving PR (no pre-planted oracle); App-PR needs `on:push`; falls back to a single-call fix |
-| State | in-process (`_seen_incidents`) + `--min-instances=1` | Firestore/Cloud SQL durable state is roadmap (P1/P2); min-instances carries the demo |
+| State | pluggable `state_store` (memory \| **Firestore**) — pending/incidents/dedup via one atomic `transact`, self-healing lease lock | live on Firestore; durable across recycles + multi-instance. Cloud Tasks durable *work* queue (to drop `--max-instances=1`) is the remaining roadmap item |
+| Autonomy + memory | `autonomy.py` (L0–L3 + durable approval gate, trust ramp) · `memory.py` (learned baseline + recurrence) | levels enforced deterministically; baseline learned per service |
 | Secrets / IAM | Secret Manager + least-priv SA | `run.admin`, `monitoring.viewer`, `logging.viewer`, `secretmanager.secretAccessor` (AI Studio key, so no `aiplatform.user`) |
 | Dashboard | `agent/static/dashboard.html` (vanilla JS + SSE) | replays the event stream as a verifiable thought-chain; links the per-incident report Artifact |
 
