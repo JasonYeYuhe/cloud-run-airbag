@@ -68,8 +68,10 @@ never freely touches prod. Judges see a governed control loop, not a chatbot wit
 **Real, verified on live Cloud Run (project `airbag-hack-260628`, `asia-northeast1`):**
 - Detection → **ADK/Gemini decision** → **rollback** → **verified recovery (error-rate→0 + probe)**.
 - A real **Cloud Monitoring 5xx alert** auto-triggers the heal with **no human** (~3–4 min).
-- Gemini opens a real **fix PR** for the planted `KeyError` → GitHub Actions **CI green**
-  (e.g. [PR #3](https://github.com/JasonYeYuhe/cloud-run-airbag/pull/3)).
+- Gemini opens a real **fix PR** for the planted `KeyError` via an **agentic pipeline** (RCA from
+  the real stack trace → patch → an agent-authored regression test **sandbox-verified to fail on the
+  bug and pass on the fix** → PR commits the fix *and* the test) → GitHub Actions **CI green**
+  ([open PRs](https://github.com/JasonYeYuhe/cloud-run-airbag/pulls)).
 - One-click repeatable demo: **Break → Heal → (deploy fix) → Verify & Undo → Reset** from the dashboard.
 - **Close the transaction:** verify the deployed revision **is** the fix (the CI-reported
   revision/sha, or a post-rollback healthy candidate), restore traffic to it, and CLOSE — or

@@ -22,7 +22,7 @@ RECEIVED → TRIAGED → ADK(triage→decide) → DECISION
 | Decision brain | ADK 1.x `SequentialAgent` (triage→decide), runs at decision time; triage calls the Cloud Run/Monitoring tools via ADK function-calling; decide emits Gemini `responseSchema` | LLM only decides; never executes prod. Falls back to a direct Gemini call then a heuristic (`adk_brain.py`) |
 | Stop-the-bleeding | `google-cloud-run` `run_v2` traffic split | explicit revision, `.result()` the op |
 | Proof of recovery | Cloud Logging 5xx scan + synthetic **business-path** (`/api/orders`) probe | zero-traffic guard (probe, not `/healthz`, which can stay 200 during the fault) |
-| Permanent fix | GitHub REST (httpx) + fine-grained repo-scoped token + GitHub Actions | App-PR needs `on:push` |
+| Permanent fix (v2 pipeline) | `fix_pipeline`: RCA from the real stack trace → discover the culprit file → patch + author a regression test (Gemini patch model) → **sandbox-verify** (test fails on the bug, passes on the fix) → PR commits the fix **and** the test via GitHub REST (httpx) | self-proving PR (no pre-planted oracle); App-PR needs `on:push`; falls back to a single-call fix |
 | State | in-process (`_seen_incidents`) + `--min-instances=1` | Firestore/Cloud SQL durable state is roadmap (P1/P2); min-instances carries the demo |
 | Secrets / IAM | Secret Manager + least-priv SA | `run.admin`, `monitoring.viewer`, `logging.viewer`, `secretmanager.secretAccessor` (AI Studio key, so no `aiplatform.user`) |
 | Dashboard | `agent/static/dashboard.html` (vanilla JS + SSE) | replays the event stream as a verifiable thought-chain; links the per-incident report Artifact |

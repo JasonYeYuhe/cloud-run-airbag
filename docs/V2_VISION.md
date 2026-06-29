@@ -55,6 +55,13 @@ with — not duplication of — Gemini Cloud Assist**.
    **no cross-incident memory / topology**; the **gcp backend logic isn't exercised in CI** (now
    partly addressed — see the review work; gcp LATEST resolution is tested).
 
+> **v2 build status:** Theme 2 (the marquee **agentic self-proving fix loop**) has **landed** —
+> `agent/autosre/fix_pipeline.py`: RCA from the real stack trace → stack-trace file discovery →
+> patch + an agent-authored regression test (Gemini patch model) → **sandbox verification** (the
+> test must fail on the bug and pass on the fix) → a PR that commits the fix *and* the test.
+> Verified live against gemini-2.5-pro. Remaining themes (statistical decisioning, graduated
+> autonomy + ChatOps, durable core, memory, Cloud Assist composition) are next.
+
 ## Strategic themes (the v2 shape)
 
 ### 1 · Decide smarter — statistical, baseline-aware, topology-aware triage
