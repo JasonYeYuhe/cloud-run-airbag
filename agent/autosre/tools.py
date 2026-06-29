@@ -31,6 +31,18 @@ def query_error_rate(service: str, region: str, window_minutes: int = 5,
     return get_backend().query_error_rate(service, region, window_minutes, since_epoch)
 
 
+def fetch_error_logs(service: str, region: str, n: int = 10) -> list[str]:
+    """Recent ERROR-level log lines (exception + stack trace) for the service — the raw evidence
+    the RCA agent reasons over, instead of a hand-built 'returned HTTP 500' string.
+
+    Args:
+        service (str): Cloud Run service name.
+        region (str): GCP region.
+        n (int): max log entries to return.
+    """
+    return get_backend().fetch_error_logs(service, region, n)
+
+
 def synthetic_probe(service: str, path: str | None = None) -> dict:
     """Actively hit the service to confirm it is really serving the business path
     (zero-traffic guard + proves the failing endpoint recovered).

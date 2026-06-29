@@ -105,6 +105,32 @@ def _active_sample(service: str, n: int = 8) -> tuple[int, int]:
     return errs, n
 
 
+def fetch_error_logs(service: str, region: str, n: int = 10) -> list[str]:
+    """Recent ERROR-severity log entries (Cloud Run logs unhandled exceptions + tracebacks to
+    stderr at severity=ERROR) — the real stack trace the RCA agent reads."""
+    import json as _json
+
+    from google.cloud import logging as cloud_logging
+
+    start = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(minutes=15))
+    flt = (f'resource.type="cloud_run_revision" '
+           f'resource.labels.service_name="{service}" '
+           f'resource.labels.location="{region}" severity>=ERROR '
+           f'timestamp>="{start.strftime("%Y-%m-%dT%H:%M:%SZ")}"')
+    client = cloud_logging.Client(project=config.GCP_PROJECT)
+    out: list[str] = []
+    try:
+        for e in client.list_entries(filter_=flt, resource_names=[f"projects/{config.GCP_PROJECT}"],
+                                     order_by=cloud_logging.DESCENDING, max_results=n):
+            p = getattr(e, "payload", None)
+            txt = p if isinstance(p, str) else _json.dumps(p, default=str)
+            if txt:
+                out.append(txt[:2000])
+    except Exception as ex:  # noqa: BLE001
+        out.append(f"(log fetch failed: {ex})")
+    return out
+
+
 def synthetic_probe(service: str, path: str | None = None) -> dict:
     path = path or config.PROBE_PATH
     try:

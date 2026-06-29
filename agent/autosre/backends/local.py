@@ -54,6 +54,14 @@ def query_error_rate(service: str, region: str, window_minutes: int = 5,
             "errors": errs, "window_minutes": window_minutes}
 
 
+def fetch_error_logs(service: str, region: str, n: int = 10) -> list[str]:
+    # the local single-process target doesn't expose a central log; return a representative trace
+    return ['Traceback (most recent call last):\n  File "main.py", line 55, in orders\n'
+            '    return {"orders": ORDERS, "revenue": total_revenue(ORDERS, buggy=True)}\n'
+            '  File "main.py", line 46, in total_revenue\n    return sum(o[key] for o in orders)\n'
+            "KeyError: 'amount'"]
+
+
 def synthetic_probe(service: str, path: str = "/healthz") -> dict:
     try:
         with httpx.Client(timeout=3.0) as c:

@@ -50,15 +50,28 @@ def open_fix_pr(service: str, error_context: str) -> dict | None:
                                 "number": pr["number"],
                                 "summary": "existing open fix PR (reused — not re-opened)"}
 
-            meta = c.get(f"{_API}/repos/{repo}/contents/{path}", params={"ref": base})
-            meta.raise_for_status()
-            meta = meta.json()
-            source = base64.b64decode(meta["content"]).decode()
+            def get_file(p: str) -> str | None:
+                r = c.get(f"{_API}/repos/{repo}/contents/{p}", params={"ref": base})
+                return base64.b64decode(r.json()["content"]).decode() if r.status_code == 200 else None
 
-            fix = _gemini_fix(service, path, source, error_context)
-            if not fix or fix["fixed_content"].strip() == source.strip():
-                log.warning("no usable fix produced; skipping PR")
-                return None
+            # v2 agentic pipeline (RCA → patch + self-proving regression test → sandbox-verify);
+            # falls back to the single-call rewrite of FIX_FILE if the pipeline can't produce a fix.
+            from . import fix_pipeline
+            built = fix_pipeline.build_fix(service, error_context, get_file)
+            if built:
+                files = [(built["path"], built["fixed_content"])]
+                if built.get("test_content"):
+                    files.append((built["test_path"], built["test_content"]))
+                title, body, summary = built["pr_title"], built["pr_body"], built["summary"]
+            else:
+                source = get_file(path)
+                fix = _gemini_fix(service, path, source or "", error_context)
+                if not source or not fix or fix["fixed_content"].strip() == source.strip():
+                    log.warning("no usable fix produced; skipping PR")
+                    return None
+                files = [(path, fix["fixed_content"])]
+                title, summary = fix["pr_title"], fix["summary"]
+                body = fix["pr_body"] + "\n\n— opened autonomously by **Airbag** 🛟 after rolling back the bad revision."
 
             ref = c.get(f"{_API}/repos/{repo}/git/ref/heads/{base}")
             ref.raise_for_status()
@@ -66,20 +79,19 @@ def open_fix_pr(service: str, error_context: str) -> dict | None:
             branch = f"airbag/fix-{int(time.time())}"
             c.post(f"{_API}/repos/{repo}/git/refs",
                    json={"ref": f"refs/heads/{branch}", "sha": base_sha}).raise_for_status()
-            c.put(f"{_API}/repos/{repo}/contents/{path}", json={
-                "message": fix["pr_title"], "branch": branch,
-                "content": base64.b64encode(fix["fixed_content"].encode()).decode(),
-                "sha": meta["sha"],
-            }).raise_for_status()
-            pr = c.post(f"{_API}/repos/{repo}/pulls", json={
-                "title": fix["pr_title"], "head": branch, "base": base,
-                "body": fix["pr_body"] + "\n\n— opened autonomously by **Airbag** 🛟 after rolling back the bad revision.",
-            })
+            for fpath, fcontent in files:  # commit the fix + the agent-authored test
+                cur = c.get(f"{_API}/repos/{repo}/contents/{fpath}", params={"ref": branch})
+                payload = {"message": f"airbag fix: {fpath}", "branch": branch,
+                           "content": base64.b64encode(fcontent.encode()).decode()}
+                if cur.status_code == 200:
+                    payload["sha"] = cur.json()["sha"]
+                c.put(f"{_API}/repos/{repo}/contents/{fpath}", json=payload).raise_for_status()
+            pr = c.post(f"{_API}/repos/{repo}/pulls",
+                        json={"title": title, "head": branch, "base": base, "body": body})
             pr.raise_for_status()
             url = pr.json()["html_url"]
             log.info("opened fix PR: %s", url)
-            return {"pr_url": url, "branch": branch, "number": pr.json()["number"],
-                    "summary": fix["summary"]}
+            return {"pr_url": url, "branch": branch, "number": pr.json()["number"], "summary": summary}
     except Exception as e:  # noqa: BLE001
         log.warning("open_fix_pr failed: %s", e)
         return None
