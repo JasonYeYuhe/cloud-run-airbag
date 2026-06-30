@@ -15,6 +15,7 @@ import json
 import logging
 import time
 import uuid
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 import httpx
@@ -29,18 +30,27 @@ logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("airbag")
 
 # Remote MCP (streamable-HTTP at /mcp) is opt-in (AIRBAG_MCP_HTTP); when on, the agent itself is an
-# MCP server. Its session manager must run in the app lifespan, so wire it at app creation. Wrapped
-# in try/except: a broken MCP layer must NOT take down the (read-only) dashboard + the core agent.
-_mcp_lifespan = _mcp_remote = None
+# MCP server. Wrapped in try/except: a broken MCP layer must NOT take down the dashboard / core agent.
+_mcp_remote = None
 if config.MCP_HTTP_ENABLED:
     try:
         from autosre import mcp_remote as _mcp_remote
-        _mcp_lifespan = _mcp_remote.lifespan
     except Exception:  # noqa: BLE001
         logging.getLogger("airbag").exception("remote MCP failed to load — serving without /mcp")
         _mcp_remote = None
 
-app = FastAPI(title="Airbag — Cloud Run self-heal agent", lifespan=_mcp_lifespan)
+
+@asynccontextmanager
+async def _lifespan(_app):
+    events.start_subscriber()  # cross-instance event fan-out (no-op unless AIRBAG_EVENTS=pubsub)
+    if _mcp_remote is not None:
+        async with _mcp_remote.mcp.session_manager.run():  # MCP streamable-HTTP needs this running
+            yield
+    else:
+        yield
+
+
+app = FastAPI(title="Airbag — Cloud Run self-heal agent", lifespan=_lifespan)
 if _mcp_remote is not None:
     app.mount("/mcp", _mcp_remote.gated_mcp_app)  # Bearer AIRBAG_MCP_TOKEN
 _DASHBOARD = (Path(__file__).parent / "static" / "dashboard.html").read_text(encoding="utf-8")

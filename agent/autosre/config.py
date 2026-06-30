@@ -63,6 +63,11 @@ INTERNAL_TOKEN = os.getenv("AIRBAG_INTERNAL_TOKEN", "")
 # the MCP mount is a destructive public control plane; keep its blast radius separate). See mcp_remote.py.
 MCP_HTTP_ENABLED = _bool("AIRBAG_MCP_HTTP", "false")
 MCP_TOKEN = os.getenv("AIRBAG_MCP_TOKEN", "")
+
+# Event bus: inproc (default, single-instance) | pubsub (cross-instance SSE fan-out → enables
+# dropping --max-instances=1). See events.py.
+EVENTS_BACKEND = os.getenv("AIRBAG_EVENTS", "inproc")
+EVENTS_TOPIC = os.getenv("AIRBAG_EVENTS_TOPIC", "airbag-events")
 HEAL_LEASE_S = float(os.getenv("AIRBAG_HEAL_LEASE_S", "600"))  # per-incident heal lease (>= worst-case run)
 MAX_HEAL_ATTEMPTS = int(os.getenv("AIRBAG_MAX_HEAL_ATTEMPTS", "5"))  # circuit breaker: stop redelivering a deterministically-failing heal
 
