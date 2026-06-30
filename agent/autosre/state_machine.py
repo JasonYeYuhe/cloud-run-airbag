@@ -78,8 +78,8 @@ def _heal_body(incident_id: str, service: str) -> dict:
         stat = analyzer.analyze(s["errs"], s["total"], baseline,
                                 z=config.STAT_Z, min_fail_errors=config.STAT_MIN_FAIL_ERRORS)
         emit("ANALYZED", f"statistical verdict {stat['verdict']} — {stat['reason']}", **stat)
-        if stat["verdict"] == "PASS":  # confirmed healthy -> teach the per-service baseline
-            memory.observe_healthy(service, stat["rate"])
+        # (the healthy baseline is folded exactly once, in the OBSERVE/DONE branch below, to avoid
+        # double-counting the same heal's sample)
 
     # --- DECISION: ADK SequentialAgent (Gemini calls the tools) -> direct Gemini -> heuristic --
     decision = adk_brain.decide(service)
@@ -89,6 +89,12 @@ def _heal_body(incident_id: str, service: str) -> dict:
     else:
         decision = gemini.decide(service, revs, err) or _heuristic(revs, err)
     decision = _validate(decision, revs, stat)
+    if decision.get("action") == "ROLLBACK" and not decision.get("bad_revision"):
+        # backfill the bad (currently-serving) revision when the LLM left it null, so a later
+        # complete_rollback can never auto-pick the known-bad revision as the "fix" (mirrors _heuristic).
+        serving = max(revs.get("revisions", []), key=lambda r: r.get("traffic_percent", 0), default=None)
+        if serving:
+            decision["bad_revision"] = serving["name"]
     emit("DECISION", decision["action"], **decision)
     _decision_summary = {k: decision.get(k) for k in (
         "action", "confidence", "reasoning", "evidence", "_source", "_adk_tools",
@@ -260,10 +266,26 @@ def apply_approval(incident_id: str, approve: bool) -> dict:
         return {"status": "denied", "kind": kind, "incident_id": incident_id, "events": run_events}
 
     emit("APPROVED", f"{kind} approved by operator")
-    if kind == "rollback":  # L1: now apply the rollback + the full mitigation (operator approved)
+    if kind == "rollback":  # L1: re-validate the (up to APPROVAL_TTL_S-old) decision before touching prod
         decision = appr.get("decision", {})
         before = appr.get("before") or {"error_rate": None}
-        return _mitigate(service, incident_id, decision, decision, before, appr["target"],
+        target = appr["target"]
+        revs = tools.list_cloud_run_revisions(service, config.GCP_REGION)
+        if target not in {r["name"] for r in revs.get("revisions", []) if r.get("ready")}:
+            emit("ESCALATED", f"approval stale — rollback target {target} is no longer ready; not acting")
+            incidents.record(incident_id, {"service": service, "status": "escalated", "events": run_events})
+            return {"status": "escalated", "incident_id": incident_id, "events": run_events}
+        if config.STAT_GATE_ENABLED:  # don't roll back a service that already self-recovered
+            s = tools.sample_business_path(service, config.GCP_REGION, config.STAT_SAMPLE_N)
+            v = analyzer.analyze(s["errs"], s["total"], memory.baseline_for(service),
+                                 z=config.STAT_Z, min_fail_errors=config.STAT_MIN_FAIL_ERRORS)
+            emit("ANALYZED", f"re-check at approval: {v['verdict']} — {v['reason']}", **v)
+            if v["verdict"] == "PASS":
+                emit("DONE", "service already healthy at approval time — rollback no longer needed")
+                memory.observe_healthy(service, v["rate"])
+                incidents.record(incident_id, {"service": service, "status": "noop", "events": run_events})
+                return {"status": "noop", "incident_id": incident_id, "events": run_events}
+        return _mitigate(service, incident_id, decision, decision, before, target,
                          emit, run_events, gate_fix_pr=False, level="L1")
     if kind == "fix_pr":  # L2: rollback already applied + held; now open the approved fix-PR
         pr_url = _open_fix_pr(service, incident_id, appr.get("ctx", ""), emit)
@@ -347,6 +369,7 @@ def complete_rollback(service: str, fix_revision: str | None = None,
             if not (cand.get("ok") and _verify(service, emit, since_epoch=stage_at)):
                 tools.set_traffic_split(service, config.GCP_REGION, {safe: 100})  # compensate
                 attempts = pending.bump_attempts(service)
+                autonomy.record_outcome(service, success=False)  # a bad fix caught at canary demotes trust
                 emit("MANUAL_INTERVENTION",
                      f"fix {candidate} failed the {pct}% canary gate (attempt {attempts}/"
                      f"{config.MAX_UNDO_ATTEMPTS}) — compensated: 100% traffic back on {safe}")

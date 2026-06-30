@@ -165,7 +165,7 @@ function api(path){
       if(t){ setToken(t); api(path); }   // retry once with the new token
     }
   }).catch(()=>{});
-  setTimeout(()=>{ if(!live) playScript(); }, 500);
+  setTimeout(()=>{ if(!live && !serverLive) playScript(); }, 500);  // offline self-play only — never against a live agent
 }
 
 function setDot(id,on){ $(id).classList.toggle('on', !!on); }
@@ -213,7 +213,7 @@ function addEvent(ev){
   if(['APPROVED','DENIED','MITIGATED','CLOSED','OBSERVE_ONLY','ESCALATED'].includes(stage)){ $('#approve').style.display='none'; }
   if(stage==='AUTONOMY') loadAut();
   if(['MITIGATED','CLOSED','OBSERVE_ONLY','DENIED','RECURRING','AUTONOMY','ESCALATED','APPROVED'].includes(stage)) loadIntel();
-  if(stage==='CONNECTED'){ setDot('#d-sse',true); setBackend(ev.backend); return; }
+  if(stage==='CONNECTED'){ serverLive=true; setDot('#d-sse',true); setBackend(ev.backend); return; }
 
   const row = document.createElement('div');
   row.className = 'ev s-'+stage;
@@ -304,7 +304,7 @@ function renderDecision(ev){
 }
 
 // ---- live SSE (when the agent is running) ----
-let live=false;
+let live=false, serverLive=false;  // serverLive: a real agent answered the SSE (CONNECTED frame)
 const es = new EventSource('/events');
 es.onmessage = e => { try{ const d=JSON.parse(e.data); if(d.stage && d.stage!=='CONNECTED') live=true; addEvent(d); }catch(_){}}
 es.onerror = () => setDot('#d-sse',false);
@@ -355,7 +355,9 @@ function playScript(){
   let t=0;
   SCRIPT.forEach(([d,e])=>{ t+=d; setTimeout(()=>{ if(!live) addEvent({ts:Date.now()/1000,...e}); }, t); });
 }
-setTimeout(()=>{ if(!live) playScript(); }, 1500);  // auto-play if no server
+// Offline self-play (e.g. opening the file with no agent) ONLY. Never fabricate a heal against a
+// live-but-idle agent — wait ~3s for the CONNECTED frame to prove a server is there.
+setTimeout(()=>{ if(!live && !serverLive) playScript(); }, 3000);
 </script>
 </body>
 </html>
