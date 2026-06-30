@@ -31,7 +31,11 @@ def enqueue_heal(background_tasks, incident_id: str, service: str) -> str:
         except Exception as e:  # noqa: BLE001 — never drop an incident on an enqueue hiccup
             log.error("cloudtasks enqueue failed (%s); falling back to in-process", e)
     from .state_machine import run_self_heal  # lazy: avoid an import cycle
-    background_tasks.add_task(run_self_heal, incident_id, service)
+    if background_tasks is not None:
+        background_tasks.add_task(run_self_heal, incident_id, service)
+    else:  # no request context (e.g. the MCP tool) — run on a daemon thread
+        import threading
+        threading.Thread(target=run_self_heal, args=(incident_id, service), daemon=True).start()
     return "inproc"
 
 

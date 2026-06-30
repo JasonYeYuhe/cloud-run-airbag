@@ -28,7 +28,21 @@ from autosre.state_machine import apply_approval, complete_rollback, run_self_he
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("airbag")
 
-app = FastAPI(title="Airbag — Cloud Run self-heal agent")
+# Remote MCP (streamable-HTTP at /mcp) is opt-in (AIRBAG_MCP_HTTP); when on, the agent itself is an
+# MCP server. Its session manager must run in the app lifespan, so wire it at app creation. Wrapped
+# in try/except: a broken MCP layer must NOT take down the (read-only) dashboard + the core agent.
+_mcp_lifespan = _mcp_remote = None
+if config.MCP_HTTP_ENABLED:
+    try:
+        from autosre import mcp_remote as _mcp_remote
+        _mcp_lifespan = _mcp_remote.lifespan
+    except Exception:  # noqa: BLE001
+        logging.getLogger("airbag").exception("remote MCP failed to load — serving without /mcp")
+        _mcp_remote = None
+
+app = FastAPI(title="Airbag — Cloud Run self-heal agent", lifespan=_mcp_lifespan)
+if _mcp_remote is not None:
+    app.mount("/mcp", _mcp_remote.gated_mcp_app)  # Bearer AIRBAG_MCP_TOKEN
 _DASHBOARD = (Path(__file__).parent / "static" / "dashboard.html").read_text(encoding="utf-8")
 
 

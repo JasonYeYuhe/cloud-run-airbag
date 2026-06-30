@@ -58,6 +58,11 @@ CLOUD_TASKS_LOCATION = os.getenv("AIRBAG_TASKS_LOCATION", GCP_REGION)
 SELF_URL = os.getenv("AIRBAG_SELF_URL", "")  # the agent's own base URL (Cloud Tasks target)
 # dedicated credential for the Cloud-Tasks-facing worker (NOT the webhook token — blast radius)
 INTERNAL_TOKEN = os.getenv("AIRBAG_INTERNAL_TOKEN", "")
+# remote MCP endpoint mounted on the agent (streamable-HTTP at /mcp). Off by default so the standard
+# deploy is unchanged. Bearer-gated by its OWN dedicated token (NOT the Cloud-Tasks INTERNAL_TOKEN —
+# the MCP mount is a destructive public control plane; keep its blast radius separate). See mcp_remote.py.
+MCP_HTTP_ENABLED = _bool("AIRBAG_MCP_HTTP", "false")
+MCP_TOKEN = os.getenv("AIRBAG_MCP_TOKEN", "")
 HEAL_LEASE_S = float(os.getenv("AIRBAG_HEAL_LEASE_S", "600"))  # per-incident heal lease (>= worst-case run)
 MAX_HEAL_ATTEMPTS = int(os.getenv("AIRBAG_MAX_HEAL_ATTEMPTS", "5"))  # circuit breaker: stop redelivering a deterministically-failing heal
 

@@ -45,6 +45,9 @@ WEBHOOK_TOKEN="$(grep '^AIRBAG_WEBHOOK_TOKEN=' "$ROOT/agent/.env" 2>/dev/null | 
 # dedicated credential for the Cloud-Tasks-facing /internal/run-heal worker (distinct from the webhook token)
 INTERNAL_TOKEN="$(grep '^AIRBAG_INTERNAL_TOKEN=' "$ROOT/agent/.env" 2>/dev/null | cut -d= -f2-)"
 [ -z "$INTERNAL_TOKEN" ] && INTERNAL_TOKEN="$(openssl rand -hex 24)"
+# dedicated token for the remote MCP control plane (separate blast radius from the Cloud-Tasks token)
+MCP_TOKEN="$(grep '^AIRBAG_MCP_TOKEN=' "$ROOT/agent/.env" 2>/dev/null | cut -d= -f2-)"
+[ -z "$MCP_TOKEN" ] && MCP_TOKEN="$(openssl rand -hex 24)"
 AURL="https://airbag-agent-${PNUM}.${REGION}.run.app"   # the agent's own URL (Cloud Tasks target)
 
 echo "== deploy target-app (healthy baseline; FAULT_MODE=off; /__fault gated by FAULT_TOKEN) =="
@@ -60,6 +63,7 @@ echo "== tokens -> Secret Manager =="
 mk_secret airbag-demo-secret "$DEMO_TOKEN"
 mk_secret airbag-webhook-secret "$WEBHOOK_TOKEN"
 mk_secret airbag-internal-token "$INTERNAL_TOKEN"
+mk_secret airbag-mcp-token "$MCP_TOKEN"
 
 echo "== Cloud Tasks queue (durable work queue; only used when AIRBAG_QUEUE=cloudtasks) =="
 # --max-attempts bounds retries at the infra level (belt-and-suspenders with the app's
@@ -82,7 +86,7 @@ fi
 # AIRBAG_SELF_URL + AIRBAG_TASKS_* let cloudtasks mode work; AIRBAG_QUEUE is left UNSET (=inproc
 # default) so the standard deploy is unchanged. Flip to cloudtasks with --update-env-vars AIRBAG_QUEUE=cloudtasks.
 ENVS="AIRBAG_BACKEND=gcp,GOOGLE_CLOUD_PROJECT=${PROJECT},GOOGLE_CLOUD_LOCATION=${REGION},TARGET_SERVICE=airbag-target,TARGET_BASE_URL=${TURL},AIRBAG_VERIFY_INTERVAL_S=4,AIRBAG_VERIFY_ATTEMPTS=8,AIRBAG_SELF_URL=${AURL},AIRBAG_TASKS_QUEUE=airbag-heals,AIRBAG_TASKS_LOCATION=${REGION}"
-SECRETS="GEMINI_API_KEY=airbag-gemini-key:latest,AIRBAG_DEMO_TOKEN=airbag-demo-secret:latest,AIRBAG_WEBHOOK_TOKEN=airbag-webhook-secret:latest,AIRBAG_INTERNAL_TOKEN=airbag-internal-token:latest"
+SECRETS="GEMINI_API_KEY=airbag-gemini-key:latest,AIRBAG_DEMO_TOKEN=airbag-demo-secret:latest,AIRBAG_WEBHOOK_TOKEN=airbag-webhook-secret:latest,AIRBAG_INTERNAL_TOKEN=airbag-internal-token:latest,AIRBAG_MCP_TOKEN=airbag-mcp-token:latest"
 
 # Optional fix-PR slow path: use a FINE-GRAINED, repo-scoped GitHub token (Contents +
 # Pull requests: write). Never put a broad classic token in this public service.
@@ -104,9 +108,12 @@ echo "== deploy agent =="
 # stay a single instance. --min-instances 1 keeps it warm; --max-instances 1 keeps the in-process
 # stores authoritative (no scale-out splitting state). Concurrency default is fine (the dashboard
 # needs concurrent SSE + clicks); single-instance is about instance count, not request count.
+# --timeout 3600: long-lived streamable-HTTP MCP sessions (when AIRBAG_MCP_HTTP=on) + dashboard SSE.
+# To enable the remote MCP control plane: --update-env-vars AIRBAG_MCP_HTTP=on (it stays a public,
+# token-gated, destructive surface, so --max-instances 1 is REQUIRED — sessions are in-process).
 gcloud run deploy airbag-agent --source "$ROOT/agent" --region "$REGION" \
   --service-account "$SA" --allow-unauthenticated --min-instances 1 --max-instances 1 \
-  --no-cpu-throttling --set-env-vars "$ENVS" --update-secrets "$SECRETS" -q
+  --no-cpu-throttling --timeout 3600 --set-env-vars "$ENVS" --update-secrets "$SECRETS" -q
 
 AURL="$(gcloud run services describe airbag-agent --region "$REGION" --format='value(status.url)')"
 echo
