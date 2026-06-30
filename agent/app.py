@@ -45,8 +45,8 @@ def health():
 
 # --- incident reports (read-only Artifact; safe to be public) ----------------
 @app.get("/incidents")
-def list_incidents():
-    return {"incidents": incidents.list_recent()}
+def list_incidents(limit: int = 50):
+    return {"incidents": incidents.list_recent(max(1, min(limit, 200)))}
 
 
 @app.get("/incidents/{incident_id}")

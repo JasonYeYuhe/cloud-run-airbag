@@ -56,3 +56,17 @@ jobs:
       - run: pip install -r requirements.txt
       - name: Smoke (healthy path loads + computes revenue)
         run: python -c "import main; assert main.total_revenue(main.ORDERS) == 35, main.total_revenue(main.ORDERS); print('target-app smoke OK')"
+
+  mcp-server:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mcp-server
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt pytest
+      - name: Contract tests (mocked HTTP — tool registration, auth gating, sanitized errors)
+        run: python -m pytest -q

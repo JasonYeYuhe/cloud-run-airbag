@@ -1,0 +1,4 @@
+# Airbag MCP server (standalone stdio MCP server — proxies the Airbag HTTP API).
+# Run separately from the agent: it's a client-side tool an MCP client launches.
+mcp~=1.28.1
+httpx~=0.28.1
