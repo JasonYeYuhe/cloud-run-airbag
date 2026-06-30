@@ -199,10 +199,24 @@ def demo_run(background_tasks: BackgroundTasks):
     is_gcp = config.BACKEND == "gcp"
 
     def break_then_heal():
-        if is_gcp:
-            _burst(config.PROBE_PATH, config.DEMO_BURST_N)
-        time.sleep(config.DEMO_HEAL_DELAY_S if is_gcp else 1.2)
-        run_self_heal(incident_id, config.TARGET_SERVICE)
+        # A flake here (run_self_heal re-raises on transient failure by design, and Starlette's
+        # BackgroundTasks SWALLOWS it) would otherwise leave the marquee demo frozen on
+        # FAULT_INJECTED with the target still broken. Emit ESCALATED + restore the target so the
+        # dashboard always reaches a terminal state and the target is left healthy.
+        try:
+            if is_gcp:
+                _burst(config.PROBE_PATH, config.DEMO_BURST_N)
+            time.sleep(config.DEMO_HEAL_DELAY_S if is_gcp else 1.2)
+            run_self_heal(incident_id, config.TARGET_SERVICE)
+        except Exception as e:  # noqa: BLE001 — never let the one-click demo strand the target
+            log.exception("demo/run break_then_heal failed for %s", incident_id)
+            events.publish({"stage": "ESCALATED", "incident_id": incident_id,
+                            "service": config.TARGET_SERVICE,
+                            "msg": f"one-click demo failed ({e}) — restoring the target to healthy"})
+            try:
+                tools.reset_target(config.TARGET_SERVICE, config.GCP_REGION)
+            except Exception:  # noqa: BLE001 — best effort; a background task must never raise
+                log.exception("demo/run reset_target failed for %s", incident_id)
 
     background_tasks.add_task(break_then_heal)
     return {"status": "accepted", "incident_id": incident_id,
@@ -230,9 +244,10 @@ def demo_trigger(background_tasks: BackgroundTasks):
 
 # --- P1: CI-triggered transaction close (the fix PR's CI calls this after deploy) -------
 def require_internal_token(request: Request) -> None:
-    """Gate the machine-to-machine endpoint with the webhook token (CI holds it)."""
-    supplied = request.headers.get("x-airbag-token") or request.query_params.get("token", "")
-    _gate(config.WEBHOOK_TOKEN, supplied, "webhook token")
+    """Gate the machine-to-machine endpoint with the webhook token (CI holds it). HEADER-ONLY
+    (Phase 0.6): a `?token=` query string persists the secret in Cloud Run/LB request logs + GCP
+    audit logs. CI already sends the header (complete-rollback.yml)."""
+    _gate(config.WEBHOOK_TOKEN, request.headers.get("x-airbag-token", ""), "webhook token")
 
 
 @app.post("/internal/complete-rollback", dependencies=[Depends(require_internal_token)])
@@ -258,9 +273,9 @@ async def internal_complete_rollback(request: Request, response: Response):
 # --- Cloud Tasks worker: the durable-queue target that actually runs the heal -----------
 def require_run_token(request: Request) -> None:
     """Gate the Cloud-Tasks-facing worker with a DEDICATED token (not the webhook token — keeps the
-    blast radius of the heal-trigger credential separate). OIDC is the production hardening."""
-    supplied = request.headers.get("x-airbag-internal-token") or request.query_params.get("token", "")
-    _gate(config.INTERNAL_TOKEN, supplied, "internal token")
+    blast radius of the heal-trigger credential separate). HEADER-ONLY (Phase 0.6): no `?token=` in
+    logs; Cloud Tasks already sends the header (queue.py). OIDC is the production hardening."""
+    _gate(config.INTERNAL_TOKEN, request.headers.get("x-airbag-internal-token", ""), "internal token")
 
 
 @app.post("/internal/run-heal", dependencies=[Depends(require_run_token)])
@@ -347,10 +362,38 @@ async def internal_approve(request: Request, response: Response):
 
 
 # --- production webhooks -----------------------------------------------------
+def _alert_token(request: Request) -> str:
+    """The webhook token for the alert channel, preferring a HEADER (Phase 0.6 — no secret in URL
+    logs). Cloud Monitoring `webhook_basicauth` sends `Authorization: Basic base64(user:token)`; we
+    also accept `x-airbag-token`. `?token=` is a DEPRECATED fallback (logged) so a pre-existing
+    `webhook_tokenauth` channel keeps working until it's re-created via infra/alert-setup.sh."""
+    auth = request.headers.get("authorization", "")
+    if auth[:6].lower() == "basic ":
+        import base64
+        try:
+            decoded = base64.b64decode(auth[6:].strip()).decode("utf-8")
+        except Exception:  # noqa: BLE001
+            decoded = ""
+        return decoded.split(":", 1)[1] if ":" in decoded else decoded
+    header = request.headers.get("x-airbag-token", "")
+    if header:
+        return header
+    legacy = request.query_params.get("token", "")
+    if legacy:
+        log.warning("alert webhook used the DEPRECATED ?token= query param — re-run "
+                    "infra/alert-setup.sh to switch the channel to webhook_basicauth (header auth)")
+    return legacy
+
+
 @app.post("/alerts/cloud-monitoring", status_code=202)
 async def cloud_monitoring_alert(request: Request, background_tasks: BackgroundTasks):
-    token = request.query_params.get("token") or request.headers.get("x-airbag-token", "")
-    _gate(config.WEBHOOK_TOKEN, token, "webhook token")
+    try:
+        _gate(config.WEBHOOK_TOKEN, _alert_token(request), "webhook token")
+    except HTTPException as e:  # RFC2617 challenge so a webhook_basicauth channel negotiates cleanly
+        if e.status_code == 401:
+            raise HTTPException(status_code=401, detail=e.detail,
+                                headers={"WWW-Authenticate": 'Basic realm="airbag"'}) from None
+        raise
 
     payload = await request.json()
     incident = payload.get("incident", {}) or {}
