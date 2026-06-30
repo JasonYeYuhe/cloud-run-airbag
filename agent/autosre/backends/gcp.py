@@ -9,10 +9,14 @@ verify-and-undo, all on real Cloud Run.
 from __future__ import annotations
 
 import datetime
+import time
 
 import httpx
 
 from .. import config
+
+# Optimistic-concurrency retries for a traffic mutation (see _set_traffic).
+_TRAFFIC_MAX_ATTEMPTS = 4
 
 
 def _service_path(service: str, region: str) -> str:
@@ -148,11 +152,31 @@ def synthetic_probe(service: str, path: str | None = None) -> dict:
 
 
 def _set_traffic(service: str, region: str, targets):
+    """Set the service's traffic split with OPTIMISTIC CONCURRENCY.
+
+    Under --max-instances 3 two instances can race a traffic write — a heal's rollback (claim_heal
+    lease) against a complete_rollback's canary (a SEPARATE lease), which the leases do not serialize.
+    A plain read-modify-write would let last-writer-wins strand a torn/partial split or silently undo
+    a fresh rollback. So we read a FRESH service (and its etag — the concurrency token, carried inside
+    the Service) on EVERY attempt, re-apply the INTENDED targets, and let Cloud Run reject a stale
+    write; on that conflict we re-read + retry. Each write therefore lands as one of the intended
+    whole states, never a torn mix, and a transient conflict doesn't fail the whole heal."""
+    from google.api_core import exceptions as gax
     from google.cloud import run_v2
-    svc = _get_service(service, region)
-    svc.traffic = targets if isinstance(targets, list) else [targets]
-    run_v2.ServicesClient().update_service(
-        service=svc, update_mask={"paths": ["traffic"]}).result(timeout=120)
+    targets = targets if isinstance(targets, list) else [targets]
+    client = run_v2.ServicesClient()
+    last_exc: Exception | None = None
+    for attempt in range(_TRAFFIC_MAX_ATTEMPTS):
+        svc = _get_service(service, region)          # fresh etag per attempt (optimistic-concurrency token)
+        svc.traffic = targets
+        try:
+            client.update_service(
+                service=svc, update_mask={"paths": ["traffic"]}).result(timeout=120)
+            return
+        except (gax.Aborted, gax.FailedPrecondition) as e:  # a concurrent writer changed the service
+            last_exc = e
+            time.sleep(0.25 * (attempt + 1))
+    raise last_exc  # exhausted retries -> surface so the heal releases its lease and a retry re-runs
 
 
 def rollback_traffic_to_revision(service: str, region: str, revision: str) -> dict:
