@@ -85,7 +85,7 @@ never freely touches prod. Judges see a governed control loop, not a chatbot wit
 - **Verifiable incident-report Artifact:** every run is persisted and rendered at
   `/incidents/{id}/report` (decision + signals + before/after + full timeline) — *AI isn't guessing*.
 - Three execution backends (mock / local / gcp) behind one agent codebase; `/demo/*` is
-  token-gated so the public dashboard is watch-only. **77 tests, CI green.**
+  token-gated so the public dashboard is watch-only. **97 tests (90 agent + 7 mcp-server), CI green.**
 
 **v2 — production-grade autonomy (real, verified on live Cloud Run):**
 - **Statistical decision gate** — the rollback trigger is a **Wilson confidence-interval** verdict
@@ -93,8 +93,9 @@ never freely touches prod. Judges see a governed control loop, not a chatbot wit
   `FAIL`→proceed. Verified live (`ANALYZED: FAIL — CI lower 83.9% > baseline 2%`).
   [`analyzer.py`](agent/autosre/analyzer.py).
 - **Durable Firestore state** — pending reverts / incidents / dedup behind one atomic `transact`
-  with a self-healing **lease** lock; survives container recycles, multi-instance-ready. Running
-  live with `AIRBAG_STATE=firestore`. [`state_store.py`](agent/autosre/state_store.py).
+  with a self-healing **lease** lock; survives container recycles. Running live with
+  `AIRBAG_STATE=firestore` (single-instance: the SSE event bus is still in-process, so true
+  multi-instance scale-out is a roadmap item). [`state_store.py`](agent/autosre/state_store.py).
 - **Graduated autonomy** — per-service `L0/L1/L2/L3` enforced in the state machine, with a
   **durable approval gate** (`/internal/approve`, dashboard Approve/Deny) + advisory promotion /
   automatic demotion. Verified live: L1 held the rollback at 500 until approved, then recovered.
@@ -103,15 +104,24 @@ never freely touches prod. Judges see a governed control loop, not a chatbot wit
   (EMA of healthy samples); memory flags a **recurring** incident. [`memory.py`](agent/autosre/memory.py).
 - Each v2 upgrade was built against an adversarial review (Gemini 3.1 Pro + 3.5 Flash, and/or a
   multi-agent review workflow with refute-by-default verification) and the findings fixed.
+- **Implemented + tested but OFF in the live demo** (opt-in flags — kept off to keep the demo simple
+  and the attack surface small): a **Cloud Tasks** durable work queue (`AIRBAG_QUEUE=cloudtasks`,
+  redelivers a heal across an instance recycle) and an **MCP server** — a local stdio server
+  ([`mcp-server/`](mcp-server/)) plus a flag-gated remote endpoint (`AIRBAG_MCP_HTTP`) — so other
+  agents (Claude, Cursor) can drive Airbag. Both were live-verified, then turned off for the demo.
+
+> Framing: the irreducible core is ~4 files — **one atomic state primitive (`transact`) + one
+> deterministic transaction (`state_machine`)**; every durability/governance feature above is a thin
+> policy on top. That's design discipline, not feature-stacking.
 
 **Roadmap (P2, honestly not done):**
 - **Fully-unattended CI close:** the included `.github/workflows/complete-rollback.yml` deploys
   the fix and calls `/internal/complete-rollback`, but is gated on a one-time **Workload Identity
   Federation** binding (GitHub Actions → GCP deploy). Until that's wired, the close is triggered
   by the dashboard button (or a manual `curl`/`workflow_dispatch`).
-- **Cloud Tasks durable work queue** (replacing FastAPI `BackgroundTasks` + the daemon CI-watcher)
-  so the agent can drop `--max-instances=1` and scale out — the durable *state* is already done
-  (Firestore), this is the remaining durable-*work* half.
+- **True multi-instance scale-out:** durable state (Firestore) + durable work (Cloud Tasks) are
+  built + tested; the remaining blocker is the **in-process SSE event bus** — moving it to Pub/Sub
+  would let us drop `--max-instances=1`.
 - ChatOps (Slack approvals on top of the autonomy gate); Cloud Assist composition.
 
 ## 6. The demo
