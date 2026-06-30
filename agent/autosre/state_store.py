@@ -148,6 +148,56 @@ def seen_and_mark(collection: str, doc_id: str, ttl_seconds: float) -> bool:
     return transact(collection, doc_id, _m)
 
 
+def claim_heal(doc_id: str, lease_seconds: float, ttl_seconds: float, max_attempts: int) -> str:
+    """Per-incident idempotency guard AND circuit breaker for run_self_heal. Returns:
+      "claimed"   — THIS caller may run the heal (and the attempt count was bumped),
+      "duplicate" — already running (unexpired lease) or already done -> drop the redelivery,
+      "exhausted" — failed max_attempts times -> give up (marked done so it stops redelivering).
+    Claim BEFORE any side effect. The attempt count bounds Cloud Tasks at-least-once retries so a
+    DETERMINISTICALLY-failing heal can't loop forever re-running side effects."""
+    now = time.time()
+
+    def _m(cur):
+        if cur:
+            if cur.get("done"):
+                return KEEP, "duplicate"
+            if cur.get("running_lease_until", 0) > now:
+                return KEEP, "duplicate"
+        attempts = (cur or {}).get("attempts", 0)
+        if attempts >= max_attempts:                     # circuit breaker tripped -> terminal
+            doc = dict(cur or {})
+            doc.update({"done": True, "running_lease_until": 0, "exhausted": True,
+                        "expires_at": now + ttl_seconds})
+            return doc, "exhausted"
+        doc = dict(cur or {})
+        doc.update({"running_lease_until": now + lease_seconds, "done": False,
+                    "attempts": attempts + 1, "claimed_at": now, "expires_at": now + ttl_seconds})
+        return doc, "claimed"
+    return transact("heal_runs", doc_id, _m)
+
+
+def finish_heal(doc_id: str, ttl_seconds: float) -> None:
+    """Mark a heal done so a late redelivery (after the lease expired) is a no-op (TTL-reclaimed)."""
+    now = time.time()
+
+    def _m(cur):
+        cur = cur or {}
+        cur.update({"done": True, "running_lease_until": 0, "done_at": now,
+                    "expires_at": now + ttl_seconds})
+        return cur, True
+    transact("heal_runs", doc_id, _m)
+
+
+def release_heal(doc_id: str) -> None:
+    """Release the lease WITHOUT marking done (the run failed transiently) so a retry can re-claim."""
+    def _m(cur):
+        if not cur:
+            return KEEP, None
+        cur["running_lease_until"] = 0
+        return cur, None
+    transact("heal_runs", doc_id, _m)
+
+
 def reset_memory() -> None:
     """Test helper — clear the in-memory store."""
     with _lock:

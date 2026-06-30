@@ -88,3 +88,35 @@ def test_bump_attempts_increments():
     assert pending.bump_attempts("svc") == 1
     assert pending.bump_attempts("svc") == 2
     assert pending.get_pending("svc")["attempts"] == 2
+
+
+def test_claim_heal_idempotency():
+    assert state_store.claim_heal("inc1", 600, 3600, 5) == "claimed"    # first claim wins
+    assert state_store.claim_heal("inc1", 600, 3600, 5) == "duplicate"  # already running (leased)
+    state_store.finish_heal("inc1", 3600)
+    assert state_store.claim_heal("inc1", 600, 3600, 5) == "duplicate"  # done -> drop redelivery
+
+
+def test_claim_heal_release_allows_retry():
+    assert state_store.claim_heal("inc2", 600, 3600, 5) == "claimed"
+    state_store.release_heal("inc2")                            # transient failure (not done)
+    assert state_store.claim_heal("inc2", 600, 3600, 5) == "claimed"    # re-claimable for a retry
+
+
+def test_claim_heal_circuit_breaker_after_max_attempts():
+    for _ in range(3):                                          # 3 failed attempts (claim then release)
+        assert state_store.claim_heal("inc3", 600, 3600, 3) == "claimed"
+        state_store.release_heal("inc3")
+    assert state_store.claim_heal("inc3", 600, 3600, 3) == "exhausted"  # cap hit -> give up
+    assert state_store.claim_heal("inc3", 600, 3600, 3) == "duplicate"  # marked done -> stop redelivering
+
+
+def test_set_pending_preserves_inflight_completion_lease():
+    import time
+    pending.set_pending("svc", {"incident_id": "i1"})
+    rec = pending.try_begin_complete("svc")                     # take the completion lease
+    assert rec is not None and rec["completing_lease_until"] > time.time()
+    pending.bump_attempts("svc")
+    pending.set_pending("svc", {"incident_id": "i2"})           # a concurrent re-arm must not stomp it
+    after = pending.get_pending("svc")
+    assert after["completing_lease_until"] > time.time() and after["attempts"] == 1

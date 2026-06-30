@@ -51,6 +51,16 @@ AUTONOMY_LEVEL = os.getenv("AIRBAG_AUTONOMY", "L3")
 AUTONOMY_PROMOTE_AFTER = int(os.getenv("AIRBAG_AUTONOMY_PROMOTE_AFTER", "5"))  # advisory threshold
 APPROVAL_TTL_S = float(os.getenv("AIRBAG_APPROVAL_TTL_S", "3600"))            # pending-approval window
 
+# Durable work queue (v2): inproc (default, FastAPI BackgroundTasks) | cloudtasks. See queue.py.
+QUEUE_BACKEND = os.getenv("AIRBAG_QUEUE", "inproc")
+CLOUD_TASKS_QUEUE = os.getenv("AIRBAG_TASKS_QUEUE", "airbag-heals")
+CLOUD_TASKS_LOCATION = os.getenv("AIRBAG_TASKS_LOCATION", GCP_REGION)
+SELF_URL = os.getenv("AIRBAG_SELF_URL", "")  # the agent's own base URL (Cloud Tasks target)
+# dedicated credential for the Cloud-Tasks-facing worker (NOT the webhook token — blast radius)
+INTERNAL_TOKEN = os.getenv("AIRBAG_INTERNAL_TOKEN", "")
+HEAL_LEASE_S = float(os.getenv("AIRBAG_HEAL_LEASE_S", "600"))  # per-incident heal lease (>= worst-case run)
+MAX_HEAL_ATTEMPTS = int(os.getenv("AIRBAG_MAX_HEAL_ATTEMPTS", "5"))  # circuit breaker: stop redelivering a deterministically-failing heal
+
 # Durable state store (v2): memory (default) | firestore. See state_store.py.
 STATE_BACKEND = os.getenv("AIRBAG_STATE", "memory")
 COMPLETE_LEASE_S = float(os.getenv("AIRBAG_COMPLETE_LEASE_S", "300"))  # complete-rollback lock lease

@@ -17,8 +17,9 @@ gcloud services enable run.googleapis.com cloudbuild.googleapis.com artifactregi
 
 echo "== agent service account + least-priv roles =="
 gcloud iam service-accounts create airbag-agent --display-name="Airbag self-heal agent" 2>/dev/null || true
-# datastore.user: durable state store (AIRBAG_STATE=firestore) reads/writes Firestore.
-for R in run.admin monitoring.viewer logging.viewer secretmanager.secretAccessor datastore.user; do
+# datastore.user: durable state store (AIRBAG_STATE=firestore). cloudtasks.enqueuer: durable work
+# queue (AIRBAG_QUEUE=cloudtasks) enqueues self-heal tasks.
+for R in run.admin monitoring.viewer logging.viewer secretmanager.secretAccessor datastore.user cloudtasks.enqueuer; do
   gcloud projects add-iam-policy-binding "$PROJECT" --member="serviceAccount:${SA}" --role="roles/$R" --condition=None -q >/dev/null
 done
 # GOTCHA 1: new projects' default compute SA lacks build perms -> source deploys fail.
@@ -41,6 +42,10 @@ DEMO_TOKEN="$(grep '^AIRBAG_DEMO_TOKEN=' "$ROOT/agent/.env" 2>/dev/null | cut -d
 [ -z "$DEMO_TOKEN" ] && DEMO_TOKEN="$(openssl rand -hex 16)"
 WEBHOOK_TOKEN="$(grep '^AIRBAG_WEBHOOK_TOKEN=' "$ROOT/agent/.env" 2>/dev/null | cut -d= -f2-)"
 [ -z "$WEBHOOK_TOKEN" ] && WEBHOOK_TOKEN="$(openssl rand -hex 24)"
+# dedicated credential for the Cloud-Tasks-facing /internal/run-heal worker (distinct from the webhook token)
+INTERNAL_TOKEN="$(grep '^AIRBAG_INTERNAL_TOKEN=' "$ROOT/agent/.env" 2>/dev/null | cut -d= -f2-)"
+[ -z "$INTERNAL_TOKEN" ] && INTERNAL_TOKEN="$(openssl rand -hex 24)"
+AURL="https://airbag-agent-${PNUM}.${REGION}.run.app"   # the agent's own URL (Cloud Tasks target)
 
 echo "== deploy target-app (healthy baseline; FAULT_MODE=off; /__fault gated by FAULT_TOKEN) =="
 # Explicit FAULT_MODE=off: scripts/gcp-demo-setup.sh later flips the service spec to FAULT_MODE=bug
@@ -54,6 +59,16 @@ TURL="$(gcloud run services describe airbag-target --region "$REGION" --format='
 echo "== tokens -> Secret Manager =="
 mk_secret airbag-demo-secret "$DEMO_TOKEN"
 mk_secret airbag-webhook-secret "$WEBHOOK_TOKEN"
+mk_secret airbag-internal-token "$INTERNAL_TOKEN"
+
+echo "== Cloud Tasks queue (durable work queue; only used when AIRBAG_QUEUE=cloudtasks) =="
+# --max-attempts bounds retries at the infra level (belt-and-suspenders with the app's
+# MAX_HEAL_ATTEMPTS circuit breaker) so a deterministically-failing heal can't loop forever.
+gcloud tasks queues create airbag-heals --location="$REGION" \
+  --max-attempts=5 --max-retry-duration=1800s 2>/dev/null \
+  || gcloud tasks queues update airbag-heals --location="$REGION" \
+       --max-attempts=5 --max-retry-duration=1800s 2>/dev/null \
+  || echo "  (queue airbag-heals already exists)"
 
 echo "== gemini key -> Secret Manager =="
 if [ -f "$ROOT/agent/.env" ]; then
@@ -64,8 +79,10 @@ if [ -f "$ROOT/agent/.env" ]; then
     --role=roles/secretmanager.secretAccessor -q >/dev/null
 fi
 
-ENVS="AIRBAG_BACKEND=gcp,GOOGLE_CLOUD_PROJECT=${PROJECT},GOOGLE_CLOUD_LOCATION=${REGION},TARGET_SERVICE=airbag-target,TARGET_BASE_URL=${TURL},AIRBAG_VERIFY_INTERVAL_S=4,AIRBAG_VERIFY_ATTEMPTS=8"
-SECRETS="GEMINI_API_KEY=airbag-gemini-key:latest,AIRBAG_DEMO_TOKEN=airbag-demo-secret:latest,AIRBAG_WEBHOOK_TOKEN=airbag-webhook-secret:latest"
+# AIRBAG_SELF_URL + AIRBAG_TASKS_* let cloudtasks mode work; AIRBAG_QUEUE is left UNSET (=inproc
+# default) so the standard deploy is unchanged. Flip to cloudtasks with --update-env-vars AIRBAG_QUEUE=cloudtasks.
+ENVS="AIRBAG_BACKEND=gcp,GOOGLE_CLOUD_PROJECT=${PROJECT},GOOGLE_CLOUD_LOCATION=${REGION},TARGET_SERVICE=airbag-target,TARGET_BASE_URL=${TURL},AIRBAG_VERIFY_INTERVAL_S=4,AIRBAG_VERIFY_ATTEMPTS=8,AIRBAG_SELF_URL=${AURL},AIRBAG_TASKS_QUEUE=airbag-heals,AIRBAG_TASKS_LOCATION=${REGION}"
+SECRETS="GEMINI_API_KEY=airbag-gemini-key:latest,AIRBAG_DEMO_TOKEN=airbag-demo-secret:latest,AIRBAG_WEBHOOK_TOKEN=airbag-webhook-secret:latest,AIRBAG_INTERNAL_TOKEN=airbag-internal-token:latest"
 
 # Optional fix-PR slow path: use a FINE-GRAINED, repo-scoped GitHub token (Contents +
 # Pull requests: write). Never put a broad classic token in this public service.

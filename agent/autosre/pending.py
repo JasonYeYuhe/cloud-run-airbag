@@ -17,9 +17,19 @@ _COLL = "pending"
 def set_pending(service: str, data: dict) -> None:
     # defaults BEFORE **data so the caller can override; Firestore order_by(rollback_at_epoch) in
     # all_pending() SILENTLY omits docs missing that field, so it must always be present.
-    record = {"rollback_at_epoch": 0, "service": service, "attempts": 0, **data}
-    record["completing_lease_until"] = 0  # a freshly-set pending starts unlocked (no completion yet)
-    state_store.put(_COLL, service, record)
+    now = time.time()
+
+    def _m(cur):
+        record = {"rollback_at_epoch": 0, "service": service, "attempts": 0, **data}
+        # if a complete_rollback is in flight (unexpired lease), preserve it + its attempts counter
+        # rather than stomping them — a concurrent re-arm must not break the running completion.
+        if cur and cur.get("completing_lease_until", 0) > now:
+            record["completing_lease_until"] = cur["completing_lease_until"]
+            record["attempts"] = cur.get("attempts", 0)
+        else:
+            record["completing_lease_until"] = 0  # a fresh pending starts unlocked
+        return record, None
+    state_store.transact(_COLL, service, _m)
 
 
 def get_pending(service: str) -> dict | None:

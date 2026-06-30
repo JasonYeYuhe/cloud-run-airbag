@@ -22,7 +22,7 @@ from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request, R
 from fastapi.responses import HTMLResponse, StreamingResponse
 from starlette.concurrency import run_in_threadpool
 
-from autosre import autonomy, config, events, incidents, memory, report, state_store, tools
+from autosre import autonomy, config, events, incidents, memory, queue, report, state_store, tools
 from autosre.state_machine import apply_approval, complete_rollback, run_self_heal
 
 logging.basicConfig(level=logging.INFO)
@@ -145,7 +145,7 @@ def demo_break(background_tasks: BackgroundTasks):
 @app.post("/demo/heal", dependencies=[Depends(require_demo_token)])
 def demo_heal(background_tasks: BackgroundTasks):
     incident_id = f"inc-{uuid.uuid4().hex[:8]}"
-    background_tasks.add_task(run_self_heal, incident_id, config.TARGET_SERVICE)
+    queue.enqueue_heal(background_tasks, incident_id, config.TARGET_SERVICE)
     return {"status": "accepted", "incident_id": incident_id}
 
 
@@ -231,6 +231,38 @@ async def internal_complete_rollback(request: Request, response: Response):
     return result
 
 
+# --- Cloud Tasks worker: the durable-queue target that actually runs the heal -----------
+def require_run_token(request: Request) -> None:
+    """Gate the Cloud-Tasks-facing worker with a DEDICATED token (not the webhook token — keeps the
+    blast radius of the heal-trigger credential separate). OIDC is the production hardening."""
+    supplied = request.headers.get("x-airbag-internal-token") or request.query_params.get("token", "")
+    _gate(config.INTERNAL_TOKEN, supplied, "internal token")
+
+
+@app.post("/internal/run-heal", dependencies=[Depends(require_run_token)])
+async def internal_run_heal(request: Request, response: Response):
+    """Cloud Tasks delivers a heal here (at-least-once). Runs run_self_heal synchronously, which is
+    idempotent per incident_id (a redelivery while running, or after done, returns a cheap no-op).
+    Returns 2xx for ANY terminal decision (a fresh delivery shouldn't redeliver); only a genuine
+    transient failure returns 5xx so Cloud Tasks retries."""
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        body = {}
+    incident_id = body.get("incident_id") or ""
+    service = body.get("service") or config.TARGET_SERVICE
+    if not incident_id:
+        raise HTTPException(status_code=400, detail="incident_id required")
+    if service != config.TARGET_SERVICE:  # allowlist — never let an arbitrary service be mutated
+        raise HTTPException(status_code=400, detail=f"service {service!r} not allowed")
+    try:
+        return await run_in_threadpool(run_self_heal, incident_id, service)
+    except Exception as e:  # noqa: BLE001
+        log.exception("run-heal failed for %s", incident_id)
+        response.status_code = 500  # transient -> redeliver (the heal lease was released)
+        return {"status": "error", "error": str(e), "incident_id": incident_id}
+
+
 # --- graduated autonomy: per-service trust level + the L1/L2 approval gate ---------------
 @app.get("/autonomy")
 def autonomy_status():
@@ -309,7 +341,7 @@ async def cloud_monitoring_alert(request: Request, background_tasks: BackgroundT
     if state_store.seen_and_mark("dedup", incident_id, config.DEDUP_TTL_S):
         return {"status": "duplicate", "incident_id": incident_id}
 
-    background_tasks.add_task(run_self_heal, incident_id, service)
+    queue.enqueue_heal(background_tasks, incident_id, service)
     return {"status": "accepted", "incident_id": incident_id, "service": service}
 
 
@@ -322,5 +354,5 @@ async def sentry_alert(request: Request, background_tasks: BackgroundTasks):
         if not hmac.compare_digest(sig, expected):
             raise HTTPException(status_code=401, detail="invalid signature")
     incident_id = f"sentry-{uuid.uuid4().hex[:8]}"
-    background_tasks.add_task(run_self_heal, incident_id, config.TARGET_SERVICE)
+    queue.enqueue_heal(background_tasks, incident_id, config.TARGET_SERVICE)
     return {"status": "accepted", "incident_id": incident_id}

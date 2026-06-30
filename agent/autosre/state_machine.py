@@ -13,7 +13,7 @@ import logging
 import time
 
 from . import (adk_brain, analyzer, autonomy, config, events, gemini, incidents, memory,
-               pending, tools)
+               pending, state_store, tools)
 
 log = logging.getLogger("airbag.sm")
 
@@ -24,6 +24,33 @@ def _incident_signature() -> str:
 
 
 def run_self_heal(incident_id: str, service: str) -> dict:
+    """Idempotent entry point: claim a per-incident lease BEFORE any side effect so a duplicate
+    trigger (notably Cloud Tasks at-least-once redelivery) can't double-heal. Drop duplicates;
+    release the lease on a transient failure so a retry re-runs; mark done on a clean finish."""
+    claim = state_store.claim_heal(incident_id, config.HEAL_LEASE_S, config.DEDUP_TTL_S,
+                                   config.MAX_HEAL_ATTEMPTS)
+    if claim == "duplicate":
+        log.info("[DUPLICATE] heal %s already running or done — dropping redelivery", incident_id)
+        return {"status": "duplicate", "incident_id": incident_id}
+    if claim == "exhausted":  # circuit breaker: stop redelivering a deterministically-failing heal
+        log.error("[MANUAL_INTERVENTION] heal %s failed %d times — giving up; needs a human",
+                  incident_id, config.MAX_HEAL_ATTEMPTS)
+        incidents.record(incident_id, {"service": service, "status": "manual_intervention",
+                                       "events": [{"stage": "MANUAL_INTERVENTION", "ts": time.time(),
+                                                   "msg": f"heal failed {config.MAX_HEAL_ATTEMPTS}x — giving up",
+                                                   "incident_id": incident_id, "service": service}]})
+        return {"status": "manual_intervention", "incident_id": incident_id,
+                "reason": f"heal failed {config.MAX_HEAL_ATTEMPTS}x"}
+    try:
+        result = _heal_body(incident_id, service)
+    except Exception:
+        state_store.release_heal(incident_id)  # transient failure -> let a retry re-claim (attempts bumped)
+        raise
+    state_store.finish_heal(incident_id, config.DEDUP_TTL_S)
+    return result
+
+
+def _heal_body(incident_id: str, service: str) -> dict:
     run_events: list[dict] = []
 
     def emit(stage: str, msg: str, **data):
