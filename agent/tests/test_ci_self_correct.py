@@ -37,3 +37,30 @@ def test_self_correct_noop_when_unavailable(monkeypatch):
     seen = []
     github_pr.self_correct_ci("airbag/fix-1", 1, "svc", "ctx", lambda *a, **k: seen.append(a))
     assert seen == []  # returns immediately, no network, no events
+
+
+def test_ci_retry_prompt_is_generic_no_hardcoded_oracle(monkeypatch):
+    """Phase 0.7: the CI-retry prompt must feed back the REAL CI failure generically, NOT bake in
+    the demo bug's oracle (`total_revenue(ORDERS, buggy=True)`) — else self-correction only works
+    for that one planted bug, contradicting the self-proving-on-any-service thesis."""
+    import json
+    from types import SimpleNamespace
+
+    import pytest
+    pytest.importorskip("google.genai")
+    captured = {}
+
+    class _FakeModels:
+        def generate_content(self, model, contents, config):
+            captured["prompt"] = contents
+            return SimpleNamespace(parsed=None, text=json.dumps(
+                {"fixed_content": "x", "pr_title": "t", "pr_body": "b", "summary": "s"}))
+
+    monkeypatch.setattr(github_pr.gemini, "_client",
+                        lambda: SimpleNamespace(models=_FakeModels()))
+    out = github_pr._gemini_fix("svc", "target-app/main.py", "SRC", "ctx",
+                                ci_failure="validate-fix: AssertionError boom")
+    assert out and out["fixed_content"] == "x"
+    prompt = captured["prompt"]
+    assert "validate-fix: AssertionError boom" in prompt        # the real CI failure is fed back
+    assert "total_revenue(ORDERS, buggy=True)" not in prompt    # no hardcoded demo oracle

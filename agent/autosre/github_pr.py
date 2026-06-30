@@ -198,9 +198,13 @@ def _gemini_fix(service: str, path: str, source: str, error_context: str,
     try:
         from google.genai import types
 
-        retry = (f"\n\nYour PREVIOUS fix did NOT pass CI. The CI failure was:\n{ci_failure}\n"
-                 "The check runs `total_revenue(ORDERS, buggy=True)` and it must NOT raise. "
-                 "Correct the file so the business path never throws in any mode.\n"
+        # Feed the REAL CI failure back generically — no hardcoded oracle. (The earlier version
+        # baked in the demo bug's exact assertion `total_revenue(ORDERS, buggy=True)`, so
+        # self-correction only worked for that one planted bug — it contradicted the self-proving
+        # thesis. The fix_pipeline path already does this generically via prior_failure.)
+        retry = (f"\n\nYour PREVIOUS fix did NOT pass CI. The CI failure output was:\n{ci_failure}\n"
+                 "Use this failure to correct the file so CI passes. Make the minimal change that "
+                 "resolves the reported failure without breaking other behavior.\n"
                  if ci_failure else "")
         prompt = (
             f"A Cloud Run service '{service}' shipped a bad revision that returns HTTP 500.\n"
