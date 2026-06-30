@@ -7,7 +7,11 @@ from pydantic import BaseModel, Field
 
 
 class IncidentDecision(BaseModel):
-    action: Literal["ROLLBACK", "OBSERVE", "OPEN_FIX_PR", "ESCALATE"]
+    # Top-level actions the LLM may choose. The fix-PR is NOT a top-level action: it's a downstream
+    # step of ROLLBACK (state_machine._mitigate -> _open_fix_pr). OPEN_FIX_PR was dropped (Phase 0.3)
+    # because state_machine only branches on ROLLBACK/ESCALATE, so it silently became a no-op DONE
+    # that folded a healthy sample into the learned baseline and shipped nothing.
+    action: Literal["ROLLBACK", "OBSERVE", "ESCALATE"]
     bad_revision: Optional[str] = None
     rollback_revision: Optional[str] = None
     confidence: float = Field(ge=0, le=1)

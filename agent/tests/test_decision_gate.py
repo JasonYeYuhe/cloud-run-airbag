@@ -1,8 +1,24 @@
 """The decision heuristic + the safety gate (_validate) + the ESCALATE surfacing — the logic
 that decides whether the agent touches prod. Pure where possible; live paths exercised manually."""
+import pytest
+from pydantic import ValidationError
+
 from autosre import incidents, state_machine
 from autosre.backends import mock
+from autosre.schemas import IncidentDecision
 from autosre.state_machine import _heuristic, _validate, run_self_heal
+
+
+def test_schema_rejects_open_fix_pr():
+    """Phase 0.3: OPEN_FIX_PR is no longer a top-level action — it silently became a no-op DONE that
+    polluted the learned baseline. The fix-PR is a downstream step of ROLLBACK, not a chosen action."""
+    with pytest.raises(ValidationError):
+        IncidentDecision(action="OPEN_FIX_PR", confidence=0.9)
+
+
+def test_schema_accepts_the_three_valid_actions():
+    for a in ("ROLLBACK", "OBSERVE", "ESCALATE"):
+        assert IncidentDecision(action=a, confidence=0.5).action == a
 
 
 def _revs(serving_traffic=100):

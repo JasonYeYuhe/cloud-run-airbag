@@ -37,14 +37,16 @@ RECEIVED → TRIAGED → ADK(triage→decide) → DECISION
 ## Decision schema (Gemini structured output)
 ```python
 class IncidentDecision(BaseModel):
-    action: Literal["ROLLBACK", "OBSERVE", "OPEN_FIX_PR", "ESCALATE"]
+    action: Literal["ROLLBACK", "OBSERVE", "ESCALATE"]
     bad_revision: str | None = None
     rollback_revision: str | None = None
     confidence: float        # 0..1
     reasoning: str = ""      # shown on the dashboard + incident report
     evidence: list[str] = []
 ```
-The executor handles `ROLLBACK` (act), `ESCALATE` (surface to a human), and `OBSERVE` (no-op);
-`OPEN_FIX_PR` is reserved (the fix PR is opened by the deterministic slow path, not chosen by the
-LLM). The state machine only rolls back when `action == ROLLBACK`, `confidence ≥ threshold`, and
+The executor handles `ROLLBACK` (act), `ESCALATE` (surface to a human), and `OBSERVE` (no-op). The
+fix PR is **not** a top-level action — it's a downstream step of `ROLLBACK` (opened by the
+deterministic slow path), so it is not in the enum (the old `OPEN_FIX_PR` value silently became a
+no-op `DONE` that polluted the learned baseline — dropped in v3 Phase 0.3). The state machine only
+rolls back when `action == ROLLBACK`, `confidence ≥ threshold`, and
 `rollback_revision ∈ known_good_revisions`.
