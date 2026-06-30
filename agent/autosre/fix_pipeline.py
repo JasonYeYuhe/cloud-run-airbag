@@ -175,9 +175,14 @@ def _sandbox_verify(path: str, original: str, fixed: str, test_path: str, test_c
 
 def _run_pytest(cwd: Path, test_file: Path) -> dict:
     try:
+        # Minimal env + neutralize the GCE metadata server: a stripped env alone does NOT stop
+        # google.auth.default() in the LLM-authored test from minting the agent's run.admin token via
+        # the metadata endpoint, so point it at an unreachable host/IP and null out file creds.
         p = subprocess.run([sys.executable, "-m", "pytest", "-q", str(test_file.name)],
                            cwd=str(cwd), capture_output=True, text=True, timeout=60,
-                           env={"PYTHONPATH": str(cwd), "PATH": __import__("os").environ.get("PATH", "")})
+                           env={"PYTHONPATH": str(cwd), "PATH": __import__("os").environ.get("PATH", ""),
+                                "GCE_METADATA_HOST": "metadata.invalid", "GCE_METADATA_IP": "0.0.0.0",
+                                "GOOGLE_APPLICATION_CREDENTIALS": "/dev/null"})
         return {"rc": p.returncode, "out": (p.stdout + p.stderr)[-1200:]}
     except Exception as e:  # noqa: BLE001
         return {"rc": -1, "out": f"pytest run error: {e}"}

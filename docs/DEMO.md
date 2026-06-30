@@ -45,5 +45,5 @@ governance. (ADK can be disabled with `AIRBAG_USE_ADK=false`, falling back to a 
 call then a heuristic — the heal never blocks on the LLM.)
 
 ## Real vs stretch (be honest with judges)
-- **Real now:** detection → **ADK/Gemini decision** → **rollback** → **verified recovery** → **Gemini fix PR through real CI** (with **CI self-correction** on red) → **verify the fix + undo the rollback via a gradual canary** (10→50→100, compensate on failure), end-to-end on a live target. Every run is persisted as a **verifiable incident-report Artifact** (`/incidents/{id}/report`). Three execution backends (mock/local/gcp); same agent code; 97 tests.
+- **Real now:** detection → **ADK/Gemini decision** → **rollback** → **verified recovery** → **Gemini fix PR through real CI** (with **CI self-correction** on red) → **verify the fix + undo the rollback via a gradual canary** (10→50→100, compensate on failure), end-to-end on a live target. Every run is persisted as a **verifiable incident-report Artifact** (`/incidents/{id}/report`). Three execution backends (mock/local/gcp); same agent code; 98 tests.
 - **Stretch / roadmap (P2):** the *fully-unattended* CI trigger (`complete-rollback.yml` deploys the fix then calls the endpoint) needs a one-time Workload Identity Federation binding; durable Firestore state; Cloud Tasks/Pub-Sub worker.

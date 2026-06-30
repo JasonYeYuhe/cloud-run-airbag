@@ -141,7 +141,7 @@ Assist diagnoses; Airbag safely remediates, verifies, and reverses."*
 ## Roadmap
 **Phase 0 — Submission hardening (now → 2026-07-10).** *Largely complete this cycle:* secured
 `/demo/*`, unified the fault, ADK genuinely runs, dual-path + canary + Artifact live, repo hygiene,
-97 tests + lint/CI. **Outstanding quick win:** use `GEMINI_PATCH_MODEL` (gemini-2.5-pro) for the
+98 tests + lint/CI. **Outstanding quick win:** use `GEMINI_PATCH_MODEL` (gemini-2.5-pro) for the
 patch step (it's configured but unused); record the ≤3-min video; flip the repo public.
 
 **Phase 1 — Trustworthy core (weeks 1–4).** Firestore (transactional CAS) + Cloud Tasks (webhooks +
