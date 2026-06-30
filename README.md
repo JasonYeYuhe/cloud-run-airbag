@@ -14,7 +14,7 @@ independent prod alert (even out-of-window)
   → Gemini/ADK open a fix PR → real GitHub Actions CI         (PERMANENT FIX)                                ✅ live
   → on deploy + verified, undo the temporary rollback (CLOSE THE TRANSACTION)                                ✅ verify + undo + compensate
 ```
-All four steps run on live Cloud Run. The close-the-transaction step verifies the deployed revision **is** the fix (matches the CI-reported revision/sha, or a post-rollback healthy candidate) before restoring traffic, and **compensates** back to the safe revision if the fix fails — triggered by the fix-PR's CI (`/internal/complete-rollback`) or the dashboard's **Verify & Undo** button. *(Fully-unattended CI deploy needs a one-time Workload Identity Federation binding; see [docs/NEXT_STEPS.md](docs/NEXT_STEPS.md).)*
+All four steps run on live Cloud Run. The close-the-transaction step verifies the deployed revision **is** the fix (matches the CI-reported revision/sha, or a post-rollback healthy candidate) before restoring traffic, and **compensates** back to the safe revision if the fix fails — triggered by the fix-PR's CI (`/internal/complete-rollback`) or the dashboard's **Verify & Undo** button. *(The CI path is **fully unattended** — GitHub Actions authenticates to GCP keylessly via Workload Identity Federation, deploys the fix, and calls Airbag to verify + restore, no human; verified live. Setup: [`infra/wif-setup.sh`](infra/wif-setup.sh).)*
 
 **Design rule:** a deterministic state machine executes production actions; **Gemini only diagnoses and emits a structured decision** — the LLM never freely touches prod.
 

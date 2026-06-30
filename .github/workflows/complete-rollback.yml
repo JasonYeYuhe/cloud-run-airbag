@@ -3,13 +3,13 @@ name: complete-rollback
 # fix is healthy and UNDO the temporary rollback (restore traffic to the fix). This is the
 # CI-trigger path (the review consensus' "trigger via CI, not webhooks").
 #
-# GATED on `vars.AIRBAG_AGENT_URL` being set, so it stays a no-op (CI green) until you wire it.
-# One-time setup (repo Settings → Secrets and variables → Actions):
+# ✅ WIRED + verified live (keyless via Workload Identity Federation — no stored key). The full
+# unattended close ran end-to-end: deploy fix --no-traffic -> /internal/complete-rollback ->
+# COMPLETE_ROLLBACK -> FIX_DEPLOYED -> CANARY x3 -> ROLLBACK_UNDONE -> CLOSED, no human.
+# Re-create the federation with infra/wif-setup.sh; it sets these repo Settings -> Actions:
 #   vars:    AIRBAG_AGENT_URL, TARGET_SERVICE, GCP_REGION, GCP_WIF_PROVIDER, GCP_DEPLOY_SA
 #   secrets: AIRBAG_WEBHOOK_TOKEN
-# GCP_WIF_PROVIDER/GCP_DEPLOY_SA come from a Workload Identity Federation binding for this repo
-# (gcloud iam workload-identity-pools ...). Until then, run it manually (workflow_dispatch) or
-# use the dashboard's "Verify & Undo Rollback" button.
+# Still GATED on those vars, so a fork without the federation stays a no-op (CI green).
 on:
   push:
     branches: [main]

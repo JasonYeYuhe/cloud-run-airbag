@@ -102,6 +102,12 @@ never freely touches prod. Judges see a governed control loop, not a chatbot wit
   [`autonomy.py`](agent/autosre/autonomy.py).
 - **Learned baseline + cross-incident memory** — the analyzer's baseline is learned per service
   (EMA of healthy samples); memory flags a **recurring** incident. [`memory.py`](agent/autosre/memory.py).
+- **Fully-unattended CI close (Workload Identity Federation):** a GitHub Actions run authenticates
+  to GCP **keylessly** (OIDC → WIF, no stored key), deploys the fix `--no-traffic`, and calls
+  `/internal/complete-rollback`; Airbag verifies the fix, canary-restores traffic (10→50→100), and
+  CLOSES — **with no human in the path**. Verified live end-to-end (incident →
+  `COMPLETE_ROLLBACK → FIX_DEPLOYED → CANARY×3 → ROLLBACK_UNDONE → CLOSED`). Setup:
+  [`infra/wif-setup.sh`](infra/wif-setup.sh) + [`complete-rollback.yml`](.github/workflows/complete-rollback.yml).
 - Each v2 upgrade was built against an adversarial review (Gemini 3.1 Pro + 3.5 Flash, and/or a
   multi-agent review workflow with refute-by-default verification) and the findings fixed.
 - **Implemented + tested but OFF in the live demo** (opt-in flags — kept off to keep the demo simple
@@ -115,10 +121,6 @@ never freely touches prod. Judges see a governed control loop, not a chatbot wit
 > policy on top. That's design discipline, not feature-stacking.
 
 **Roadmap (P2, honestly not done):**
-- **Fully-unattended CI close:** the included `.github/workflows/complete-rollback.yml` deploys
-  the fix and calls `/internal/complete-rollback`, but is gated on a one-time **Workload Identity
-  Federation** binding (GitHub Actions → GCP deploy). Until that's wired, the close is triggered
-  by the dashboard button (or a manual `curl`/`workflow_dispatch`).
 - **True multi-instance scale-out:** durable state (Firestore) + durable work (Cloud Tasks) are
   built + tested; the remaining blocker is the **in-process SSE event bus** — moving it to Pub/Sub
   would let us drop `--max-instances=1`.
