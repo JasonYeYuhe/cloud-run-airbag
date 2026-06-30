@@ -18,6 +18,22 @@ This is one coherent bet — "detect more, and prove causality before the FSM fi
 
 ---
 
+## §0. Gemini 3.1 Pro review (incorporated)
+
+Gemini 3.1 Pro reviewed this plan — verdict **CHANGES-NEEDED**, "the bet is brilliant." Three
+adjustments, all folded into the sections below:
+1. **The bet is right; the sequencing was backwards.** **Airbag-Bench moves to Phase 0** — you can't
+   safely tune multi-signal fusion / the verifier without a baseline. Build the measuring stick
+   first, baseline the v2 5xx-only impl, then TDD Phases 1–2 against it.
+2. **The `fix_pipeline` sandbox can't be a v4 defer.** Un-sandboxed LLM-generated code in the prod
+   agent directly contradicts the "guarded action layer" moat — **harden it (egress-disabled Cloud
+   Run Job) in Phase 0/1**, not later.
+3. **Multi-signal needs anti-flapping.** Fusing latency/saturation/burn-rate risks false positives
+   from momentary spikes — **Feature 1 must include debounce/hysteresis** (a signal persists N
+   windows before it can trigger), not just per-detector confidence bounds.
+
+---
+
 ## 2. Problems / improvements to fix first
 
 These are pre-work. The first three are correctness/security bugs that must land before any v3 feature touches `state_machine.py` or the schema. Cited to file:line.
@@ -72,7 +88,7 @@ These are pre-work. The first three are correctness/security bugs that must land
 Four marquee features. Features 1–3 are the core bet (detect more / prove causally / verify confidence); 4 makes it legible and extensible. Effort is relative to a hackathon cadence.
 
 ### Feature 1 — Multi-signal detection engine (latency p99 + saturation + SLO burn-rate)
-- **What.** A pluggable `SignalProvider` abstraction emitting a normalized `DegradationVerdict` from detectors run in parallel: (a) **latency regression** — serving vs last-good revision `request_latencies` (two-sample / CUSUM, not binomial); (b) **saturation** — CPU/memory + Cloud Run instance/concurrency pressure from `run.googleapis.com` metrics; (c) **multi-window multi-burn-rate SLO** (fast 1h/5m + slow 6h/30m, per the Google SRE workbook). A weighted/strongest-signal fusion turns N verdicts into one **FAIL/PASS/INCONCLUSIVE**.
+- **What.** A pluggable `SignalProvider` abstraction emitting a normalized `DegradationVerdict` from detectors run in parallel: (a) **latency regression** — serving vs last-good revision `request_latencies` (two-sample / CUSUM, not binomial); (b) **saturation** — CPU/memory + Cloud Run instance/concurrency pressure from `run.googleapis.com` metrics; (c) **multi-window multi-burn-rate SLO** (fast 1h/5m + slow 6h/30m, per the Google SRE workbook). A weighted/strongest-signal fusion turns N verdicts into one **FAIL/PASS/INCONCLUSIVE**. **Fusion MUST include debounce/hysteresis** (per the Gemini review): a signal persists N consecutive windows before it can trigger, so a momentary CPU/latency spike can't cause a false rollback — anti-flapping on top of each detector's own confidence bound.
 - **Why.** The single highest-leverage leap: it moves Airbag from "catches crashes" to "catches regressions" — exactly where the out-of-window moat lives. A latency regression hours after deploy is the canonical thing every canary-window competitor misses.
 - **Builds on.** Generalizes `analyzer.py` (the Wilson verdict becomes *one detector of several*) and `tools.py` + `backends/gcp.py` `query_error_rate`/`sample_business_path` (add latency/saturation collectors). **The FAIL/PASS/INCONCLUSIVE contract consumed by `state_machine._validate` (lines 446–455) is unchanged** — the gate wiring is reused verbatim, so the FSM doesn't change.
 - **Effort:** large.
@@ -103,14 +119,23 @@ Four marquee features. Features 1–3 are the core bet (detect more / prove caus
 
 Sequencing is dependency-driven: harden the seams the new diagnosis tier will lean on, **then** grow the diagnosis tier, **then** make it legible.
 
-### Phase 0 — Harden the foundation (no new features) — *~2–3 days*
-Land before touching the schema or decision layer.
-1. **Fix the invariant guard** (P2#9, AST-based) — *prerequisite for everything in the diagnosis tier.*
-2. **Drop `OPEN_FIX_PR` from the enum** (P0#1) — *prerequisite for any schema change in Phase 2.*
-3. **Etag/lease on traffic mutation** (P1#4) — *prerequisite for Feature 1's extra `set_traffic` callers.*
-4. **`/demo/run` error handling** (P0#3) + **header-only alert token** (P0#2) — demo + security.
-5. **Generic CI-retry prompt** (P1#5).
-- **Exit:** 102 tests green + new tests for the invariant AST check and the etag retry path. No behavior change visible to the demo except a more robust `/demo/run`.
+### Phase 0 — Harden the foundation + build the measuring stick — *~1 week*
+Land before touching the schema or decision layer. **(Re-sequenced per the Gemini 3.1 Pro review — see §0.)**
+1. **Build Airbag-Bench FIRST** (was Feature 4b): the labeled incident-replay harness + scorecard
+   (precision/recall on rollback, false-rollback rate, mean-stages-to-mitigate). **Baseline the v2
+   5xx-only implementation now** so Phases 1–2 are a TDD loop against real numbers — you cannot
+   safely tune multi-signal fusion / CUSUM thresholds / the verifier without it.
+2. **Fix the invariant guard** (P2#9, AST-based) — *prerequisite for everything in the diagnosis tier.*
+3. **Drop `OPEN_FIX_PR` from the enum** (P0#1) — *prerequisite for any schema change in Phase 2.*
+4. **Etag/lease on traffic mutation** (P1#4) — *prerequisite for Feature 1's extra `set_traffic` callers.*
+5. **Harden the `fix_pipeline` sandbox** (was deferred to v4 — the review is right it can't wait):
+   move the LLM-authored test execution to a **network-egress-disabled Cloud Run Job**. Un-sandboxed
+   LLM code in the prod agent contradicts the "guarded action layer" moat; a judge will spot it.
+   (May slip to early Phase 1 if the Job plumbing is large, but no later.)
+6. **`/demo/run` error handling** (P0#3) + **header-only alert token** (P0#2) — demo + security.
+7. **Generic CI-retry prompt** (P1#5).
+- **Exit:** 102 tests green + an Airbag-Bench baseline scorecard for the v2 impl + tests for the
+  invariant AST check and the etag retry path; the sandbox runs egress-disabled.
 
 ### Phase 1 — Multi-signal detection engine (Feature 1) — *~1–1.5 weeks*
 Depends on: Phase 0 (etag).
@@ -131,7 +156,7 @@ Depends on: Phase 0 (enum + invariant), Phase 1 (signals feed the causal correla
 
 ### Phase 3 — Make it legible & extensible (Feature 4) — *~1 week*
 Depends on: Phases 1–2 (so the bench scores the new logic; MCP tools wrap the matured entrypoints).
-1. **Airbag-Bench** (4b): fixture format + deterministic replay runner through `adk_brain.decide`→`_validate` on the mock backend; scorecard. Seed from `incidents.py`. **Run it as a CI gate** so Phases 1–2 are regression-protected retroactively.
+1. **Airbag-Bench → CI gate** (the harness itself was built in **Phase 0**; here you promote it to a blocking CI gate and add fixtures for the new multi-signal + causal logic, so Phases 1–2 stay regression-protected and the scorecard goes on the slide).
 2. **MCP action tools** (4a): `rollback_to_last_good`/`prove_recovery`/`open_self_proving_fix_pr` in `mcp_remote.py` with structured proof outputs (Bearer-gated like the existing tools).
 3. **Signed incident proof bundle** (incident.io borrow) at keyless-close, from existing Firestore state.
 4. **Dashboard**: surface ranked hypotheses + confidence + the multi-signal verdict + the headline **"Alert-to-Verified-Recovery time"** metric (Azure/AWS borrow). Fold in the ground-truth captured request/response (Lightrun borrow) into the PR body.
@@ -154,7 +179,7 @@ Depends on: Phases 1–2 (so the bench scores the new logic; MCP tools wrap the 
 
 **Technical risks to watch:**
 - **Multi-signal false positives.** Latency/saturation detectors are noisier than a 5xx count. Mitigation: ship them behind `AIRBAG_SIGNALS`, default-off, and require the *same* statistical confidence (CI lower bound > baseline) the Wilson gate already enforces — don't let a single noisy detector trip a rollback.
-- **`fix_pipeline` sandbox is still arbitrary LLM-driven code execution** in the prod agent (`fix_pipeline.py:176–188`; only the metadata server is neutralized). Acceptable for the hackathon, but it is the single largest security gap — **call it out explicitly in the deck** and put "run the sandbox in a network-egress-disabled Cloud Run Job" on the v4 list rather than half-doing it now.
+- **`fix_pipeline` sandbox is still arbitrary LLM-driven code execution** in the prod agent (`fix_pipeline.py:176–188`; only the metadata server is neutralized). It is the single largest security gap and — per the Gemini review — **it is now Phase-0/1 work, not a v4 defer**: run the LLM-authored test in a **network-egress-disabled Cloud Run Job**. Until then, call it out explicitly in the deck; do not leave it half-done while claiming a "guarded action layer."
 - **Vendor-number hygiene.** When citing competitors externally: Traversal is **32% MTTR** (not 40%); Causely's 100% is a **self-reported** benchmark; the Causely remediation quote is from the **arXiv paper**, not Businesswire. Don't repeat the inflated/mis-sourced versions on a slide.
 
 ---
