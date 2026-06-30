@@ -17,12 +17,18 @@ from contextlib import asynccontextmanager
 from typing import Literal
 
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 from starlette.responses import JSONResponse
 
 from . import autonomy, config, incidents, memory, queue
 from .state_machine import apply_approval
 
-mcp = FastMCP("airbag", streamable_http_path="/")
+# DNS-rebinding protection guards localhost-bound MCP servers from a malicious web page using the
+# victim's browser; it rejects unknown Host headers (a Cloud Run run.app host -> HTTP 421). For a
+# REMOTE, Bearer-gated server it doesn't apply (a rebinding browser has no token -> 401 at the gate),
+# so we disable the Host check and rely on BearerGate for auth.
+mcp = FastMCP("airbag", streamable_http_path="/",
+              transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False))
 
 
 @mcp.tool()
