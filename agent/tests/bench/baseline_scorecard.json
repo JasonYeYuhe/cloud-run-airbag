@@ -1,0 +1,142 @@
+{
+  "label": "v2 deterministic floor (LLM off)",
+  "n": 11,
+  "rollback_precision": {
+    "num": 2,
+    "den": 3,
+    "value": 0.6667
+  },
+  "rollback_recall": {
+    "num": 2,
+    "den": 5,
+    "value": 0.4
+  },
+  "false_rollback_rate": {
+    "num": 1,
+    "den": 11,
+    "value": 0.0909
+  },
+  "false_escalation_rate": {
+    "num": 1,
+    "den": 4,
+    "value": 0.25
+  },
+  "wasted_rollback_rate": {
+    "num": 1,
+    "den": 11,
+    "value": 0.0909
+  },
+  "accuracy": {
+    "num": 5,
+    "den": 11,
+    "value": 0.4545
+  },
+  "mean_stages_to_mitigate": 10.0,
+  "confusion": {
+    "ROLLBACK": {
+      "ROLLBACK": 2,
+      "OBSERVE": 3,
+      "ESCALATE": 0
+    },
+    "OBSERVE": {
+      "ROLLBACK": 0,
+      "OBSERVE": 3,
+      "ESCALATE": 1
+    },
+    "ESCALATE": {
+      "ROLLBACK": 1,
+      "OBSERVE": 1,
+      "ESCALATE": 0
+    }
+  },
+  "per_case": [
+    {
+      "name": "crash_total_outage",
+      "category": "crash",
+      "expected": "ROLLBACK",
+      "decided": "ROLLBACK",
+      "status": "mitigated",
+      "stages": 10
+    },
+    {
+      "name": "crash_high_5xx",
+      "category": "crash",
+      "expected": "ROLLBACK",
+      "decided": "ROLLBACK",
+      "status": "mitigated",
+      "stages": 10
+    },
+    {
+      "name": "healthy_steady",
+      "category": "healthy",
+      "expected": "OBSERVE",
+      "decided": "OBSERVE",
+      "status": "noop",
+      "stages": 6
+    },
+    {
+      "name": "healthy_noisy",
+      "category": "healthy",
+      "expected": "OBSERVE",
+      "decided": "OBSERVE",
+      "status": "noop",
+      "stages": 6
+    },
+    {
+      "name": "recovered_before_heal",
+      "category": "healthy",
+      "expected": "OBSERVE",
+      "decided": "OBSERVE",
+      "status": "noop",
+      "stages": 6
+    },
+    {
+      "name": "latency_regression",
+      "category": "latency",
+      "expected": "ROLLBACK",
+      "decided": "OBSERVE",
+      "status": "noop",
+      "stages": 6
+    },
+    {
+      "name": "saturation_cpu",
+      "category": "saturation",
+      "expected": "ROLLBACK",
+      "decided": "OBSERVE",
+      "status": "noop",
+      "stages": 6
+    },
+    {
+      "name": "slo_slow_burn",
+      "category": "slo_burn",
+      "expected": "ROLLBACK",
+      "decided": "OBSERVE",
+      "status": "noop",
+      "stages": 6
+    },
+    {
+      "name": "coincident_dependency_outage",
+      "category": "dependency",
+      "expected": "ESCALATE",
+      "decided": "ROLLBACK",
+      "status": "escalated",
+      "stages": 9
+    },
+    {
+      "name": "low_traffic_blip",
+      "category": "blip",
+      "expected": "OBSERVE",
+      "decided": "ESCALATE",
+      "status": "escalated",
+      "stages": 6
+    },
+    {
+      "name": "no_healthy_target",
+      "category": "stuck",
+      "expected": "ESCALATE",
+      "decided": "OBSERVE",
+      "status": "noop",
+      "stages": 6
+    }
+  ]
+}

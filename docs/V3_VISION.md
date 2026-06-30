@@ -134,8 +134,9 @@ Land before touching the schema or decision layer. **(Re-sequenced per the Gemin
    (May slip to early Phase 1 if the Job plumbing is large, but no later.)
 6. **`/demo/run` error handling** (P0#3) + **header-only alert token** (P0#2) — demo + security.
 7. **Generic CI-retry prompt** (P1#5).
-- **Exit:** 102 tests green + an Airbag-Bench baseline scorecard for the v2 impl + tests for the
-  invariant AST check and the etag retry path; the sandbox runs egress-disabled.
+- **Exit:** all tests green (110 after Airbag-Bench: 103 agent + 7 mcp-server) + an Airbag-Bench
+  baseline scorecard for the v2 impl (`docs/AIRBAG_BENCH.md`) + tests for the invariant AST check and
+  the etag retry path; the sandbox runs egress-disabled.
 
 ### Phase 1 — Multi-signal detection engine (Feature 1) — *~1–1.5 weeks*
 Depends on: Phase 0 (etag).
