@@ -92,10 +92,12 @@ never freely touches prod. Judges see a governed control loop, not a chatbot wit
   (`FAIL`/`PASS`/`INCONCLUSIVE`), not a static threshold: `PASS`→withhold, `INCONCLUSIVE`→escalate,
   `FAIL`→proceed. Verified live (`ANALYZED: FAIL — CI lower 83.9% > baseline 2%`).
   [`analyzer.py`](agent/autosre/analyzer.py).
-- **Durable Firestore state** — pending reverts / incidents / dedup behind one atomic `transact`
-  with a self-healing **lease** lock; survives container recycles. Running live with
-  `AIRBAG_STATE=firestore` (single-instance: the SSE event bus is still in-process, so true
-  multi-instance scale-out is a roadmap item). [`state_store.py`](agent/autosre/state_store.py).
+- **Durable Firestore state + multi-instance** — pending reverts / incidents / dedup behind one
+  atomic `transact` with a self-healing **lease** lock (survives container recycles). Paired with a
+  **Pub/Sub event-bus fan-out** (`AIRBAG_EVENTS=pubsub`) so a dashboard on any instance sees a heal
+  that ran on any other, the agent runs live at **`--max-instances 3`** — verified: a heal's events
+  fan out across instances. [`state_store.py`](agent/autosre/state_store.py) ·
+  [`events.py`](agent/autosre/events.py).
 - **Graduated autonomy** — per-service `L0/L1/L2/L3` enforced in the state machine, with a
   **durable approval gate** (`/internal/approve`, dashboard Approve/Deny) + advisory promotion /
   automatic demotion. Verified live: L1 held the rollback at 500 until approved, then recovered.
@@ -121,9 +123,6 @@ never freely touches prod. Judges see a governed control loop, not a chatbot wit
 > policy on top. That's design discipline, not feature-stacking.
 
 **Roadmap (P2, honestly not done):**
-- **True multi-instance scale-out:** durable state (Firestore) + durable work (Cloud Tasks) are
-  built + tested; the remaining blocker is the **in-process SSE event bus** — moving it to Pub/Sub
-  would let us drop `--max-instances=1`.
 - ChatOps (Slack approvals on top of the autonomy gate); Cloud Assist composition.
 
 ## 6. The demo

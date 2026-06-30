@@ -30,7 +30,7 @@ Cloud Monitoring alert ─webhook(token)→ /alerts  (Cloud Run: airbag-agent, F
                             └───────────────┬───────────────────────┘
    tools: Cloud Run Admin (run_v2) · Cloud Monitoring/Logging · GitHub App
    state: durable Firestore store (AIRBAG_STATE=memory|firestore) — survives container recycles
-          (single-instance: the SSE bus is in-process)   secrets: Secret Manager
+          multi-instance (Firestore state + Pub/Sub event-bus fan-out)   secrets: Secret Manager
                                             │
    target demo app (Cloud Run) ←rollback traffic / ←fix deploy
 ```
@@ -71,7 +71,7 @@ workflow) and verified on live Cloud Run:
 | Upgrade | What it does | Where |
 |---|---|---|
 | **Statistical decision gate** | The rollback trigger is a **Wilson confidence-interval** verdict (`FAIL`/`PASS`/`INCONCLUSIVE`), not a static `5xx ≥ 5%`. `PASS`→withhold, `INCONCLUSIVE`→escalate (don't auto-act on weak evidence), `FAIL`→proceed. A low-traffic 4/4 outage still fires; a single blip never does. | [`analyzer.py`](agent/autosre/analyzer.py) |
-| **Durable state** | Pending reverts, incidents, and webhook dedup live in **Firestore** (`AIRBAG_STATE=firestore`), behind one atomic `transact`. Self-healing **lease** lock (a crashed heal can't lock a revert forever); survives container recycles. *(Single-instance today — the in-process SSE bus blocks multi-instance; Pub/Sub is the roadmap.)* | [`state_store.py`](agent/autosre/state_store.py) |
+| **Durable state + multi-instance** | Pending reverts, incidents, and webhook dedup live in **Firestore** (`AIRBAG_STATE=firestore`), behind one atomic `transact` with a self-healing **lease** lock. With a **Pub/Sub event-bus fan-out** (`AIRBAG_EVENTS=pubsub`) the dashboard sees a heal on *any* instance, so the agent runs **`--max-instances 3`** (verified: heal events fan out across instances). | [`state_store.py`](agent/autosre/state_store.py) · [`events.py`](agent/autosre/events.py) |
 | **Graduated autonomy** | Per-service trust levels enforced **deterministically**: `L0` observe · `L1` approve-before-rollback · `L2` auto-rollback + approve-the-fix-PR · `L3` full. Durable approval gate (`/internal/approve`, dashboard Approve/Deny); advisory promotion + automatic demotion on a failed heal. | [`autonomy.py`](agent/autosre/autonomy.py) |
 | **Learned baseline + memory** | The analyzer's baseline is **learned per service** (EMA of steady-state healthy samples), not hardcoded. Cross-incident memory tracks failures + flags a **recurring** incident ("the fix isn't holding"). | [`memory.py`](agent/autosre/memory.py) |
 

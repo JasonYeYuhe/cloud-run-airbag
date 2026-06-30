@@ -85,10 +85,11 @@ fi
 
 # AIRBAG_SELF_URL + AIRBAG_TASKS_* let cloudtasks mode work; AIRBAG_QUEUE is left UNSET (=inproc
 # default) so the standard deploy is unchanged. Flip to cloudtasks with --update-env-vars AIRBAG_QUEUE=cloudtasks.
-# AIRBAG_STATE=firestore (durable state — survives recycles; single-instance, the SSE bus is
-# in-process). AIRBAG_QUEUE + AIRBAG_MCP_HTTP are left UNSET (inproc + MCP off) — both are built +
-# tested opt-in flags, kept off in the demo for simplicity + a small attack surface.
-ENVS="AIRBAG_BACKEND=gcp,GOOGLE_CLOUD_PROJECT=${PROJECT},GOOGLE_CLOUD_LOCATION=${REGION},TARGET_SERVICE=airbag-target,TARGET_BASE_URL=${TURL},AIRBAG_VERIFY_INTERVAL_S=4,AIRBAG_VERIFY_ATTEMPTS=8,AIRBAG_STATE=firestore,AIRBAG_SELF_URL=${AURL},AIRBAG_TASKS_QUEUE=airbag-heals,AIRBAG_TASKS_LOCATION=${REGION}"
+# Multi-instance: durable state (AIRBAG_STATE=firestore) + a cross-instance event bus
+# (AIRBAG_EVENTS=pubsub fan-out) make scale-out safe, so the agent runs --max-instances 3.
+# AIRBAG_QUEUE + AIRBAG_MCP_HTTP are left UNSET (inproc + MCP off) — built + tested opt-in flags,
+# kept off in the demo for simplicity + a small attack surface.
+ENVS="AIRBAG_BACKEND=gcp,GOOGLE_CLOUD_PROJECT=${PROJECT},GOOGLE_CLOUD_LOCATION=${REGION},TARGET_SERVICE=airbag-target,TARGET_BASE_URL=${TURL},AIRBAG_VERIFY_INTERVAL_S=4,AIRBAG_VERIFY_ATTEMPTS=8,AIRBAG_STATE=firestore,AIRBAG_EVENTS=pubsub,AIRBAG_SELF_URL=${AURL},AIRBAG_TASKS_QUEUE=airbag-heals,AIRBAG_TASKS_LOCATION=${REGION}"
 SECRETS="GEMINI_API_KEY=airbag-gemini-key:latest,AIRBAG_DEMO_TOKEN=airbag-demo-secret:latest,AIRBAG_WEBHOOK_TOKEN=airbag-webhook-secret:latest,AIRBAG_INTERNAL_TOKEN=airbag-internal-token:latest,AIRBAG_MCP_TOKEN=airbag-mcp-token:latest"
 
 # Optional fix-PR slow path: use a FINE-GRAINED, repo-scoped GitHub token (Contents +
@@ -107,15 +108,15 @@ fi
 echo "== deploy agent =="
 # GOTCHA 3: the background self-heal needs CPU always allocated (--no-cpu-throttling),
 # else CPU is throttled after the 202 response and the heal stalls.
-# GOTCHA 4: the agent keeps idempotency + pending-revert + incident state IN-PROCESS, so it must
-# stay a single instance. --min-instances 1 keeps it warm; --max-instances 1 keeps the in-process
-# stores authoritative (no scale-out splitting state). Concurrency default is fine (the dashboard
-# needs concurrent SSE + clicks); single-instance is about instance count, not request count.
-# --timeout 3600: long-lived streamable-HTTP MCP sessions (when AIRBAG_MCP_HTTP=on) + dashboard SSE.
-# To enable the remote MCP control plane: --update-env-vars AIRBAG_MCP_HTTP=on (it stays a public,
-# token-gated, destructive surface, so --max-instances 1 is REQUIRED — sessions are in-process).
+# GOTCHA 3: the background self-heal needs CPU always allocated (--no-cpu-throttling),
+# else CPU is throttled after the 202 response and the heal stalls.
+# Multi-instance is safe now: state is durable (Firestore) + idempotent (per-incident leases) and
+# events fan out cross-instance (Pub/Sub), so --max-instances 3 scales out without splitting state
+# or the dashboard stream. --min-instances 1 keeps it warm. --timeout 3600 for long-lived SSE.
+# NB: the (off-by-default) remote MCP control plane keeps its session manager IN-PROCESS, so if you
+# enable AIRBAG_MCP_HTTP=on, pin --max-instances 1.
 gcloud run deploy airbag-agent --source "$ROOT/agent" --region "$REGION" \
-  --service-account "$SA" --allow-unauthenticated --min-instances 1 --max-instances 1 \
+  --service-account "$SA" --allow-unauthenticated --min-instances 1 --max-instances 3 \
   --no-cpu-throttling --timeout 3600 --set-env-vars "$ENVS" --update-secrets "$SECRETS" -q
 
 AURL="$(gcloud run services describe airbag-agent --region "$REGION" --format='value(status.url)')"
