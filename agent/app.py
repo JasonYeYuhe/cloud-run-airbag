@@ -89,6 +89,17 @@ def incident_report(incident_id: str):
     return report.render(rec)
 
 
+@app.get("/incidents/{incident_id}/proof")
+def incident_proof(incident_id: str):
+    """Tamper-evident proof bundle: a canonical stitch of the incident evidence + a sha256 content
+    digest an auditor / another agent can verify. See autosre.proof (integrity, not a signature)."""
+    from autosre import proof
+    rec = incidents.get(incident_id)
+    if not rec:
+        raise HTTPException(status_code=404, detail="unknown incident")
+    return proof.build(rec)
+
+
 @app.get("/events")
 async def events_stream(request: Request):
     async def gen():
