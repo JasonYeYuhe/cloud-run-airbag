@@ -50,13 +50,20 @@ MCP_TOKEN="$(grep '^AIRBAG_MCP_TOKEN=' "$ROOT/agent/.env" 2>/dev/null | cut -d= 
 [ -z "$MCP_TOKEN" ] && MCP_TOKEN="$(openssl rand -hex 24)"
 AURL="https://airbag-agent-${PNUM}.${REGION}.run.app"   # the agent's own URL (Cloud Tasks target)
 
-echo "== deploy target-app (healthy baseline; FAULT_MODE=off; /__fault gated by FAULT_TOKEN) =="
-# Explicit FAULT_MODE=off: scripts/gcp-demo-setup.sh later flips the service spec to FAULT_MODE=bug
-# for the bad revision, so a plain redeploy must re-assert healthy. FAULT_TOKEN stops anyone on the
-# public internet from toggling the runtime fault (griefing the demo); the gcp demo uses revision
-# routing, not /__fault, so this never gets in the way.
-gcloud run deploy airbag-target --source "$ROOT/target-app" --region "$REGION" \
-  --allow-unauthenticated --update-env-vars "FAULT_MODE=off,FAULT_TOKEN=${DEMO_TOKEN}" -q
+# AGENT_ONLY=1 redeploys just the agent (skips the target) — use it to ship an agent code change
+# WITHOUT creating a new healthy target revision, which would invert the demo's "bug revision is
+# newest" ordering and force a scripts/gcp-demo-setup.sh re-run.
+if [ "${AGENT_ONLY:-}" != "1" ]; then
+  echo "== deploy target-app (healthy baseline; FAULT_MODE=off; /__fault gated by FAULT_TOKEN) =="
+  # Explicit FAULT_MODE=off: scripts/gcp-demo-setup.sh later flips the service spec to FAULT_MODE=bug
+  # for the bad revision, so a plain redeploy must re-assert healthy. FAULT_TOKEN stops anyone on the
+  # public internet from toggling the runtime fault (griefing the demo); the gcp demo uses revision
+  # routing, not /__fault, so this never gets in the way.
+  gcloud run deploy airbag-target --source "$ROOT/target-app" --region "$REGION" \
+    --allow-unauthenticated --update-env-vars "FAULT_MODE=off,FAULT_TOKEN=${DEMO_TOKEN}" -q
+else
+  echo "== AGENT_ONLY=1 — skipping target redeploy (demo baseline preserved) =="
+fi
 TURL="$(gcloud run services describe airbag-target --region "$REGION" --format='value(status.url)')"
 
 echo "== tokens -> Secret Manager =="
