@@ -1,10 +1,10 @@
 {
-  "label": "signals=5xx",
+  "label": "signals=5xx +causal",
   "n": 17,
   "rollback_precision": {
     "num": 4,
-    "den": 6,
-    "value": 0.6667
+    "den": 4,
+    "value": 1.0
   },
   "rollback_recall": {
     "num": 4,
@@ -12,9 +12,9 @@
     "value": 0.5
   },
   "false_rollback_rate": {
-    "num": 2,
+    "num": 0,
     "den": 17,
-    "value": 0.1176
+    "value": 0.0
   },
   "false_escalation_rate": {
     "num": 1,
@@ -22,16 +22,16 @@
     "value": 0.1667
   },
   "wasted_rollback_rate": {
-    "num": 2,
+    "num": 0,
     "den": 17,
-    "value": 0.1176
+    "value": 0.0
   },
   "accuracy": {
-    "num": 10,
+    "num": 12,
     "den": 17,
-    "value": 0.5882
+    "value": 0.7059
   },
-  "mean_stages_to_mitigate": 10.0,
+  "mean_stages_to_mitigate": 11.0,
   "confusion": {
     "ROLLBACK": {
       "ROLLBACK": 4,
@@ -44,9 +44,9 @@
       "ESCALATE": 1
     },
     "ESCALATE": {
-      "ROLLBACK": 2,
+      "ROLLBACK": 0,
       "OBSERVE": 0,
-      "ESCALATE": 1
+      "ESCALATE": 3
     }
   },
   "per_case": [
@@ -57,7 +57,7 @@
       "decided": "ROLLBACK",
       "final": "ROLLBACK",
       "status": "mitigated",
-      "stages": 10
+      "stages": 11
     },
     {
       "name": "crash_high_5xx",
@@ -66,7 +66,7 @@
       "decided": "ROLLBACK",
       "final": "ROLLBACK",
       "status": "mitigated",
-      "stages": 10
+      "stages": 11
     },
     {
       "name": "healthy_steady",
@@ -154,18 +154,18 @@
       "category": "dependency",
       "expected": "ESCALATE",
       "decided": "ROLLBACK",
-      "final": "ROLLBACK",
+      "final": "ESCALATE",
       "status": "escalated",
-      "stages": 9
+      "stages": 7
     },
     {
       "name": "coincident_quota_exhaustion",
       "category": "dependency",
       "expected": "ESCALATE",
       "decided": "ROLLBACK",
-      "final": "ROLLBACK",
+      "final": "ESCALATE",
       "status": "escalated",
-      "stages": 9
+      "stages": 7
     },
     {
       "name": "masquerade_real_bad_deploy",
@@ -174,7 +174,7 @@
       "decided": "ROLLBACK",
       "final": "ROLLBACK",
       "status": "mitigated",
-      "stages": 10
+      "stages": 11
     },
     {
       "name": "intermittent_target",
@@ -183,7 +183,7 @@
       "decided": "ROLLBACK",
       "final": "ROLLBACK",
       "status": "mitigated",
-      "stages": 10
+      "stages": 11
     },
     {
       "name": "low_traffic_blip",

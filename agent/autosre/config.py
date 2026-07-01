@@ -128,6 +128,17 @@ LATENCY_SLO_ABS_MS = float(os.getenv("AIRBAG_LATENCY_SLO_ABS_MS", "800"))       
 LATENCY_SLO_TOLERANCE = float(os.getenv("AIRBAG_LATENCY_SLO_TOLERANCE", "0.05"))  # allowed slow-proportion
 LATENCY_MIN_SLOW = int(os.getenv("AIRBAG_LATENCY_MIN_SLOW", "3"))               # min slow reqs/window to FAIL it
 
+# Causal pre-check (v3 Phase 2a). Before committing a rollback, probe the rollback TARGET's health:
+# if the last-good revision is ALSO confidently degraded, the cause is external (a dependency/quota
+# outage), not this revision — so a rollback is futile → ESCALATE instead of wasting the reversible
+# action. Only a CONFIDENT-unhealthy target blocks (Wilson gate over CAUSAL_PROBE_N); transient /
+# ambiguous / probe-error → proceed with the rollback (never block a legit rollback). See causal.py.
+# Default OFF → the demo is unchanged. STAT_GATE_ENABLED still gates detection separately.
+CAUSAL_CHECK_ENABLED = _bool("AIRBAG_CAUSAL_CHECK", "false")
+CAUSAL_PROBE_N = int(os.getenv("AIRBAG_CAUSAL_PROBE_N", "8"))               # target-probe samples
+CAUSAL_TOLERANCE = float(os.getenv("AIRBAG_CAUSAL_TOLERANCE", "0.05"))      # target error-proportion baseline
+CAUSAL_MIN_ERRORS = int(os.getenv("AIRBAG_CAUSAL_MIN_ERRORS", "3"))         # min errors to call it unhealthy
+
 # Cross-incident memory + learned per-service baseline (v2). See memory.py.
 BASELINE_ALPHA = float(os.getenv("AIRBAG_BASELINE_ALPHA", "0.2"))          # EMA weight for new healthy samples
 STAT_BASELINE_FLOOR = float(os.getenv("AIRBAG_STAT_BASELINE_FLOOR", "0.01"))  # learned baseline never below this

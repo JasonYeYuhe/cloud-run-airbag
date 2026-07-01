@@ -61,7 +61,7 @@ def _action_files() -> list[pathlib.Path]:
     (adk_brain.py / gemini.py / agent.py are the LLM-advisory tier — they ARE allowed to import it.)"""
     return (sorted((_AUTOSRE / "backends").glob("*.py"))
             + sorted((_AUTOSRE / "signals").glob("*.py"))
-            + [_AUTOSRE / "tools.py"])
+            + [_AUTOSRE / "tools.py", _AUTOSRE / "causal.py"])
 
 
 def test_action_layer_never_imports_the_llm():
@@ -88,6 +88,14 @@ def test_ast_guard_flags_llm_imports():
     ]
     for src in must_flag:
         assert _offending_in_source(src), f"AST guard FAILED to flag an LLM import: {src!r}"
+
+
+def test_causal_and_signals_are_in_the_scanned_set():
+    """The deterministic tiers that can drive a rollback (causal.py + signals/) must be scanned, or the
+    LLM-free guarantee is unenforced for them."""
+    scanned = {p.name for p in _action_files()}
+    assert "causal.py" in scanned
+    assert any(p.parent.name == "signals" for p in _action_files())
 
 
 def test_ast_guard_allows_legitimate_action_layer_imports():

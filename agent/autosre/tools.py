@@ -69,6 +69,21 @@ def sample_latency_windows(service: str, region: str, windows: int = 4) -> list[
     return get_backend().sample_latency_windows(service, region, windows)
 
 
+def probe_revision_health(service: str, region: str, revision: str, n: int = 8) -> dict:
+    """Probe a specific NON-serving revision's health directly (per-revision URL), returning
+    {errs, total} over n samples — the causal pre-check (causal.py) Wilson-gates this to decide
+    whether the rollback TARGET is also degraded (external cause) before committing a rollback.
+    Only called when AIRBAG_CAUSAL_CHECK is on.
+
+    Args:
+        service (str): Cloud Run service name.
+        region (str): GCP region.
+        revision (str): the rollback-target revision to probe.
+        n (int): number of probe requests.
+    """
+    return get_backend().probe_revision_health(service, region, revision, n)
+
+
 def synthetic_probe(service: str, path: str | None = None) -> dict:
     """Actively hit the service to confirm it is really serving the business path
     (zero-traffic guard + proves the failing endpoint recovered).

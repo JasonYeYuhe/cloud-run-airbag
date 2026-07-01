@@ -12,7 +12,7 @@ from __future__ import annotations
 import logging
 import time
 
-from . import (adk_brain, autonomy, config, events, gemini, incidents, memory,
+from . import (adk_brain, autonomy, causal, config, events, gemini, incidents, memory,
                pending, signals, state_store, tools)
 
 log = logging.getLogger("airbag.sm")
@@ -154,6 +154,22 @@ def _mitigate(service: str, incident_id: str, decision: dict, decision_summary: 
               target: str, emit, run_events: list, *, gate_fix_pr: bool, level: str) -> dict:
     """Apply the rollback, prove recovery, then either open the fix-PR (L3 / approved L1) or gate it
     for approval (L2). Shared by run_self_heal and apply_approval so the L1 resume replays it."""
+    # CAUSAL PRE-CHECK (v3 Phase 2a): before spending the reversible action, probe the rollback
+    # TARGET's health. If the last-good revision is ALSO confidently degraded, the cause is external
+    # (a dependency/quota outage), not this revision — a rollback is futile. Only a CONFIDENT-unhealthy
+    # target escalates; a transient/ambiguous/errored probe proceeds (never blocks a legit rollback).
+    # Sits at the TOP of _mitigate so it covers L2/L3 auto AND the L1-approved resume, and only runs
+    # once a rollback is actually imminent (never before the L0/L1 gate). Default off (demo unchanged).
+    if config.CAUSAL_CHECK_ENABLED:
+        c = causal.precheck(service, config.GCP_REGION, target)
+        emit("CAUSAL", f"{c['verdict']} — {c['reason']}", **{k: c[k] for k in ("verdict", "target") if k in c})
+        if c["verdict"] == "COINCIDENT":
+            memory.record_incident(service, _incident_signature(), "escalated", target)
+            emit("ESCALATED", c["reason"])
+            incidents.record(incident_id, {"service": service, "status": "escalated", "autonomy": level,
+                                           "decision": decision_summary, "causal": c,
+                                           "error_before": before.get("error_rate"), "events": run_events})
+            return {"status": "escalated", "incident_id": incident_id, "events": run_events}
     result = tools.rollback_traffic_to_revision(service, config.GCP_REGION, target)
     rollback_at = time.time()
     emit("ROLLBACK_APPLIED", f"100% traffic -> {target}", result=result)

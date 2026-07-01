@@ -1,20 +1,20 @@
 {
   "label": "signals=5xx,latency",
-  "n": 14,
+  "n": 17,
   "rollback_precision": {
-    "num": 4,
-    "den": 5,
-    "value": 0.8
+    "num": 6,
+    "den": 8,
+    "value": 0.75
   },
   "rollback_recall": {
-    "num": 4,
-    "den": 6,
-    "value": 0.6667
+    "num": 6,
+    "den": 8,
+    "value": 0.75
   },
   "false_rollback_rate": {
-    "num": 1,
-    "den": 14,
-    "value": 0.0714
+    "num": 2,
+    "den": 17,
+    "value": 0.1176
   },
   "false_escalation_rate": {
     "num": 1,
@@ -22,19 +22,19 @@
     "value": 0.1667
   },
   "wasted_rollback_rate": {
-    "num": 1,
-    "den": 14,
-    "value": 0.0714
+    "num": 2,
+    "den": 17,
+    "value": 0.1176
   },
   "accuracy": {
-    "num": 10,
-    "den": 14,
-    "value": 0.7143
+    "num": 12,
+    "den": 17,
+    "value": 0.7059
   },
   "mean_stages_to_mitigate": 10.0,
   "confusion": {
     "ROLLBACK": {
-      "ROLLBACK": 4,
+      "ROLLBACK": 6,
       "OBSERVE": 2,
       "ESCALATE": 0
     },
@@ -44,7 +44,7 @@
       "ESCALATE": 1
     },
     "ESCALATE": {
-      "ROLLBACK": 1,
+      "ROLLBACK": 2,
       "OBSERVE": 0,
       "ESCALATE": 1
     }
@@ -55,6 +55,7 @@
       "category": "crash",
       "expected": "ROLLBACK",
       "decided": "ROLLBACK",
+      "final": "ROLLBACK",
       "status": "mitigated",
       "stages": 10
     },
@@ -63,6 +64,7 @@
       "category": "crash",
       "expected": "ROLLBACK",
       "decided": "ROLLBACK",
+      "final": "ROLLBACK",
       "status": "mitigated",
       "stages": 10
     },
@@ -71,6 +73,7 @@
       "category": "healthy",
       "expected": "OBSERVE",
       "decided": "OBSERVE",
+      "final": "OBSERVE",
       "status": "noop",
       "stages": 6
     },
@@ -79,6 +82,7 @@
       "category": "healthy",
       "expected": "OBSERVE",
       "decided": "OBSERVE",
+      "final": "OBSERVE",
       "status": "noop",
       "stages": 6
     },
@@ -87,6 +91,7 @@
       "category": "healthy",
       "expected": "OBSERVE",
       "decided": "OBSERVE",
+      "final": "OBSERVE",
       "status": "noop",
       "stages": 6
     },
@@ -95,6 +100,7 @@
       "category": "latency",
       "expected": "ROLLBACK",
       "decided": "ROLLBACK",
+      "final": "ROLLBACK",
       "status": "mitigated",
       "stages": 10
     },
@@ -103,6 +109,7 @@
       "category": "latency",
       "expected": "ROLLBACK",
       "decided": "ROLLBACK",
+      "final": "ROLLBACK",
       "status": "mitigated",
       "stages": 10
     },
@@ -111,6 +118,7 @@
       "category": "healthy",
       "expected": "OBSERVE",
       "decided": "OBSERVE",
+      "final": "OBSERVE",
       "status": "noop",
       "stages": 6
     },
@@ -119,6 +127,7 @@
       "category": "latency",
       "expected": "OBSERVE",
       "decided": "OBSERVE",
+      "final": "OBSERVE",
       "status": "noop",
       "stages": 6
     },
@@ -127,6 +136,7 @@
       "category": "saturation",
       "expected": "ROLLBACK",
       "decided": "OBSERVE",
+      "final": "OBSERVE",
       "status": "noop",
       "stages": 6
     },
@@ -135,6 +145,7 @@
       "category": "slo_burn",
       "expected": "ROLLBACK",
       "decided": "OBSERVE",
+      "final": "OBSERVE",
       "status": "noop",
       "stages": 6
     },
@@ -143,14 +154,43 @@
       "category": "dependency",
       "expected": "ESCALATE",
       "decided": "ROLLBACK",
+      "final": "ROLLBACK",
       "status": "escalated",
       "stages": 9
+    },
+    {
+      "name": "coincident_quota_exhaustion",
+      "category": "dependency",
+      "expected": "ESCALATE",
+      "decided": "ROLLBACK",
+      "final": "ROLLBACK",
+      "status": "escalated",
+      "stages": 9
+    },
+    {
+      "name": "masquerade_real_bad_deploy",
+      "category": "crash",
+      "expected": "ROLLBACK",
+      "decided": "ROLLBACK",
+      "final": "ROLLBACK",
+      "status": "mitigated",
+      "stages": 10
+    },
+    {
+      "name": "intermittent_target",
+      "category": "crash",
+      "expected": "ROLLBACK",
+      "decided": "ROLLBACK",
+      "final": "ROLLBACK",
+      "status": "mitigated",
+      "stages": 10
     },
     {
       "name": "low_traffic_blip",
       "category": "blip",
       "expected": "OBSERVE",
       "decided": "ESCALATE",
+      "final": "ESCALATE",
       "status": "escalated",
       "stages": 6
     },
@@ -159,6 +199,7 @@
       "category": "stuck",
       "expected": "ESCALATE",
       "decided": "ESCALATE",
+      "final": "ESCALATE",
       "status": "escalated",
       "stages": 6
     }

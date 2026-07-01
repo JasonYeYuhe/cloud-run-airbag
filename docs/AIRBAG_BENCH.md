@@ -116,6 +116,38 @@ rigor as the 5xx gate) and **deterministic** (no LLM — enforced by the AST inv
 so its FAIL verdict drives a rollback through `_validate`'s deterministic promotion. Enable it in
 production with `AIRBAG_SIGNALS=5xx,latency`; the demo stays 5xx-only (default), zero demo risk.
 
+## Causal pre-check — Phase 2a (`AIRBAG_CAUSAL_CHECK=on`)
+
+_Regenerate: `python tests/bench/run_bench.py --signals 5xx,latency --causal`. Committed:
+`causal_scorecard.json` (+ `causal_5xx_scorecard.json`). Scoring keys off the FINAL action — a rollback
+counts only if traffic actually shifted (`ROLLBACK_APPLIED`), so a causal escalate is honestly counted._
+
+Before committing a rollback, Airbag **probes the rollback target's health**: if the last-good
+revision is ALSO confidently degraded, the cause is external (a dependency/quota outage), not this
+revision — so a rollback is futile → **ESCALATE without the wasted traffic shift**. Only a
+*confident*-unhealthy target blocks (Wilson gate over N probes); a transient/flaky/errored probe →
+INCONCLUSIVE → **proceed with the rollback** (a legitimate rollback is never blocked).
+
+| Metric | 5xx,latency (causal off) | **+ causal** | What moved |
+|---|---|---|---|
+| Rollback precision | 75% (6/8) | **100% (6/6)** | both external-cause outages stop rolling back |
+| **False-rollback rate** | 11.8% (2/17) | **0% (0/17)** | zero wasted rollbacks |
+| **Rollback recall** | 75% (6/8) | **75% (6/8) — UNCHANGED** | the causal check blocks ZERO legitimate rollbacks |
+| Accuracy | 12/17 | **14/17** | — |
+
+Per case (causal on): `coincident_dependency_outage` + `coincident_quota_exhaustion` → **ESCALATE**
+(target also failing → no traffic shift); `masquerade_real_bad_deploy` (high 5xx but target HEALTHY) →
+**ROLLBACK** and `intermittent_target` (target blips 2/8, below the confidence bar) → **ROLLBACK** —
+the two anti-regression / safety cases prove the check never blocks a genuine bad deploy.
+
+**Honesty:** v2 was already *safe* on the coincident case — its post-rollback `_verify` escalates when
+recovery isn't proven (surfaced as `wasted_rollback_rate`). The causal pre-check's win is **narrower
+and real**: it skips the futile traffic shift + the verify delay and gives an evidence-grounded
+pre-action reason. It adds **no** new correctness class for stateful/data-migration bugs (a synthetic
+GET probe doesn't exercise a mutation). Deterministic + LLM-free (`causal.py` under the AST invariant);
+default OFF (demo unchanged). The gcp target-probe (tag-at-0% + probe + restore) is implemented,
+defensive (any error → proceed), and OPT-IN — not live-verified this session.
+
 ## How Phases 1–2 use this (the TDD loop)
 
 1. Make a change behind its flag (e.g. `AIRBAG_SIGNALS`).

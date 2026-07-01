@@ -176,20 +176,55 @@ CASES: list[BenchCase] = [
                   "Pre-registered RECALL GAP: v2's single-window 0.05 check OBSERVEs. Phase 1's "
                   "multi-window burn-rate detector closes this."),
 
-    # --- v2 floor WRONGLY ROLLS BACK: CAUSAL gap -> Phase 2 deploy ledger / causal pre-check -------
+    # --- CAUSAL gap -> Phase 2a causal pre-check (probe the rollback target before committing) -------
+    # target_probe is the per-revision probe MODEL the causal check Wilson-gates in-bench; the coupling
+    # (enforced by a test) is: rollback_clears==False  <=>  the target is confidently unhealthy, because
+    # an external cause (dependency/quota) breaks the target revision too.
     BenchCase(
         name="coincident_dependency_outage", category="dependency",
-        description="High 5xx (18/20) but the cause is an upstream DB outage, NOT the deploy; "
-                    "rolling back does NOT clear the errors.",
+        description="High 5xx (18/20) but the cause is an upstream DB outage, NOT the deploy; the "
+                    "rollback target ALSO fails, so rolling back does not clear the errors.",
         world={"revisions": _healthy_pair(), "error_rate": 0.90, "sample": {"errs": 18, "total": 20},
-               "rollback_clears": False,
+               "rollback_clears": False, "target_probe": {"errs": 8, "total": 8},
                "logs": ["psycopg2.OperationalError: could not connect to server: Connection refused"]},
         expected_action="ESCALATE", is_bad_deploy=False,
-        rationale="JUDGMENT CALL (pre-registered PRECISION GAP): v2 can only see 18/20 5xx + a healthy "
-                  "prior, so it legitimately rolls back — then wastes its one reversible action (errors "
-                  "persist) and escalates. This is NOT a v2 bug; v2 was never built with causal "
-                  "grounding. Correct action is ESCALATE (a human / the dependency owner). Phase 2's "
-                  "deploy-ledger causal pre-check closes this by binding the symptom to a revision."),
+        rationale="PRECISION GAP: 5xx-only sees 18/20 + a healthy prior and rolls back — wasting the one "
+                  "reversible action (the DB is down for ALL revisions) then escalating. Phase 2a's "
+                  "causal pre-check probes the rollback target, finds it ALSO failing (8/8) → COINCIDENT "
+                  "→ ESCALATE WITHOUT the futile traffic shift. (v2 was already SAFE via post-rollback "
+                  "_verify; the win is skipping the wasted shift + verify delay + a pre-action reason.)"),
+    BenchCase(
+        name="coincident_quota_exhaustion", category="dependency",
+        description="High 5xx (17/20) from an exhausted upstream quota — a second external cause; the "
+                    "rollback target is ALSO throttled.",
+        world={"revisions": _healthy_pair(), "error_rate": 0.85, "sample": {"errs": 17, "total": 20},
+               "rollback_clears": False, "target_probe": {"errs": 8, "total": 8},
+               "logs": ["googleapi: Error 429: Quota exceeded for quota metric 'Requests'"]},
+        expected_action="ESCALATE", is_bad_deploy=False,
+        rationale="A SECOND external-cause fixture so 100% precision isn't a one-fixture artifact. Same "
+                  "causal logic: target also failing → COINCIDENT → ESCALATE, no wasted rollback."),
+    BenchCase(
+        name="masquerade_real_bad_deploy", category="crash",
+        description="Looks like a dependency outage (high 5xx, 15/20) but it IS a bad deploy — the "
+                    "rollback target is HEALTHY, so the causal check must NOT block the rollback.",
+        world={"revisions": _bad_and_good(), "error_rate": 0.75, "sample": {"errs": 15, "total": 20},
+               "rollback_clears": True, "target_probe": {"errs": 0, "total": 8},
+               "logs": [_KEYERROR_TRACE]},
+        expected_action="ROLLBACK", is_bad_deploy=True,
+        rationale="ANTI-REGRESSION: the causal check must not turn a genuine bad deploy into an escalate. "
+                  "Target probes HEALTHY (0/8) → CAUSAL/INCONCLUSIVE → PROCEED → ROLLBACK, with the "
+                  "causal check ON."),
+    BenchCase(
+        name="intermittent_target", category="crash",
+        description="A real bad deploy (15/20 5xx) whose rollback target has INTERMITTENT blips (2/8) "
+                    "below the confidence bar — the causal check must PROCEED, not block on a flaky probe.",
+        world={"revisions": _bad_and_good(), "error_rate": 0.75, "sample": {"errs": 15, "total": 20},
+               "rollback_clears": True, "target_probe": {"errs": 2, "total": 8},
+               "logs": [_KEYERROR_TRACE]},
+        expected_action="ROLLBACK", is_bad_deploy=True,
+        rationale="SAFETY: a transient/cold-start blip on the target (2/8, below CAUSAL_MIN_ERRORS/CI) "
+                  "must resolve to INCONCLUSIVE → PROCEED, never a confident-false COINCIDENT that would "
+                  "block a legitimate rollback (protecting a bad revision is the worst failure)."),
 
     # --- v2 floor OVER-ESCALATES: thin-evidence paging -> Phase 3 verifier / better evidence --------
     BenchCase(

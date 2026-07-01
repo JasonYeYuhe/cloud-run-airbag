@@ -63,6 +63,15 @@ class FixtureBackend:
         ok = self.rolled_back and self.world.get("rollback_clears", True)
         return {"ok": ok, "path": path, "status": 200 if ok else 503}
 
+    def probe_revision_health(self, service: str, region: str, revision: str, n: int = 8) -> dict:
+        # the fixture's probe MODEL {errs,total} — the causal Wilson math runs for real in-bench.
+        # Default healthy (0 errs): a bad DEPLOY's last-good target is fine (only a dependency/quota
+        # outage makes the target ALSO fail). Cases that model an external cause set target_probe.
+        p = self.world.get("target_probe")
+        if p is None:
+            return {"errs": 0, "total": n}
+        return {"errs": int(p["errs"]), "total": int(p["total"])}
+
     def probe_candidate(self, service: str, region: str, revision: str) -> dict:
         ok = self.rolled_back and self.world.get("rollback_clears", True)
         return {"ok": ok, "errors": 0 if ok else 1, "total": 1}
@@ -103,7 +112,10 @@ class CaseResult:
     category: str
     expected_action: str
     is_bad_deploy: bool
-    decided_action: str          # from the DECISION event — the gate's verdict
+    decided_action: str          # from the DECISION event — the gate's verdict (what Airbag DECIDED)
+    final_action: str            # what Airbag ULTIMATELY did (ROLLBACK iff traffic actually shifted) —
+                                 # scoring keys off this so a causal pre-check ESCALATE is observable
+    rolled_back: bool            # was ROLLBACK_APPLIED emitted (traffic actually shifted)?
     status: str                  # terminal run_self_heal status (mitigated/escalated/noop/...)
     stages: int                  # number of emitted events (mean-stages metric uses status==mitigated)
     cleared: bool                # did the (simulated) rollback actually clear the errors?
@@ -119,6 +131,7 @@ _PINNED = {
     "STAT_GATE_ENABLED": True,   # the v2 Wilson gate is part of the seam under test
     "SIGNALS": "5xx",            # PINNED so the baseline is deterministic + env-independent; run_bench
                                  # overrides it to exercise the multi-signal path explicitly.
+    "CAUSAL_CHECK_ENABLED": False,  # PINNED off for the baseline; run_bench(causal=True) exercises it.
     "VERIFY_ATTEMPTS": 2,        # keep the verify loop short
     "VERIFY_INTERVAL_S": 0.0,    # no wall-clock sleeps
     "CI_SELF_CORRECT": False,    # no background CI-watch thread
@@ -137,10 +150,11 @@ def _decided_action(events: list[dict]) -> str:
     return "OBSERVE"   # no DECISION emitted (shouldn't happen) -> treat as a no-op
 
 
-def run_case(case, signals: str | None = None) -> CaseResult:
+def run_case(case, signals: str | None = None, causal: bool = False) -> CaseResult:
     """Replay one fixture through the real run_self_heal. Self-contained: snapshots + restores the
     pinned config and the patched backend resolver, so it's safe under pytest and the CLI alike.
-    `signals` overrides AIRBAG_SIGNALS (default the pinned '5xx') to exercise the multi-signal path."""
+    `signals` overrides AIRBAG_SIGNALS (default the pinned '5xx'); `causal` enables the causal
+    pre-check (AIRBAG_CAUSAL_CHECK, default off) to exercise the precision path."""
     saved_cfg = {k: getattr(config, k) for k in _PINNED}
     saved_get_backend = tools.get_backend
     fb = FixtureBackend(case.world)
@@ -149,6 +163,8 @@ def run_case(case, signals: str | None = None) -> CaseResult:
             setattr(config, k, v)
         if signals is not None:
             config.SIGNALS = signals
+        if causal:
+            config.CAUSAL_CHECK_ENABLED = True
         tools.get_backend = lambda: fb            # tools binds the NAME at import -> patch on tools
         state_store.reset_memory()                # isolate durable state per case
         # sanity: per-case isolation is load-bearing (memory.observe_healthy folds samples keyed on
@@ -162,14 +178,27 @@ def run_case(case, signals: str | None = None) -> CaseResult:
         for k, v in saved_cfg.items():
             setattr(config, k, v)
     events = result.get("events", [])
+    status = result.get("status", "unknown")
+    rolled_back = any(e.get("stage") == "ROLLBACK_APPLIED" for e in events)
+    decided = _decided_action(events)
+    # what Airbag ULTIMATELY did: a rollback iff traffic actually shifted (so a causal pre-check that
+    # escalates BEFORE the shift is scored ESCALATE, not ROLLBACK); else the terminal outcome.
+    if rolled_back:
+        final = "ROLLBACK"
+    elif status == "escalated":
+        final = "ESCALATE"
+    elif status in ("noop", "observed"):
+        final = "OBSERVE"
+    else:
+        final = decided
     return CaseResult(
         name=case.name, category=case.category, expected_action=case.expected_action,
-        is_bad_deploy=case.is_bad_deploy, decided_action=_decided_action(events),
-        status=result.get("status", "unknown"), stages=len(events),
+        is_bad_deploy=case.is_bad_deploy, decided_action=decided, final_action=final,
+        rolled_back=rolled_back, status=status, stages=len(events),
         cleared=bool(case.world.get("rollback_clears", True)))
 
 
-def run_bench(cases=None, signals: str | None = None) -> list[CaseResult]:
+def run_bench(cases=None, signals: str | None = None, causal: bool = False) -> list[CaseResult]:
     from bench.fixtures import CASES
     cases = CASES if cases is None else cases
-    return [run_case(c, signals=signals) for c in cases]
+    return [run_case(c, signals=signals, causal=causal) for c in cases]

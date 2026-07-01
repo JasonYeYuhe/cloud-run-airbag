@@ -145,3 +145,63 @@ def test_multisignal_matches_committed_scorecard():
         assert r.decided_action == golden[r.name], (
             f"{r.name}: {r.decided_action} vs committed {golden[r.name]} — re-run "
             "`python tests/bench/run_bench.py --signals 5xx,latency --write` and review the diff.")
+
+
+# --- 5. CAUSAL PRE-CHECK (Phase 2a): precision up, false-rollback→0, ZERO legit rollbacks blocked ---
+def test_causal_precheck_eliminates_false_rollbacks():
+    """The core Phase 2a proof: probing the rollback target before committing turns both coincident
+    external-cause outages into ESCALATE (no wasted traffic shift) → precision up, false-rollback →0."""
+    for sig in ("5xx", "5xx,latency"):
+        base = score(run_bench(signals=sig, causal=False))
+        caus = score(run_bench(signals=sig, causal=True))
+        assert caus.false_rollback_rate.num < base.false_rollback_rate.num, "must drop false rollbacks"
+        assert caus.false_rollback_rate.num == 0, "both coincident cases should stop rolling back"
+        assert caus.rollback_precision.value > base.rollback_precision.value
+
+
+def test_causal_never_blocks_a_legitimate_rollback():
+    """SAFETY — the worst failure is protecting a bad revision. Recall must be UNCHANGED by the causal
+    check, and the masquerade (healthy target) + intermittent (flaky target) bad-deploys still roll back."""
+    for sig in ("5xx", "5xx,latency"):
+        base = score(run_bench(signals=sig, causal=False))
+        caus = score(run_bench(signals=sig, causal=True))
+        assert caus.rollback_recall.num == base.rollback_recall.num, "causal check blocked a real rollback!"
+    by_name = {r.name: r for r in run_bench(signals="5xx,latency", causal=True)}
+    assert by_name["masquerade_real_bad_deploy"].rolled_back is True   # healthy target -> proceed
+    assert by_name["intermittent_target"].rolled_back is True          # flaky target -> proceed
+    assert by_name["coincident_dependency_outage"].rolled_back is False  # target also down -> escalate
+    assert by_name["coincident_quota_exhaustion"].rolled_back is False
+
+
+def test_causal_off_reproduces_committed_scorecards():
+    """With the causal check OFF (the default), the 5xx and multisignal scorecards are byte-identical
+    to the committed baselines — a wiring slip that silently enabled it would be caught here."""
+    for sig, fname in (("5xx", "baseline_scorecard.json"), ("5xx,latency", "multisignal_scorecard.json")):
+        committed = json.loads((_BASELINE.parent / fname).read_text(encoding="utf-8"))
+        got = score(run_bench(signals=sig, causal=False)).to_dict()
+        assert {c["name"]: c["final"] for c in got["per_case"]} == \
+            {c["name"]: c["final"] for c in committed["per_case"]}
+
+
+def test_causal_matches_committed_scorecard():
+    committed = json.loads((_BASELINE.parent / "causal_scorecard.json").read_text(encoding="utf-8"))
+    golden = {c["name"]: c["final"] for c in committed["per_case"]}
+    for r in run_bench(signals="5xx,latency", causal=True):
+        assert r.final_action == golden[r.name], (
+            f"{r.name}: {r.final_action} vs committed {golden[r.name]} — re-run "
+            "`python tests/bench/run_bench.py --signals 5xx,latency --causal --write` and review.")
+
+
+def test_fixture_coupling_dependency_target_is_unhealthy():
+    """Anti-gaming: a case that models an external cause (rollback_clears==False) MUST carry a
+    confidently-unhealthy target_probe, and vice-versa — so target_probe can't be tuned to flip one
+    case. (Bad-deploy cases either omit target_probe [healthy default] or set a healthy one.)"""
+    from bench.fixtures import CASES
+    for c in CASES:
+        clears = c.world.get("rollback_clears", True)
+        probe = c.world.get("target_probe")
+        if not clears:
+            assert probe is not None and probe["errs"] >= 3, \
+                f"{c.name}: rollback_clears=False must have a confidently-unhealthy target_probe"
+        if probe is not None and clears:
+            assert probe["errs"] < 3, f"{c.name}: a clearing rollback must have a healthy target_probe"

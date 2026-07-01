@@ -109,3 +109,10 @@ def set_traffic_split(service: str, region: str, splits: dict, tag_revision: str
 def probe_candidate(service: str, region: str, revision: str, n: int = 5) -> dict:
     errs, total = _sample(n)  # the local target is a single process; sample the business path
     return {"ok": errs == 0, "errors": errs, "total": total}
+
+
+def probe_revision_health(service: str, region: str, revision: str, n: int = 8) -> dict:
+    # the local target is a single process (no per-revision URL), so the "rollback target" health
+    # equals the current business-path sample — enough to exercise the causal check locally.
+    errs, total = _sample(n)
+    return {"errs": errs, "total": total}

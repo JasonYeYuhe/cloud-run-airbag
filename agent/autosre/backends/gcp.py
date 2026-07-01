@@ -172,6 +172,54 @@ def sample_latency_windows(service: str, region: str, windows: int = 4, per_wind
     return out
 
 
+_CAUSAL_TAG = "airbagcausal"
+
+
+def probe_revision_health(service: str, region: str, revision: str, n: int = 8) -> dict:
+    """Probe the rollback TARGET (a non-serving revision) directly for the causal pre-check. Tags it
+    at 0% traffic (NON-disruptive — serving traffic is untouched; NOT set_traffic_split, which drops
+    0% entries) to get a per-revision URL, probes it n times, then RESTORES the original traffic in a
+    finally. Returns {errs, total}. Defensive: ANY error → {errs:0, total:0}, which causal.py reads as
+    INCONCLUSIVE → PROCEED with the rollback — a probe failure must never block a legitimate rollback.
+    OPT-IN (AIRBAG_CAUSAL_CHECK); the demo runs with the causal check off."""
+    from google.cloud import run_v2
+    original = None
+    try:
+        svc = _get_service(service, region)
+        original = list(svc.traffic)   # preserve the exact serving split to restore
+        probe_targets = list(svc.traffic) + [run_v2.TrafficTarget(
+            type_=run_v2.TrafficTargetAllocationType.TRAFFIC_TARGET_ALLOCATION_TYPE_REVISION,
+            revision=revision, percent=0, tag=_CAUSAL_TAG)]
+        _set_traffic(service, region, probe_targets)   # add a 0% tag → target gets a stable URL, no traffic
+        svc2 = _get_service(service, region)
+        uri = next((t.uri for t in svc2.traffic_statuses
+                    if getattr(t, "tag", "") == _CAUSAL_TAG and getattr(t, "uri", "")), None)
+        if not uri:
+            return {"errs": 0, "total": 0}
+        full = uri.rstrip("/") + config.PROBE_PATH
+        errs = ok = 0
+        with httpx.Client(timeout=10.0) as c:
+            for _ in range(n):
+                try:
+                    if c.get(full).status_code >= 500:
+                        errs += 1   # a 5xx STATUS is evidence the target served-and-broke
+                    ok += 1
+                except Exception:  # noqa: BLE001
+                    # UNREACHABLE ≠ degraded: a cold start on the scaled-to-zero last-good target (it
+                    # has 0% traffic) or a transient timeout is NO evidence of failure — DROP the
+                    # sample. Counting it would falsely block a legitimate rollback (the worst failure).
+                    pass
+        return {"errs": errs, "total": ok}   # all-unreachable -> {0,0} -> INCONCLUSIVE -> proceed
+    except Exception:  # noqa: BLE001 — never let a causal-probe failure block a rollback
+        return {"errs": 0, "total": 0}
+    finally:
+        if original is not None:
+            try:
+                _set_traffic(service, region, original)   # restore serving split + drop the causal tag
+            except Exception:  # noqa: BLE001
+                pass
+
+
 def synthetic_probe(service: str, path: str | None = None) -> dict:
     path = path or config.PROBE_PATH
     try:

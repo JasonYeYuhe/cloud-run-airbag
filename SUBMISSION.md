@@ -85,7 +85,7 @@ never freely touches prod. Judges see a governed control loop, not a chatbot wit
 - **Verifiable incident-report Artifact:** every run is persisted and rendered at
   `/incidents/{id}/report` (decision + signals + before/after + full timeline) — *AI isn't guessing*.
 - Three execution backends (mock / local / gcp) behind one agent codebase; `/demo/*` is
-  token-gated so the public dashboard is watch-only. **147 tests (140 agent + 7 mcp-server), CI green.**
+  token-gated so the public dashboard is watch-only. **162 tests (155 agent + 7 mcp-server), CI green.**
 
 **v2 — production-grade autonomy (real, verified on live Cloud Run):**
 - **Statistical decision gate** — the rollback trigger is a **Wilson confidence-interval** verdict

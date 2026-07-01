@@ -21,10 +21,6 @@ for p in (str(_AGENT), str(_TESTS)):
 from bench.harness import run_bench          # noqa: E402
 from bench.scorecard import score            # noqa: E402
 
-BASELINE_JSON = _HERE.parent / "baseline_scorecard.json"
-MULTISIGNAL_JSON = _HERE.parent / "multisignal_scorecard.json"
-
-
 def _arg(flag: str, default=None):
     if flag in sys.argv:
         i = sys.argv.index(flag)
@@ -32,19 +28,30 @@ def _arg(flag: str, default=None):
     return default
 
 
+def _scorecard_path(signals: str | None, causal: bool):
+    """The committed scorecard file for a (signals, causal) config."""
+    multi = bool(signals) and signals != "5xx"
+    name = ({(False, False): "baseline_scorecard.json",
+             (True, False): "multisignal_scorecard.json",
+             (False, True): "causal_5xx_scorecard.json",
+             (True, True): "causal_scorecard.json"})[(multi, causal)]
+    return _HERE.parent / name
+
+
 def main() -> int:
     write = "--write" in sys.argv
     signals = _arg("--signals")                      # e.g. --signals 5xx,latency
-    label = f"signals={signals}" if signals else "5xx-signal deterministic floor (LLM off)"
-    card = score(run_bench(signals=signals), label=label)
+    causal = "--causal" in sys.argv
+    label = (f"signals={signals or '5xx'}" + (" +causal" if causal else "")) or "5xx floor (LLM off)"
+    card = score(run_bench(signals=signals, causal=causal), label=label)
     print(card.to_markdown())
     print()
     if write:
-        out = MULTISIGNAL_JSON if signals else BASELINE_JSON
+        out = _scorecard_path(signals, causal)
         out.write_text(json.dumps(card.to_dict(), indent=2) + "\n", encoding="utf-8")
         print(f"[wrote] {out}")
     else:
-        tip = f"--signals {signals} --write" if signals else "--write"
+        tip = " ".join(filter(None, [f"--signals {signals}" if signals else "", "--causal" if causal else "", "--write"]))
         print(f"(run with `{tip}` to update the committed scorecard)")
     return 0
 

@@ -91,42 +91,48 @@ class Scorecard:
             row = self.confusion.get(exp, {})
             lines.append(f"| {exp} | {row.get('ROLLBACK', 0)} | {row.get('OBSERVE', 0)} | "
                          f"{row.get('ESCALATE', 0)} |")
-        lines += ["", "**Per case:**", "",
-                  "| case | category | expected | decided | status | stages |",
+        lines += ["", "**Per case:** (final = what Airbag ultimately did; scoring keys off it)", "",
+                  "| case | category | expected | final | status | stages |",
                   "|---|---|---|---|---|---|"]
         for c in self.per_case:
-            mark = "✓" if c["decided"] == c["expected"] else "✗"
-            lines.append(f"| {c['name']} | {c['category']} | {c['expected']} | {c['decided']} {mark} "
+            final = c.get("final", c["decided"])
+            mark = "✓" if final == c["expected"] else "✗"
+            note = "" if final == c["decided"] else f" (decided {c['decided']})"
+            lines.append(f"| {c['name']} | {c['category']} | {c['expected']} | {final} {mark}{note} "
                          f"| {c['status']} | {c['stages']} |")
         return "\n".join(lines)
 
 
 def score(results, label: str = "v2 deterministic floor (LLM off)") -> Scorecard:
+    # Score off final_action (what Airbag ULTIMATELY did — a ROLLBACK only if traffic actually
+    # shifted), so a causal pre-check that escalates BEFORE the shift is honestly counted as an
+    # ESCALATE, not a rollback. Equivalent to decided_action whenever the causal check is off.
     n = len(results)
     confusion: dict = {e: {d: 0 for d in ACTIONS} for e in ACTIONS}
     for r in results:
         confusion.setdefault(r.expected_action, {a: 0 for a in ACTIONS})
-        confusion[r.expected_action][r.decided_action] = \
-            confusion[r.expected_action].get(r.decided_action, 0) + 1
+        confusion[r.expected_action][r.final_action] = \
+            confusion[r.expected_action].get(r.final_action, 0) + 1
 
-    decided_rb = [r for r in results if r.decided_action == "ROLLBACK"]
+    rolled_back = [r for r in results if r.final_action == "ROLLBACK"]
     expected_rb = [r for r in results if r.expected_action == "ROLLBACK"]
     expected_obs = [r for r in results if r.expected_action == "OBSERVE"]
-    correct_rb = [r for r in decided_rb if r.expected_action == "ROLLBACK"]
-    false_rb = [r for r in decided_rb if r.expected_action != "ROLLBACK"]
-    false_esc = [r for r in expected_obs if r.decided_action == "ESCALATE"]
-    wasted_rb = [r for r in decided_rb if r.status == "escalated" and not r.cleared]
-    correct = [r for r in results if r.decided_action == r.expected_action]
+    correct_rb = [r for r in rolled_back if r.expected_action == "ROLLBACK"]
+    false_rb = [r for r in rolled_back if r.expected_action != "ROLLBACK"]
+    false_esc = [r for r in expected_obs if r.final_action == "ESCALATE"]
+    wasted_rb = [r for r in rolled_back if r.status == "escalated" and not r.cleared]
+    correct = [r for r in results if r.final_action == r.expected_action]
     mitigated = [r for r in results if r.status == "mitigated"]
     mean_stages = (sum(r.stages for r in mitigated) / len(mitigated)) if mitigated else None
 
     per_case = [{"name": r.name, "category": r.category, "expected": r.expected_action,
-                 "decided": r.decided_action, "status": r.status, "stages": r.stages}
+                 "decided": r.decided_action, "final": r.final_action, "status": r.status,
+                 "stages": r.stages}
                 for r in results]
 
     return Scorecard(
         label=label, n=n,
-        rollback_precision=Ratio(len(correct_rb), len(decided_rb)),
+        rollback_precision=Ratio(len(correct_rb), len(rolled_back)),
         rollback_recall=Ratio(len(correct_rb), len(expected_rb)),
         false_rollback_rate=Ratio(len(false_rb), n),
         false_escalation_rate=Ratio(len(false_esc), len(expected_obs)),

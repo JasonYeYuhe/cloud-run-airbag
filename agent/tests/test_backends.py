@@ -103,6 +103,30 @@ def test_set_traffic_retries_on_etag_conflict(monkeypatch):
     assert seen[1][1] == ["T"], "the intended targets must be re-applied on the retry"
 
 
+def test_probe_revision_health_drops_transport_errors(monkeypatch):
+    """SAFETY (causal): an UNREACHABLE target (cold start on the scaled-to-zero last-good revision /
+    timeout) must NOT count as a failure — else it would falsely COINCIDENT-block a legit rollback."""
+    svc = SimpleNamespace(traffic=[], traffic_statuses=[
+        SimpleNamespace(tag=gcp._CAUSAL_TAG, uri="https://tag---svc.run.app")])
+    monkeypatch.setattr(gcp, "_get_service", lambda s, r: svc)
+    monkeypatch.setattr(gcp, "_set_traffic", lambda *a, **k: None)
+
+    def _raise(self, url, **k):
+        raise httpx.ConnectError("unreachable")
+    monkeypatch.setattr(httpx.Client, "get", _raise)
+    assert gcp.probe_revision_health("svc", "r", "svc-good", n=6) == {"errs": 0, "total": 0}
+
+
+def test_probe_revision_health_counts_5xx(monkeypatch):
+    """A reached 5xx STATUS is genuine evidence the target served-and-broke → counted."""
+    svc = SimpleNamespace(traffic=[], traffic_statuses=[
+        SimpleNamespace(tag=gcp._CAUSAL_TAG, uri="https://tag---svc.run.app")])
+    monkeypatch.setattr(gcp, "_get_service", lambda s, r: svc)
+    monkeypatch.setattr(gcp, "_set_traffic", lambda *a, **k: None)
+    monkeypatch.setattr(httpx.Client, "get", lambda self, url, **k: _Resp(500))
+    assert gcp.probe_revision_health("svc", "r", "svc-good", n=6) == {"errs": 6, "total": 6}
+
+
 def test_set_traffic_raises_after_exhausting_retries(monkeypatch):
     """A persistent conflict surfaces (so the heal releases its lease + a retry re-runs) and does
     NOT loop forever."""

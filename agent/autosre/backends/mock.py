@@ -53,6 +53,11 @@ def sample_latency_windows(service: str, region: str, windows: int = 4) -> list[
     return [{"slow": 0, "total": 20} for _ in range(windows)]
 
 
+def probe_revision_health(service: str, region: str, revision: str, n: int = 8) -> dict:
+    # the mock's last-good revision is healthy (the mock scenario is a bad DEPLOY, not a dependency)
+    return {"errs": 0, "total": n}
+
+
 def synthetic_probe(service: str, path: str = "/healthz") -> dict:
     ok = _STATE["rolled_back"]
     return {"ok": ok, "path": path, "status": 200 if ok else 503}
