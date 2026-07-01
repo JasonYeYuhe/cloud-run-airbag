@@ -48,6 +48,11 @@ def sample_business_path(service: str, region: str, n: int = 20) -> dict:
     return {"errs": 0 if _STATE["rolled_back"] else n, "total": n}
 
 
+def sample_latency_windows(service: str, region: str, windows: int = 4) -> list[dict]:
+    # benign by default (no slow requests) — the mock heal is a 5xx scenario; latency tests inject data
+    return [{"slow": 0, "total": 20} for _ in range(windows)]
+
+
 def synthetic_probe(service: str, path: str = "/healthz") -> dict:
     ok = _STATE["rolled_back"]
     return {"ok": ok, "path": path, "status": 200 if ok else 503}

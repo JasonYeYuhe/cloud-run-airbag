@@ -49,3 +49,79 @@ def test_detect_5xx_healthy_is_verbatim(monkeypatch):
 def test_fuse_single_detector_is_verbatim():
     v = {"verdict": "FAIL", "reason": "x", "rate": 0.7}
     assert engine._fuse({"5xx": v}, ["5xx"]) is v   # single detector returned unchanged (identity)
+
+
+# --- latency detector (Phase 1.2) --------------------------------------------------------------
+def _ctx(latency_windows):
+    return engine.SignalContext(service="s", region="r", baseline_rate=0.02,
+                                latency_windows=latency_windows)
+
+
+def test_latency_detector_fails_on_sustained_regression():
+    v = engine._detect_latency(_ctx([{"slow": 18, "total": 20}] * 4))
+    assert v["verdict"] == "FAIL" and v["detail"]["fail_windows"] == 4
+
+
+def test_latency_detector_fails_on_moderate_sustained_regression():
+    v = engine._detect_latency(_ctx([{"slow": 8, "total": 20}] * 4))   # ~40% over SLO
+    assert v["verdict"] == "FAIL"
+
+
+def test_latency_detector_passes_on_transient_spike_debounce():
+    """One hot window (< debounce) must collapse to PASS, NOT INCONCLUSIVE (which would page)."""
+    v = engine._detect_latency(_ctx([{"slow": 18, "total": 20}, {"slow": 0, "total": 20},
+                                     {"slow": 0, "total": 20}, {"slow": 0, "total": 20}]))
+    assert v["verdict"] == "PASS" and v["detail"]["fail_windows"] == 1
+
+
+def test_latency_detector_passes_within_slo():
+    v = engine._detect_latency(_ctx([{"slow": 1, "total": 20}] * 4))   # below LATENCY_MIN_SLOW
+    assert v["verdict"] == "PASS"
+
+
+def test_latency_detector_inconclusive_on_no_data():
+    assert engine._detect_latency(_ctx([]))["verdict"] == "INCONCLUSIVE"
+    assert engine._detect_latency(_ctx([{"slow": 0, "total": 0}]))["verdict"] == "INCONCLUSIVE"
+
+
+# --- fusion (Phase 1.2) ------------------------------------------------------------------------
+def test_fuse_strongest_signal_latency_fail_wins():
+    fused = engine._fuse({"5xx": {"verdict": "INCONCLUSIVE", "reason": "5x", "rate": 0.0},
+                          "latency": {"verdict": "FAIL", "reason": "slow"}}, ["5xx", "latency"])
+    assert fused["verdict"] == "FAIL"
+    assert "signals" in fused and fused["rate"] == 0.0        # carries the 5xx rate for the EMA
+    assert set(fused["signals"]) == {"5xx", "latency"}
+
+
+def test_fuse_all_pass_is_pass():
+    fused = engine._fuse({"5xx": {"verdict": "PASS", "reason": "ok", "rate": 0.0},
+                          "latency": {"verdict": "PASS", "reason": "ok"}}, ["5xx", "latency"])
+    assert fused["verdict"] == "PASS"
+
+
+def test_all_enables_5xx_and_latency(monkeypatch):
+    monkeypatch.setattr(config, "SIGNALS", "all")
+    assert set(signals.enabled_detectors()) == {"5xx", "latency"}
+
+
+def test_latency_detector_boundary_at_debounce(monkeypatch):
+    """Exactly SIGNAL_DEBOUNCE_WINDOWS fail windows triggers (>=); one fewer does not."""
+    monkeypatch.setattr(config, "SIGNAL_DEBOUNCE_WINDOWS", 3)
+    hot, cool = {"slow": 18, "total": 20}, {"slow": 0, "total": 20}
+    assert engine._detect_latency(_ctx([hot, hot, hot, cool]))["verdict"] == "FAIL"   # 3 -> FAIL
+    assert engine._detect_latency(_ctx([hot, hot, cool, cool]))["verdict"] == "PASS"   # 2 -> PASS
+
+
+def test_latency_only_mode_has_no_rate_key(monkeypatch):
+    """AIRBAG_SIGNALS=latency: detect() carries NO 5xx `rate`, so the OBSERVE-branch fold is skipped
+    (never folds a fabricated 0.0 into the 5xx EMA) and nothing KeyErrors."""
+    from autosre import tools
+
+    class _LatBackend:
+        def sample_latency_windows(self, service, region, windows=4):
+            return [{"slow": 18, "total": 20}] * 4
+
+    monkeypatch.setattr(config, "SIGNALS", "latency")
+    monkeypatch.setattr(tools, "get_backend", lambda: _LatBackend())
+    out = signals.detect("svc", "r", baseline_rate=0.02)
+    assert out["verdict"] == "FAIL" and "rate" not in out    # no 5xx rate -> observe_healthy guard skips

@@ -110,3 +110,38 @@ def test_v2_floor_catches_the_clear_crashes():
     by_name = {r.name: r for r in _results()}
     assert by_name["crash_total_outage"].decided_action == "ROLLBACK"
     assert by_name["crash_high_5xx"].decided_action == "ROLLBACK"
+
+
+# --- 4. MULTI-SIGNAL (Phase 1.2): the latency detector lifts recall WITHOUT regressing precision ---
+def test_multisignal_lifts_recall_without_regressing_precision():
+    """The core Phase 1 proof: enabling latency catches the out-of-window latency regressions the
+    5xx-only floor misses, and does NOT increase the false-rollback rate (the §6 guard)."""
+    base = score(run_bench(signals="5xx"))
+    multi = score(run_bench(signals="5xx,latency"))
+    assert multi.rollback_recall.value > base.rollback_recall.value, "latency detector must lift recall"
+    assert multi.rollback_recall.num >= 4                      # catches both latency regressions
+    assert multi.false_rollback_rate.num <= base.false_rollback_rate.num, "no new false rollbacks"
+    assert multi.rollback_precision.value >= base.rollback_precision.value
+
+
+def test_multisignal_rolls_back_latency_regressions():
+    by_name = {r.name: r for r in run_bench(signals="5xx,latency")}
+    assert by_name["latency_regression"].decided_action == "ROLLBACK"
+    assert by_name["latency_regression_moderate"].decided_action == "ROLLBACK"
+
+
+def test_multisignal_debounce_suppresses_transient_spike():
+    """A momentary latency spike (one hot window) must NOT roll back — the debounce is load-bearing;
+    a naive non-debounced detector would false-rollback here."""
+    by_name = {r.name: r for r in run_bench(signals="5xx,latency")}
+    assert by_name["latency_spike_transient"].decided_action == "OBSERVE"
+    assert by_name["latency_within_slo"].decided_action == "OBSERVE"
+
+
+def test_multisignal_matches_committed_scorecard():
+    committed = json.loads((_BASELINE.parent / "multisignal_scorecard.json").read_text(encoding="utf-8"))
+    golden = {c["name"]: c["decided"] for c in committed["per_case"]}
+    for r in run_bench(signals="5xx,latency"):
+        assert r.decided_action == golden[r.name], (
+            f"{r.name}: {r.decided_action} vs committed {golden[r.name]} — re-run "
+            "`python tests/bench/run_bench.py --signals 5xx,latency --write` and review the diff.")

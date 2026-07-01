@@ -1,15 +1,15 @@
 {
-  "label": "5xx-signal deterministic floor (LLM off)",
+  "label": "signals=5xx,latency",
   "n": 14,
   "rollback_precision": {
-    "num": 2,
-    "den": 3,
-    "value": 0.6667
+    "num": 4,
+    "den": 5,
+    "value": 0.8
   },
   "rollback_recall": {
-    "num": 2,
+    "num": 4,
     "den": 6,
-    "value": 0.3333
+    "value": 0.6667
   },
   "false_rollback_rate": {
     "num": 1,
@@ -27,15 +27,15 @@
     "value": 0.0714
   },
   "accuracy": {
-    "num": 8,
+    "num": 10,
     "den": 14,
-    "value": 0.5714
+    "value": 0.7143
   },
   "mean_stages_to_mitigate": 10.0,
   "confusion": {
     "ROLLBACK": {
-      "ROLLBACK": 2,
-      "OBSERVE": 4,
+      "ROLLBACK": 4,
+      "OBSERVE": 2,
       "ESCALATE": 0
     },
     "OBSERVE": {
@@ -94,17 +94,17 @@
       "name": "latency_regression",
       "category": "latency",
       "expected": "ROLLBACK",
-      "decided": "OBSERVE",
-      "status": "noop",
-      "stages": 6
+      "decided": "ROLLBACK",
+      "status": "mitigated",
+      "stages": 10
     },
     {
       "name": "latency_regression_moderate",
       "category": "latency",
       "expected": "ROLLBACK",
-      "decided": "OBSERVE",
-      "status": "noop",
-      "stages": 6
+      "decided": "ROLLBACK",
+      "status": "mitigated",
+      "stages": 10
     },
     {
       "name": "latency_within_slo",

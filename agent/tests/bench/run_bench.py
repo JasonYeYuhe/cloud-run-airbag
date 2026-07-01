@@ -22,20 +22,30 @@ from bench.harness import run_bench          # noqa: E402
 from bench.scorecard import score            # noqa: E402
 
 BASELINE_JSON = _HERE.parent / "baseline_scorecard.json"
+MULTISIGNAL_JSON = _HERE.parent / "multisignal_scorecard.json"
+
+
+def _arg(flag: str, default=None):
+    if flag in sys.argv:
+        i = sys.argv.index(flag)
+        return sys.argv[i + 1] if i + 1 < len(sys.argv) else default
+    return default
 
 
 def main() -> int:
     write = "--write" in sys.argv
-    results = run_bench()
-    card = score(results)
-    md = card.to_markdown()
-    print(md)
+    signals = _arg("--signals")                      # e.g. --signals 5xx,latency
+    label = f"signals={signals}" if signals else "5xx-signal deterministic floor (LLM off)"
+    card = score(run_bench(signals=signals), label=label)
+    print(card.to_markdown())
     print()
     if write:
-        BASELINE_JSON.write_text(json.dumps(card.to_dict(), indent=2) + "\n", encoding="utf-8")
-        print(f"[wrote] {BASELINE_JSON}")
+        out = MULTISIGNAL_JSON if signals else BASELINE_JSON
+        out.write_text(json.dumps(card.to_dict(), indent=2) + "\n", encoding="utf-8")
+        print(f"[wrote] {out}")
     else:
-        print("(run with --write to update the committed baseline_scorecard.json)")
+        tip = f"--signals {signals} --write" if signals else "--write"
+        print(f"(run with `{tip}` to update the committed scorecard)")
     return 0
 
 

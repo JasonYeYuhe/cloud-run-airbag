@@ -30,6 +30,10 @@ def baseline_for(service: str) -> float:
     b = m.get("baseline_rate")
     if b is None:
         return config.STAT_BASELINE_RATE
+    try:  # defensive: a non-float from store drift / a hand-edited doc must not crash triage
+        b = float(b)
+    except (TypeError, ValueError):
+        return config.STAT_BASELINE_RATE
     return max(config.STAT_BASELINE_FLOOR, b)
 
 
@@ -42,6 +46,7 @@ def observe_healthy(service: str, rate: float) -> float:
     service's baseline to the floor — the opposite of the point. The floor is applied at READ time
     (baseline_for) only; the stored EMA stays unclamped so the running statistic isn't corrupted."""
     a = config.BASELINE_ALPHA
+    rate = min(1.0, max(0.0, float(rate)))   # a rate is a proportion in [0,1]; never corrupt the EMA
 
     def _m(cur):
         cur = cur or {"service": service}

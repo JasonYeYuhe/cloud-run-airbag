@@ -61,6 +61,12 @@ _KEYERROR_TRACE = ('Traceback (most recent call last):\n  File "main.py", line 5
                    "total_revenue\n    return sum(o[key] for o in orders)\nKeyError: 'amount'")
 
 
+def _lat(slow: int, total: int = 20, n: int = 4) -> list[dict]:
+    """N identical latency windows, each with `slow` of `total` requests over the SLO (a SUSTAINED
+    regression the debounce accepts)."""
+    return [{"slow": slow, "total": total} for _ in range(n)]
+
+
 CASES: list[BenchCase] = [
     # --- v2 floor gets these RIGHT (rollback) -----------------------------------------------------
     BenchCase(
@@ -111,13 +117,47 @@ CASES: list[BenchCase] = [
     # --- v2 floor MISSES these: SIGNAL-COVERAGE gap (5xx-only) -> Phase 1 multi-signal -------------
     BenchCase(
         name="latency_regression", category="latency",
-        description="p99 latency regressed 14x (320ms -> 4500ms) with NO 5xx — requests succeed, slowly.",
+        description="p99 latency regressed ~14x (320ms -> 4500ms) with NO 5xx — requests succeed, "
+                    "slowly, in every window.",
         world={"revisions": _bad_and_good(), "error_rate": 0.0, "sample": {"errs": 0, "total": 20},
-               "rollback_clears": True, "latency_p99_ms": 4500, "baseline_latency_ms": 320},
+               "rollback_clears": True, "baseline_latency_ms": 320,
+               "latency_windows": _lat(18, 20)},   # 18/20 requests over SLO, sustained across 4 windows
         expected_action="ROLLBACK", is_bad_deploy=True,
-        rationale="Canonical out-of-window bad deploy. Pre-registered RECALL GAP: v2 is 5xx-only, so "
-                  "with sample 0/20 both the heuristic and the Wilson gate are blind -> OBSERVE. "
-                  "Phase 1's latency detector closes this."),
+        rationale="Canonical out-of-window bad deploy. 5xx-only MISSES it (sample 0/20 -> heuristic + "
+                  "Wilson both blind -> OBSERVE); the Phase 1.2 latency detector confidently FAILs "
+                  "(18/20 over SLO across 4 windows) and the promotion drives a rollback."),
+    BenchCase(
+        name="latency_regression_moderate", category="latency",
+        description="A MODERATE ~2.5x p99 regression (320ms -> ~950ms), 40% of requests over SLO, "
+                    "sustained — tests the detector's sensitivity floor, not just the 14x extreme.",
+        world={"revisions": _bad_and_good(), "error_rate": 0.0, "sample": {"errs": 0, "total": 20},
+               "rollback_clears": True, "baseline_latency_ms": 320,
+               "latency_windows": _lat(8, 20)},    # 8/20 over SLO — still Wilson-confident, sustained
+        expected_action="ROLLBACK", is_bad_deploy=True,
+        rationale="A second latency positive at a different magnitude, so recall can't be an artifact "
+                  "of one fixture hand-matched to the threshold. Multi-signal catches it; 5xx misses."),
+    BenchCase(
+        name="latency_within_slo", category="healthy",
+        description="Mild latency jitter WITHIN the SLO (1/20 requests slow, below tolerance), "
+                    "sustained — the detector must NOT over-fire on normal variance.",
+        world={"revisions": _healthy_pair(), "error_rate": 0.0, "sample": {"errs": 0, "total": 20},
+               "rollback_clears": True, "baseline_latency_ms": 320,
+               "latency_windows": _lat(1, 20)},    # 1/20 over SLO — below LATENCY_MIN_SLOW -> PASS
+        expected_action="OBSERVE", is_bad_deploy=False,
+        rationale="Sub-threshold sustained negative: proves the latency detector doesn't roll back on "
+                  "normal latency variance (Wilson + min-slow gate)."),
+    BenchCase(
+        name="latency_spike_transient", category="latency",
+        description="A single hot window (a GC pause / cold start): 18/20 slow in ONE window, clean in "
+                    "the other three — a momentary spike, NOT a sustained regression.",
+        world={"revisions": _healthy_pair(), "error_rate": 0.0, "sample": {"errs": 0, "total": 20},
+               "rollback_clears": True, "baseline_latency_ms": 320,
+               "latency_windows": [{"slow": 18, "total": 20}, {"slow": 0, "total": 20},
+                                   {"slow": 0, "total": 20}, {"slow": 0, "total": 20}]},
+        expected_action="OBSERVE", is_bad_deploy=False,
+        rationale="ANTI-FLAP negative: a NAIVE non-debounced detector WOULD trip on window 1, but the "
+                  "N-window persistence gate (1/4 < 3-window debounce) collapses to PASS -> OBSERVE. "
+                  "This is what makes the debounce provably load-bearing."),
     BenchCase(
         name="saturation_cpu", category="saturation",
         description="CPU 98% / mem 95% / instance pressure; only sporadic 5xx (1%).",

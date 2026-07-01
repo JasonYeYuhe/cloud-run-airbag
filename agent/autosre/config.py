@@ -120,6 +120,13 @@ STAT_MIN_FAIL_ERRORS = int(os.getenv("AIRBAG_STAT_MIN_FAIL_ERRORS", "3"))
 SIGNALS = os.getenv("AIRBAG_SIGNALS", "5xx")
 SIGNAL_WINDOWS = int(os.getenv("AIRBAG_SIGNAL_WINDOWS", "4"))               # recent windows read per detection
 SIGNAL_DEBOUNCE_WINDOWS = int(os.getenv("AIRBAG_SIGNAL_DEBOUNCE_WINDOWS", "3"))  # a noisy signal must persist N windows
+# Latency detector: a request slower than the SLO (last-good p99 x factor, floored at ABS_MS so a fast
+# baseline isn't hair-trigger) is "slow"; the per-window slow-proportion is Wilson-gated (same rigor as
+# 5xx) vs TOLERANCE, and the window must FAIL for DEBOUNCE_WINDOWS of the last WINDOWS to trigger.
+LATENCY_SLO_FACTOR = float(os.getenv("AIRBAG_LATENCY_SLO_FACTOR", "3.0"))       # SLO = baseline p99 x this
+LATENCY_SLO_ABS_MS = float(os.getenv("AIRBAG_LATENCY_SLO_ABS_MS", "800"))       # floor for the SLO threshold
+LATENCY_SLO_TOLERANCE = float(os.getenv("AIRBAG_LATENCY_SLO_TOLERANCE", "0.05"))  # allowed slow-proportion
+LATENCY_MIN_SLOW = int(os.getenv("AIRBAG_LATENCY_MIN_SLOW", "3"))               # min slow reqs/window to FAIL it
 
 # Cross-incident memory + learned per-service baseline (v2). See memory.py.
 BASELINE_ALPHA = float(os.getenv("AIRBAG_BASELINE_ALPHA", "0.2"))          # EMA weight for new healthy samples

@@ -90,6 +90,32 @@ saturation has no confidence bound (a healthy CPU-pegged service would false-rol
 can't be told from steady-state noise without the learned baseline, so shipping them now would be
 gold-plating that risks a false rollback (see `docs/V3_VISION.md §6`).
 
+## Multi-signal result — Phase 1.2 (`AIRBAG_SIGNALS=5xx,latency`)
+
+_Regenerate: `python tests/bench/run_bench.py --signals 5xx,latency`. Committed:
+`multisignal_scorecard.json`. This is the TDD proof: the latency detector lifts recall on the
+out-of-window regressions WITHOUT increasing the false-rollback rate._
+
+| Metric | 5xx-only floor | **5xx + latency** | What moved |
+|---|---|---|---|
+| Rollback recall | 33.3% (2/6) | **66.7% (4/6)** | catches both latency regressions (the out-of-window win) |
+| Rollback precision | 66.7% (2/3) | **80.0% (4/5)** | two more correct rollbacks, no misfires added |
+| **False-rollback rate** | 7.1% (1/14) | **7.1% (1/14)** | **unchanged** — the §6 guard: latency adds zero false rollbacks |
+| Accuracy | 57.1% (8/14) | **71.4% (10/14)** | — |
+
+What the latency detector does per case: `latency_regression` (14× p99) and
+`latency_regression_moderate` (2.5× p99) → **ROLLBACK** (were silent OBSERVE misses);
+`latency_within_slo` (mild jitter) and `latency_spike_transient` (one hot window) → **OBSERVE** (no
+false trigger — the **N-window persistence gate / debounce** is load-bearing: a naive non-debounced
+detector would roll back on the transient spike). `saturation_cpu` and `slo_slow_burn` are still
+missed — their detectors are deferred, so this is **not** a headline "100% recall"; it's an honest
++34-point recall lift on the signal we shipped, with precision up and false-rollbacks flat.
+
+The detector is **CI-backed** (Wilson-gates the per-window slow-request proportion, same statistical
+rigor as the 5xx gate) and **deterministic** (no LLM — enforced by the AST invariant on `signals/`),
+so its FAIL verdict drives a rollback through `_validate`'s deterministic promotion. Enable it in
+production with `AIRBAG_SIGNALS=5xx,latency`; the demo stays 5xx-only (default), zero demo risk.
+
 ## How Phases 1–2 use this (the TDD loop)
 
 1. Make a change behind its flag (e.g. `AIRBAG_SIGNALS`).

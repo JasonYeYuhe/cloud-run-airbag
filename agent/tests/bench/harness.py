@@ -44,6 +44,14 @@ class FixtureBackend:
     def fetch_error_logs(self, service: str, region: str, n: int = 10) -> list[str]:
         return list(self.world.get("logs", []))[:n]
 
+    def sample_latency_windows(self, service: str, region: str, windows: int = 4) -> list[dict]:
+        # per-window {slow, total} from the fixture; default benign (no slow requests) so non-latency
+        # cases are unaffected when the latency detector is enabled.
+        w = self.world.get("latency_windows")
+        if w is None:
+            return [{"slow": 0, "total": 20} for _ in range(windows)]
+        return [dict(x) for x in w]
+
     def sample_business_path(self, service: str, region: str, n: int = 20) -> dict:
         # the pinned observed sample (active probe at triage time); post-rollback it would read clean
         if self.rolled_back and self.world.get("rollback_clears", True):

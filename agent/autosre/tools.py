@@ -55,6 +55,20 @@ def sample_business_path(service: str, region: str, n: int = 20) -> dict:
     return get_backend().sample_business_path(service, region, n)
 
 
+def sample_latency_windows(service: str, region: str, windows: int = 4) -> list[dict]:
+    """Per-window count of requests slower than the latency SLO (last-good p99 × factor), newest
+    last — the latency detector (signals/) Wilson-gates each window's slow-proportion and requires
+    persistence across windows. Returns [{slow, total}, …]. Only called when the latency detector is
+    enabled (AIRBAG_SIGNALS includes 'latency').
+
+    Args:
+        service (str): Cloud Run service name.
+        region (str): GCP region.
+        windows (int): number of recent time-bucketed windows to return.
+    """
+    return get_backend().sample_latency_windows(service, region, windows)
+
+
 def synthetic_probe(service: str, path: str | None = None) -> dict:
     """Actively hit the service to confirm it is really serving the business path
     (zero-traffic guard + proves the failing endpoint recovered).

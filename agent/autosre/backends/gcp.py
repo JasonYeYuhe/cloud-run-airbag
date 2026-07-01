@@ -140,6 +140,38 @@ def sample_business_path(service: str, region: str, n: int = 20) -> dict:
     return {"errs": errs, "total": total}
 
 
+def sample_latency_windows(service: str, region: str, windows: int = 4, per_window: int = 8) -> list[dict]:
+    """Per-window count of business-path requests slower than the latency SLO (max(baseline p99 ×
+    factor, ABS_MS)), sampled in `windows` bursts — the multi-window persistence the latency detector
+    debounces on. Actively samples (like query_error_rate's active probe) rather than querying a Cloud
+    Monitoring distribution (the monitoring client isn't a dep). OPT-IN: only called when
+    AIRBAG_SIGNALS includes 'latency'; the demo runs 5xx-only. Defensive — benign (no data) on error,
+    which reads as INCONCLUSIVE (never a false trigger)."""
+    import time as _time
+    try:
+        uri = _get_service(service, region).uri.rstrip("/") + config.PROBE_PATH
+    except Exception:  # noqa: BLE001
+        return [{"slow": 0, "total": 0} for _ in range(windows)]
+    slo_ms = config.LATENCY_SLO_ABS_MS  # absolute SLO floor (baseline-relative refinement is a follow-up)
+    out: list[dict] = []
+    with httpx.Client(timeout=10.0) as c:
+        for _ in range(windows):
+            slow = total = 0
+            for _ in range(per_window):
+                t0 = _time.monotonic()
+                try:
+                    r = c.get(uri)
+                    dt_ms = (_time.monotonic() - t0) * 1000.0
+                    total += 1
+                    if r.status_code < 500 and dt_ms > slo_ms:  # a slow SUCCESS is the latency signal
+                        slow += 1
+                except Exception:  # noqa: BLE001 — a timeout / connection failure is a degraded request
+                    total += 1
+                    slow += 1
+            out.append({"slow": slow, "total": total})
+    return out
+
+
 def synthetic_probe(service: str, path: str | None = None) -> dict:
     path = path or config.PROBE_PATH
     try:
