@@ -13,7 +13,7 @@ import logging
 import time
 
 from . import (adk_brain, analyzer, autonomy, config, events, gemini, incidents, memory,
-               pending, state_store, tools)
+               pending, signals, state_store, tools)
 
 log = logging.getLogger("airbag.sm")
 
@@ -69,14 +69,13 @@ def _heal_body(incident_id: str, service: str) -> dict:
     emit("TRIAGED", "collected revisions + error rate",
          error_rate=err.get("error_rate"), revisions=revs.get("revisions"))
 
-    # --- STATISTICAL SIGNAL: Wilson-CI verdict on a fresh business-path sample (gates ROLLBACK) --
-    # baseline is the per-service LEARNED rate (memory), not a hardcoded global (Theme-1 follow-up).
+    # --- STATISTICAL SIGNAL: multi-signal verdict gating ROLLBACK (v3 Phase 1). In the default
+    # config (AIRBAG_SIGNALS=5xx) this is the v2 Wilson-CI 5xx verdict verbatim; enabling more signals
+    # fuses latency/etc into the SAME FAIL/PASS/INCONCLUSIVE contract _validate consumes. baseline is
+    # the per-service LEARNED 5xx rate (memory). STAT_GATE_ENABLED is the master switch (v2, unchanged).
     stat = None
     if config.STAT_GATE_ENABLED:
-        s = tools.sample_business_path(service, config.GCP_REGION, config.STAT_SAMPLE_N)
-        baseline = memory.baseline_for(service)
-        stat = analyzer.analyze(s["errs"], s["total"], baseline,
-                                z=config.STAT_Z, min_fail_errors=config.STAT_MIN_FAIL_ERRORS)
+        stat = signals.detect(service, config.GCP_REGION, memory.baseline_for(service))
         emit("ANALYZED", f"statistical verdict {stat['verdict']} — {stat['reason']}", **stat)
         # (the healthy baseline is folded exactly once, in the OBSERVE/DONE branch below, to avoid
         # double-counting the same heal's sample)

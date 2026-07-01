@@ -65,6 +65,19 @@ def test_per_case_matches_committed_baseline():
             "`python tests/bench/run_bench.py --write` and review the diff.")
 
 
+def test_default_signals_reproduce_committed_baseline():
+    """Phase 1: the default AIRBAG_SIGNALS=5xx path must reproduce the committed scorecard exactly —
+    the multi-signal engine is a no-op refactor until more detectors are enabled."""
+    committed = json.loads(_BASELINE.read_text(encoding="utf-8"))
+    card = score(run_bench(signals="5xx"))
+    got = card.to_dict()
+    for metric in ("rollback_precision", "rollback_recall", "false_rollback_rate",
+                   "false_escalation_rate", "accuracy"):
+        assert got[metric] == committed[metric], f"{metric} drifted vs committed baseline"
+    assert {c["name"]: c["decided"] for c in got["per_case"]} == \
+        {c["name"]: c["decided"] for c in committed["per_case"]}
+
+
 def test_false_rates_do_not_regress_vs_baseline():
     committed = json.loads(_BASELINE.read_text(encoding="utf-8"))
     card = score(_results())

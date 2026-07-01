@@ -113,6 +113,14 @@ STAT_BASELINE_RATE = float(os.getenv("AIRBAG_STAT_BASELINE_RATE", "0.02"))  # TO
 STAT_Z = float(os.getenv("AIRBAG_STAT_Z", "1.96"))                          # 95% CI
 STAT_MIN_FAIL_ERRORS = int(os.getenv("AIRBAG_STAT_MIN_FAIL_ERRORS", "3"))
 
+# Multi-signal detection engine (v3 Phase 1). When the statistical gate is on (STAT_GATE_ENABLED),
+# AIRBAG_SIGNALS selects the enabled detectors; default "5xx" = today's single-signal behavior (so the
+# default path is unchanged). "all" enables every shipped detector. See signals/. STAT_GATE_ENABLED is
+# the master switch — false = no stat gate at all (unchanged from v2).
+SIGNALS = os.getenv("AIRBAG_SIGNALS", "5xx")
+SIGNAL_WINDOWS = int(os.getenv("AIRBAG_SIGNAL_WINDOWS", "4"))               # recent windows read per detection
+SIGNAL_DEBOUNCE_WINDOWS = int(os.getenv("AIRBAG_SIGNAL_DEBOUNCE_WINDOWS", "3"))  # a noisy signal must persist N windows
+
 # Cross-incident memory + learned per-service baseline (v2). See memory.py.
 BASELINE_ALPHA = float(os.getenv("AIRBAG_BASELINE_ALPHA", "0.2"))          # EMA weight for new healthy samples
 STAT_BASELINE_FLOOR = float(os.getenv("AIRBAG_STAT_BASELINE_FLOOR", "0.01"))  # learned baseline never below this

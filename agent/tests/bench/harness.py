@@ -109,6 +109,8 @@ _PINNED = {
     "QUEUE_BACKEND": "inproc",
     "AUTONOMY_LEVEL": "L3",      # full autonomy: a ROLLBACK decision flows straight to mitigation
     "STAT_GATE_ENABLED": True,   # the v2 Wilson gate is part of the seam under test
+    "SIGNALS": "5xx",            # PINNED so the baseline is deterministic + env-independent; run_bench
+                                 # overrides it to exercise the multi-signal path explicitly.
     "VERIFY_ATTEMPTS": 2,        # keep the verify loop short
     "VERIFY_INTERVAL_S": 0.0,    # no wall-clock sleeps
     "CI_SELF_CORRECT": False,    # no background CI-watch thread
@@ -127,15 +129,18 @@ def _decided_action(events: list[dict]) -> str:
     return "OBSERVE"   # no DECISION emitted (shouldn't happen) -> treat as a no-op
 
 
-def run_case(case) -> CaseResult:
+def run_case(case, signals: str | None = None) -> CaseResult:
     """Replay one fixture through the real run_self_heal. Self-contained: snapshots + restores the
-    pinned config and the patched backend resolver, so it's safe under pytest and the CLI alike."""
+    pinned config and the patched backend resolver, so it's safe under pytest and the CLI alike.
+    `signals` overrides AIRBAG_SIGNALS (default the pinned '5xx') to exercise the multi-signal path."""
     saved_cfg = {k: getattr(config, k) for k in _PINNED}
     saved_get_backend = tools.get_backend
     fb = FixtureBackend(case.world)
     try:
         for k, v in _PINNED.items():
             setattr(config, k, v)
+        if signals is not None:
+            config.SIGNALS = signals
         tools.get_backend = lambda: fb            # tools binds the NAME at import -> patch on tools
         state_store.reset_memory()                # isolate durable state per case
         # sanity: per-case isolation is load-bearing (memory.observe_healthy folds samples keyed on
@@ -156,7 +161,7 @@ def run_case(case) -> CaseResult:
         cleared=bool(case.world.get("rollback_clears", True)))
 
 
-def run_bench(cases=None) -> list[CaseResult]:
+def run_bench(cases=None, signals: str | None = None) -> list[CaseResult]:
     from bench.fixtures import CASES
     cases = CASES if cases is None else cases
-    return [run_case(c) for c in cases]
+    return [run_case(c, signals=signals) for c in cases]

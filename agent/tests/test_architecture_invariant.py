@@ -54,8 +54,14 @@ def _offending_in_source(src: str) -> list[str]:
 
 
 def _action_files() -> list[pathlib.Path]:
-    """The prod-mutating layer: every backend (which shifts real Cloud Run traffic) + the tools façade."""
-    return sorted((_AUTOSRE / "backends").glob("*.py")) + [_AUTOSRE / "tools.py"]
+    """The layers that must never import the LLM:
+      - the prod-mutating action layer: every backend (shifts real Cloud Run traffic) + the tools façade;
+      - the DETERMINISTIC detection tier (signals/): its verdict can promote a rollback in _validate, so
+        it must stay statistical, not a Gemini call, or a hallucinated verdict could drive prod.
+    (adk_brain.py / gemini.py / agent.py are the LLM-advisory tier — they ARE allowed to import it.)"""
+    return (sorted((_AUTOSRE / "backends").glob("*.py"))
+            + sorted((_AUTOSRE / "signals").glob("*.py"))
+            + [_AUTOSRE / "tools.py"])
 
 
 def test_action_layer_never_imports_the_llm():
