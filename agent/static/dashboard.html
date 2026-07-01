@@ -43,6 +43,7 @@
   .s-ANALYZED .stg{color:var(--cyan)}
   .s-ADK .stg{color:var(--violet)}
   .s-DECISION .stg{color:var(--violet)}
+  .s-CAUSAL .stg{color:var(--violet)}
   .s-ROLLBACK_APPLIED .stg{color:var(--cyan)}
   .s-VERIFYING .stg{color:var(--amber)}
   .s-MITIGATED .stg{color:var(--green)}
@@ -129,6 +130,7 @@
       <div class="badge pending" id="gate">PENDING</div>
       <span class="badge" id="txn" style="display:none"></span>
     </div>
+    <div id="recovery" style="font-size:12.5px;margin-top:6px;min-height:16px"></div>
     <svg viewBox="0 0 300 120" preserveAspectRatio="none">
       <line class="axis" x1="0" y1="119" x2="300" y2="119"/>
       <line class="zline" x1="0" y1="115" x2="300" y2="115"/>
@@ -149,6 +151,7 @@ const $ = s => document.querySelector(s);
 const tl = $('#timeline');
 let series = [];                  // error-rate points
 let badRev=null, goodRev=null;   // chosen by the DECISION (gcp revision names are opaque)
+let runStartTs=null;             // heal start ts -> Alert→Verified-Recovery time headline
 let currentIncident=null;        // for the downloadable incident-report Artifact
 const TERMINAL=new Set(['MITIGATED','CLOSED','ROLLBACK_UNDONE','MANUAL_INTERVENTION','ESCALATED']);
 
@@ -202,7 +205,7 @@ function loadIntel(){
 
 function addEvent(ev){
   const stage = ev.stage || '';
-  if(stage==='RUN_START'){ tl.innerHTML=''; series=[]; badRev=goodRev=null; drawCurve(); $('#gate').className='badge pending'; $('#gate').textContent='PENDING'; $('#rate').textContent='—'; $('#decision').innerHTML='<span class="muted">analyzing…</span>'; $('#report').innerHTML=''; $('#txn').style.display='none'; }
+  if(stage==='RUN_START'){ tl.innerHTML=''; series=[]; badRev=goodRev=null; drawCurve(); $('#gate').className='badge pending'; $('#gate').textContent='PENDING'; $('#rate').textContent='—'; $('#decision').innerHTML='<span class="muted">analyzing…</span>'; $('#report').innerHTML=''; $('#txn').style.display='none'; runStartTs = ev.ts||null; $('#recovery').textContent=''; }
   if(ev.incident_id) currentIncident=ev.incident_id;
   if(TERMINAL.has(stage)) showReport();
   if(stage==='PENDING_REVERT') setTxn('⏳ ROLLBACK HELD','pending');
@@ -227,8 +230,19 @@ function addEvent(ev){
   if(stage==='DECISION'){ badRev=ev.bad_revision||badRev; goodRev=ev.rollback_revision||goodRev; renderDecision(ev); }
   if(stage==='ROLLBACK_APPLIED'){ shiftTraffic(); }
   if(stage==='VERIFYING'){ pushRate(ev.error_rate); }
-  if(stage==='MITIGATED'){ pushRate(0); verified(ev); }
+  if(stage==='MITIGATED'){ pushRate(0); verified(ev); showRecovery(ev); }
   if(stage==='FAULT_INJECTED'){ pushRate(1.0); }
+  if(stage==='ANALYZED' && ev.signals && typeof ev.signals==='object'){
+    const parts = Object.entries(ev.signals).map(([k,v])=>`${esc(k)}:${esc((v&&v.verdict)||'?')}`).join(' · ');
+    if(parts){ const sub=document.createElement('div'); sub.className='msg';
+      sub.style.cssText='margin:2px 0 0 8px;font-size:11px;color:var(--muted)';
+      sub.innerHTML='signals → '+parts; row.appendChild(sub); }
+  }
+}
+function showRecovery(ev){
+  if(!runStartTs || !ev.ts) return;
+  const s = Math.max(0, Math.round(ev.ts - runStartTs));
+  const el=$('#recovery'); if(el){ el.innerHTML='⚡ alert → verified recovery: <b style="color:var(--green)">'+s+'s</b>'; }
 }
 
 function setBackend(b){ if(!b) return; $('#backend').textContent=b; setDot('#d-backend',true); }

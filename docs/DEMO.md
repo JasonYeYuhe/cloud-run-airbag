@@ -10,7 +10,7 @@ Repeatable: Break → Heal → Reset, as many times as you like.
 2. **Break (5s).** Click **💣 Break** → 100% of traffic shifts to the bad revision (`FAULT_MODE=bug`); `/api/orders` raises a `KeyError` → HTTP 500. Error-rate curve spikes to 100%, gate shows `PENDING`.
 3. **Autonomous heal (40s).** Click **🚑 Heal** (or use **▶ Run demo** to do both). Watch the thought-chain stream:
    `RECEIVED → TRIAGED → ADK(triage→decide) → DECISION(ROLLBACK, conf ~0.9) → ROLLBACK_APPLIED → VERIFYING… → MITIGATED → FIX_PR`.
-   The revision traffic bar flips healthy→100%, the error-rate curve drops to 0, the gate turns green **✓ VERIFIED RESOLVED**. No human touched it.
+   The revision traffic bar flips healthy→100%, the error-rate curve drops to 0, the gate turns green **✓ VERIFIED RESOLVED**, and the **⚡ alert → verified-recovery time** headline shows how many seconds the whole autonomous loop took. No human touched it. (With the v3 multi-signal/causal paths enabled, the ANALYZED row shows the per-detector breakdown and a **CAUSAL** row shows the rollback-target pre-check.)
 4. **The point (15s).** "Traffic is back on the healthy revision, and we *proved* the 5xx rate hit zero — not 'metrics didn't get worse'. The decision ran through the **ADK SequentialAgent** (Gemini calling Cloud Run tools itself); the deterministic state machine executed it. Then Gemini opened a **fix PR for that same `KeyError`** — rolled back *and* root-cause fixed."
 5. **Close the loop (optional, ~30s).** After the fix PR merges and a fixed revision deploys,
    click **✅ Verify & Undo** (or let the fix-PR's CI call `/internal/complete-rollback`). The
