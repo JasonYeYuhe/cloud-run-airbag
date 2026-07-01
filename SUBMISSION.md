@@ -122,8 +122,40 @@ never freely touches prod. Judges see a governed control loop, not a chatbot wit
 > deterministic transaction (`state_machine`)**; every durability/governance feature above is a thin
 > policy on top. That's design discipline, not feature-stacking.
 
+**v3 — causal certainty across more than one signal (real, on live Cloud Run rev 00029):**
+The v2 moat ("catch a bad deploy out-of-window and act reversibly") was single-signal (5xx) and
+un-measured. v3 makes Airbag *causally certain before it acts, across more than one signal* — and
+builds a measuring stick to prove it. All new intelligence is **deterministic + LLM-free** (guarded
+by an AST architecture-invariant test); the FSM still acts, the LLM only advises.
+- **Airbag-Bench** ([`docs/AIRBAG_BENCH.md`](docs/AIRBAG_BENCH.md)) — a labeled incident-replay harness
+  that scores rollback precision/recall, false-rollback rate, and Alert-to-Verified-Recovery over a
+  17-case corpus; committed scorecards + a golden-ratchet CI gate make it a real TDD loop.
+- **Multi-signal detection** (`signals/`) — a latency-regression detector (Wilson-gated slow-request
+  proportion, N-window debounce) fused into the same FAIL/PASS/INCONCLUSIVE verdict the gate consumes,
+  + a deterministic **promotion** so a confident statistical FAIL drives a rollback even when the LLM
+  hedged. Bench: rollback **recall 50%→75%** (catches the out-of-window latency regression 5xx misses),
+  false-rollback rate flat. Behind `AIRBAG_SIGNALS` (default 5xx → demo unchanged).
+- **Causal pre-check** (`causal.py`) — before spending the one reversible action, **probe the rollback
+  target's health**: if the last-good revision is *also* degraded, the cause is external
+  (dependency/quota), not this revision → ESCALATE without a futile rollback. Only a *confident*-unhealthy
+  target blocks; a transient/flaky/errored probe proceeds (never blocks a legit rollback). Bench (the
+  causal step, on the 5xx+latency config): **precision 75%→100%, false-rollback rate 2/17→0, recall
+  held** — zero legitimate rollbacks blocked. (Cumulative 5xx-floor → full v3: precision 67%→100%.)
+- **Legibility & audit** — the incident report + glassbox dashboard surface the multi-signal per-detector
+  verdict, the causal pre-check, and the headline **⚡ Alert→Verified-Recovery time**; every incident has
+  a tamper-evident **proof bundle** (`/incidents/{id}/proof`, sha256 content digest).
+- **Sandbox hardening** — the LLM-authored regression test now runs in an **egress-disabled Cloud Run
+  Job** under a zero-permission SA (`AIRBAG_SANDBOX=cloudrun_job`), live-verified (network egress
+  empirically blocked) — no untrusted code executes in the prod agent's privileged container.
+- **Honest scope (first-principles):** a graded-confidence *verifier* (a second Gemini gating pass) was
+  **cut** after review showed it was redundant with the deterministic gates for safety and its ratchet
+  would force a human on a confident real outage; saturation + SLO-burn detectors are **deferred**
+  (false-positive-prone / not yet provable). Multi-signal + causal are opt-in (off in the demo).
+
 **Roadmap (P2, honestly not done):**
 - ChatOps (Slack approvals on top of the autonomy gate); Cloud Assist composition.
+- Enable multi-signal + causal in the live demo (a latency-fault scenario); saturation/burn-rate
+  detectors; a WIF/KMS-signed (not just digest) proof bundle; MCP action tools for A2A.
 
 ## 6. The demo
 - **Live:** open the agent URL (operator link pre-fills the demo token), click **Break → Heal →
