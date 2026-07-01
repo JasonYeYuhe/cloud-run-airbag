@@ -3,7 +3,7 @@ that decides whether the agent touches prod. Pure where possible; live paths exe
 import pytest
 from pydantic import ValidationError
 
-from autosre import incidents, state_machine
+from autosre import config, incidents, state_machine
 from autosre.backends import mock
 from autosre.schemas import IncidentDecision
 from autosre.state_machine import _heuristic, _validate, run_self_heal
@@ -50,6 +50,33 @@ def test_validate_escalates_unknown_rollback_target():
 def test_validate_passes_known_confident_rollback():
     d = {"action": "ROLLBACK", "rollback_revision": "svc-00001-good", "confidence": 0.99}
     assert _validate(d, _revs())["action"] == "ROLLBACK"
+
+
+def test_validate_promotes_observe_to_rollback_on_stat_fail():
+    """Phase 1.1b: a DETERMINISTIC FAIL verdict promotes an OBSERVE decision to a rollback (the
+    multi-signal win) — the FSM acts on the statistical signal even when the LLM/heuristic hedged."""
+    out = _validate({"action": "OBSERVE", "confidence": 0.4}, _revs(),
+                    {"verdict": "FAIL", "reason": "latency p99 5x baseline"})
+    assert out["action"] == "ROLLBACK"
+    assert out["bad_revision"] == "svc-00002-bad" and out["rollback_revision"] == "svc-00001-good"
+    assert out.get("_promoted") is True
+    assert out["confidence"] >= config.CONFIDENCE_THRESHOLD
+
+
+def test_validate_promotion_escalates_when_no_target():
+    """FAIL but nowhere safe to go -> ESCALATE (was a silent OBSERVE miss)."""
+    revs = {"revisions": [{"name": "svc-00002-bad", "traffic_percent": 100, "ready": True},
+                          {"name": "svc-00001-old", "traffic_percent": 0, "ready": False}]}
+    out = _validate({"action": "OBSERVE", "confidence": 0.4}, revs, {"verdict": "FAIL", "reason": "x"})
+    assert out["action"] == "ESCALATE"
+
+
+def test_validate_does_not_promote_on_inconclusive():
+    """INCONCLUSIVE never promotes an OBSERVE — a healthy service (INCONCLUSIVE 5xx) stays a quiet
+    OBSERVE, no alert fatigue."""
+    out = _validate({"action": "OBSERVE", "confidence": 0.4}, _revs(),
+                    {"verdict": "INCONCLUSIVE", "reason": "x"})
+    assert out["action"] == "OBSERVE"
 
 
 def _rollback():

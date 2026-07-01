@@ -27,9 +27,9 @@
     "value": 0.0909
   },
   "accuracy": {
-    "num": 5,
+    "num": 6,
     "den": 11,
-    "value": 0.4545
+    "value": 0.5455
   },
   "mean_stages_to_mitigate": 10.0,
   "confusion": {
@@ -45,8 +45,8 @@
     },
     "ESCALATE": {
       "ROLLBACK": 1,
-      "OBSERVE": 1,
-      "ESCALATE": 0
+      "OBSERVE": 0,
+      "ESCALATE": 1
     }
   },
   "per_case": [
@@ -134,8 +134,8 @@
       "name": "no_healthy_target",
       "category": "stuck",
       "expected": "ESCALATE",
-      "decided": "OBSERVE",
-      "status": "noop",
+      "decided": "ESCALATE",
+      "status": "escalated",
       "stages": 6
     }
   ]

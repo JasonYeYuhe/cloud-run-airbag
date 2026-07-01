@@ -45,18 +45,24 @@ and is excluded from any gate):
    (`coincident_dependency_outage`, `low_traffic_blip`, `no_healthy_target`) are explicit **judgment
    calls** whose label rationale is in `agent/tests/bench/fixtures.py` and below.
 
-## Baseline scorecard — v2 deterministic floor (LLM off)
+## Baseline scorecard — 5xx-signal deterministic floor (LLM off)
 
-_11 labeled cases. Regenerate with `make bench` / `python tests/bench/run_bench.py --write`._
+_11 labeled cases. Regenerate with `make bench` / `python tests/bench/run_bench.py --write`. As of v3
+Phase 1.1b the deterministic gate gained a **promotion** rule — a confident (FAIL) statistical verdict
+can now drive a rollback even when the LLM/heuristic hedged. In 5xx-only mode this changed exactly one
+case: `no_healthy_target` now correctly **ESCALATEs** (a confirmed outage with no rollback target)
+instead of silently observing → accuracy 45.5%→54.5%. Recall/precision (the multi-signal + causal
+targets) are unchanged in 5xx-only mode; the multi-signal recall lift is measured separately (§ How
+Phase 1 uses this)._
 
 | Metric | Value | Reading |
 |---|---|---|
 | Rollback precision | **66.7% (2/3)** | 1 of 3 rollbacks is misfired — the coincident dependency outage |
-| Rollback recall | **40.0% (2/5)** | misses every non-5xx regression (latency / saturation / SLO-burn) |
+| Rollback recall | **40.0% (2/5)** | 5xx-only misses every non-5xx regression (latency / saturation / SLO-burn) |
 | False-rollback rate | 9.1% (1/11) | the dependency outage |
 | False-escalation rate | 25.0% (1/4) | the 1-in-4 blip |
 | Wasted-rollback rate | 9.1% (1/11) | the dependency rollback that didn't clear |
-| Accuracy | 45.5% (5/11) | — |
+| Accuracy | 54.5% (6/11) | promotion fixed `no_healthy_target` |
 | Mean stages-to-mitigate | 10.0 | — |
 
 Confusion matrix (rows = ground truth, cols = decided):
@@ -65,20 +71,24 @@ Confusion matrix (rows = ground truth, cols = decided):
 |---|---|---|---|
 | ROLLBACK | 2 | 3 | 0 |
 | OBSERVE | 0 | 3 | 1 |
-| ESCALATE | 1 | 1 | 0 |
+| ESCALATE | 1 | 0 | 1 |
 
 ## Pre-registered gaps → the v3 phase that closes each
 
-| # | case(s) | v2 floor does | should do | gap | closed by |
+| # | case(s) | 5xx floor does | should do | gap | closed by |
 |---|---|---|---|---|---|
-| 1 | `latency_regression`, `saturation_cpu`, `slo_slow_burn` | OBSERVE | ROLLBACK | **recall** — 5xx-only signal coverage | **Phase 1** multi-signal detection (latency p99 + saturation + multi-window burn-rate) |
+| 1 | `latency_regression` | OBSERVE | ROLLBACK | **recall** — 5xx-only signal coverage | **Phase 1.2** latency detector (multi-signal) |
+| — | `saturation_cpu`, `slo_slow_burn` | OBSERVE | ROLLBACK | **recall** (deferred detectors) | saturation + burn-rate deferred (a follow-up — see below) |
 | 2 | `coincident_dependency_outage` | ROLLBACK (wasted) | ESCALATE | **precision** — no causal grounding | **Phase 2** deploy-ledger causal pre-check |
 | 3 | `low_traffic_blip` | ESCALATE | OBSERVE | **false-escalation** — thin-evidence paging | **Phase 3** verifier / better evidence (judgment call: paging policy) |
-| 4 | `no_healthy_target` | OBSERVE | ESCALATE | **mishandle** — silent observe when it can't act | Phase 2/3 (judgment call) |
+| ✅ | `no_healthy_target` | ~~OBSERVE~~ → **ESCALATE** | ESCALATE | ~~mishandle~~ **CLOSED** | **Phase 1.1b** deterministic promotion |
 
 The recall gap is **a signal-coverage gap, not a gate bug**: with 5xx ≈ 0 the business-path sample is
-`0/20`, so the Wilson verdict is INCONCLUSIVE and the heuristic sees nothing — neither detector can
-fire. Multi-signal fusion (Phase 1) gives the gate something to act on.
+`0/20`, so the Wilson verdict is INCONCLUSIVE and nothing fires. **Phase 1.2** adds a latency detector
+(the clean, CI-backed, out-of-window signal); **saturation and SLO-burn are deferred to a follow-up** —
+saturation has no confidence bound (a healthy CPU-pegged service would false-rollback) and burn-rate
+can't be told from steady-state noise without the learned baseline, so shipping them now would be
+gold-plating that risks a false rollback (see `docs/V3_VISION.md §6`).
 
 ## How Phases 1–2 use this (the TDD loop)
 

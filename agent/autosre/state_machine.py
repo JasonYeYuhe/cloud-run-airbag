@@ -12,7 +12,7 @@ from __future__ import annotations
 import logging
 import time
 
-from . import (adk_brain, analyzer, autonomy, config, events, gemini, incidents, memory,
+from . import (adk_brain, autonomy, config, events, gemini, incidents, memory,
                pending, signals, state_store, tools)
 
 log = logging.getLogger("airbag.sm")
@@ -106,8 +106,12 @@ def _heal_body(incident_id: str, service: str) -> dict:
                                            "decision": _decision_summary, "events": run_events})
             return {"status": "escalated", "incident_id": incident_id, "events": run_events}
         emit("DONE", "no rollback needed")
-        # OBSERVE = the service is healthy at real traffic -> a genuine steady-state baseline sample
-        memory.observe_healthy(service, stat["rate"] if stat else (before.get("error_rate") or 0.0))
+        # OBSERVE = the service is healthy at real traffic -> a genuine steady-state baseline sample.
+        # observe_healthy is a 5xx statistic: fold the 5xx rate (stat carries it only when the 5xx
+        # detector ran); if 5xx isn't in the signal mix, don't fabricate a 0.0 into the 5xx EMA.
+        _rate = stat.get("rate") if stat else (before.get("error_rate") or 0.0)
+        if _rate is not None:
+            memory.observe_healthy(service, _rate)
         incidents.record(incident_id, {"service": service, "status": "noop",
                                        "decision": _decision_summary, "events": run_events})
         return {"status": "noop", "incident_id": incident_id, "events": run_events}
@@ -275,13 +279,14 @@ def apply_approval(incident_id: str, approve: bool) -> dict:
             incidents.record(incident_id, {"service": service, "status": "escalated", "events": run_events})
             return {"status": "escalated", "incident_id": incident_id, "events": run_events}
         if config.STAT_GATE_ENABLED:  # don't roll back a service that already self-recovered
-            s = tools.sample_business_path(service, config.GCP_REGION, config.STAT_SAMPLE_N)
-            v = analyzer.analyze(s["errs"], s["total"], memory.baseline_for(service),
-                                 z=config.STAT_Z, min_fail_errors=config.STAT_MIN_FAIL_ERRORS)
+            # re-check through the SAME multi-signal engine as triage (not 5xx-only) so a latency/
+            # etc. rollback isn't abandoned on a 5xx-blind PASS. PASS = all enabled detectors healthy.
+            v = signals.detect(service, config.GCP_REGION, memory.baseline_for(service))
             emit("ANALYZED", f"re-check at approval: {v['verdict']} — {v['reason']}", **v)
             if v["verdict"] == "PASS":
                 emit("DONE", "service already healthy at approval time — rollback no longer needed")
-                memory.observe_healthy(service, v["rate"])
+                if "rate" in v:  # observe_healthy is a 5xx statistic — only fold when 5xx ran
+                    memory.observe_healthy(service, v["rate"])
                 incidents.record(incident_id, {"service": service, "status": "noop", "events": run_events})
                 return {"status": "noop", "incident_id": incident_id, "events": run_events}
         return _mitigate(service, incident_id, decision, decision, before, target,
@@ -432,11 +437,42 @@ def _heuristic(revs: dict, err: dict) -> dict:
             "reasoning": "no clear bad-revision/healthy-revision pair", "_source": "heuristic"}
 
 
+def _rollback_pair(revs: dict) -> tuple[str | None, str | None]:
+    """Deterministically pick (serving revision, a known-good rollback target) from the revision
+    list — the serving = highest-traffic revision; the target = a ready 0-traffic revision that
+    isn't the serving one. Mirrors _heuristic's selection; used by _validate's promotion."""
+    rs = (revs or {}).get("revisions", [])
+    serving = max(rs, key=lambda r: r.get("traffic_percent", 0), default=None)
+    serving_name = serving["name"] if serving else None
+    target = next((r for r in rs if r.get("traffic_percent", 0) == 0 and r.get("ready")
+                   and r["name"] != serving_name), None)
+    return serving_name, (target["name"] if target else None)
+
+
 def _validate(decision: dict, revs: dict, stat: dict | None = None) -> dict:
-    """Safety gate: only roll back to a known-good revision above the confidence threshold AND
-    when the statistical analyzer confidently confirms the degradation. The gate is a CONSTRAINT
-    on ROLLBACK — it never forces action (so an INCONCLUSIVE signal with a Gemini OBSERVE stays a
-    quiet OBSERVE, not an alarm)."""
+    """Safety gate + deterministic promotion. The statistical verdict is a DETERMINISTIC signal (the
+    detectors, not the LLM), so it can BOTH constrain a ROLLBACK the LLM proposed AND promote a
+    rollback the LLM/heuristic missed — without the LLM ever touching prod (FSM acts, LLM advises).
+      * ROLLBACK proposed: PASS -> withhold (OBSERVE); INCONCLUSIVE -> ESCALATE; FAIL -> confidence/
+        known-good-target gate.
+      * non-ROLLBACK proposed + stat FAIL: PROMOTE to a deterministic rollback if a known-good target
+        exists, else ESCALATE (degraded but nowhere safe to go). Only on FAIL, never INCONCLUSIVE, so
+        a healthy service (INCONCLUSIVE 5xx + OBSERVE) stays a quiet OBSERVE — no alert fatigue."""
+    # PROMOTION: a confident (FAIL) statistical verdict drives a rollback even if the LLM hedged.
+    if (stat is not None and stat.get("verdict") == "FAIL"
+            and decision.get("action") != "ROLLBACK"):
+        serving, target = _rollback_pair(revs)
+        if target:
+            return {**decision, "action": "ROLLBACK", "bad_revision": serving,
+                    "rollback_revision": target,
+                    "confidence": max(decision.get("confidence", 0.0), config.CONFIDENCE_THRESHOLD),
+                    "reasoning": f"statistical gate FAIL — {stat.get('reason')}; promoted a rollback "
+                                 f"(deterministic multi-signal verdict, not the LLM). "
+                                 f"{decision.get('reasoning', '')}",
+                    "_promoted": True}
+        return {**decision, "action": "ESCALATE",
+                "reasoning": f"statistical gate FAIL — {stat.get('reason')} — but no known-good "
+                             f"rollback target; needs a human. {decision.get('reasoning', '')}"}
     if decision.get("action") != "ROLLBACK":
         return decision
     # Statistical gate FIRST (per review): a statistically-healthy service must OBSERVE even if the
