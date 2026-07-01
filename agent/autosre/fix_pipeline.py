@@ -14,12 +14,9 @@ fix (github_pr._gemini_fix), so the heal never blocks on the pipeline.
 from __future__ import annotations
 
 import logging
-import subprocess
-import sys
-import tempfile
 from pathlib import Path
 
-from . import config, gemini, tools
+from . import config, gemini, sandbox, tools
 from .schemas import FixResult, RootCause
 
 log = logging.getLogger("airbag.fix")
@@ -54,7 +51,7 @@ def build_fix(service: str, error_context: str, get_file) -> dict | None:
                 if attempt == 0:
                     return None
                 break
-            v = _sandbox_verify(path, source, fix.fixed_content, fix.test_path, fix.test_content)
+            v = sandbox.verify(path, source, fix.fixed_content, fix.test_path, fix.test_content)
             sandbox_out = v.get("output", "")
             if v.get("ok"):
                 log.info("fix_pipeline: sandbox-verified on attempt %d", attempt + 1)
@@ -144,45 +141,3 @@ def _patch_and_test(service: str, path: str, source: str, rca: RootCause,
     except Exception as e:  # noqa: BLE001
         log.warning("patch+test failed: %s", e)
         return None
-
-
-def _sandbox_verify(path: str, original: str, fixed: str, test_path: str, test_content: str) -> dict:
-    """Run the agent-authored test against the ORIGINAL (expect fail) and the FIXED (expect pass)
-    file in an isolated temp dir. A real product would use gVisor/a Cloud Run Job; this bounded
-    subprocess is enough to self-prove the demo fix before the PR."""
-    if not test_content.strip():
-        return {"ok": False, "why": "no test produced", "output": ""}
-    stem = Path(path).stem
-    try:
-        with tempfile.TemporaryDirectory() as d:
-            tdir = Path(d)
-            (tdir / f"{stem}.py").write_text(fixed)
-            tf = tdir / Path(test_path).name
-            tf.write_text(test_content)
-            fixed_run = _run_pytest(tdir, tf)
-            (tdir / f"{stem}.py").write_text(original)  # now prove the test CATCHES the bug
-            orig_run = _run_pytest(tdir, tf)
-        catches_bug = orig_run["rc"] != 0
-        fix_passes = fixed_run["rc"] == 0
-        ok = catches_bug and fix_passes
-        why = ("verified" if ok else
-               f"catches_bug={catches_bug} fix_passes={fix_passes}")
-        return {"ok": ok, "why": why, "catches_bug": catches_bug, "fix_passes": fix_passes,
-                "output": (fixed_run["out"] + "\n" + orig_run["out"])[-1500:]}
-    except Exception as e:  # noqa: BLE001
-        return {"ok": False, "why": f"sandbox error: {e}", "output": str(e)}
-
-
-def _run_pytest(cwd: Path, test_file: Path) -> dict:
-    try:
-        # Minimal env + neutralize the GCE metadata server: a stripped env alone does NOT stop
-        # google.auth.default() in the LLM-authored test from minting the agent's run.admin token via
-        # the metadata endpoint, so point it at an unreachable host/IP and null out file creds.
-        p = subprocess.run([sys.executable, "-m", "pytest", "-q", str(test_file.name)],
-                           cwd=str(cwd), capture_output=True, text=True, timeout=60,
-                           env={"PYTHONPATH": str(cwd), "PATH": __import__("os").environ.get("PATH", ""),
-                                "GCE_METADATA_HOST": "metadata.invalid", "GCE_METADATA_IP": "0.0.0.0",
-                                "GOOGLE_APPLICATION_CREDENTIALS": "/dev/null"})
-        return {"rc": p.returncode, "out": (p.stdout + p.stderr)[-1200:]}
-    except Exception as e:  # noqa: BLE001
-        return {"rc": -1, "out": f"pytest run error: {e}"}

@@ -136,6 +136,16 @@ MAX_CI_RETRIES = int(os.getenv("AIRBAG_MAX_CI_RETRIES", "2"))
 CI_POLL_INTERVAL_S = float(os.getenv("AIRBAG_CI_POLL_INTERVAL_S", "15"))
 CI_POLL_TIMEOUT_S = float(os.getenv("AIRBAG_CI_POLL_TIMEOUT_S", "300"))
 
+# Sandbox for the LLM-authored regression test (fix_pipeline). See sandbox.py.
+#   subprocess (default) — bounded local subprocess in the agent container, metadata server neutralized.
+#   cloudrun_job         — isolated, network-egress-disabled Cloud Run Job under a zero-permission SA
+#                          (infra/sandbox-job-setup.sh) — the production posture (no LLM code runs in
+#                          the prod agent's privileged container). Falls back to subprocess on error.
+SANDBOX_BACKEND = os.getenv("AIRBAG_SANDBOX", "subprocess")
+SANDBOX_JOB_NAME = os.getenv("AIRBAG_SANDBOX_JOB", "airbag-sandbox")
+SANDBOX_JOB_REGION = os.getenv("AIRBAG_SANDBOX_REGION", GCP_REGION)
+SANDBOX_JOB_TIMEOUT_S = float(os.getenv("AIRBAG_SANDBOX_TIMEOUT_S", "180"))
+
 # fix-PR slow path (optional). Empty token -> the FIX_PR stage is a no-op note.
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "")
 GITHUB_REPO = os.getenv("GITHUB_REPO", "")          # "owner/repo"
