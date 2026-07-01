@@ -39,6 +39,23 @@ def _esc(s) -> str:
     return html.escape(str(s)) if s is not None else ""
 
 
+def _find(events, stage):
+    return next((e for e in events if e.get("stage") == stage), None)
+
+
+def _recovery_seconds(events) -> float | None:
+    """Alert-to-Verified-Recovery time (the v3 headline metric): from the incident's first stage to
+    the proven recovery (MITIGATED) or the closed transaction (ROLLBACK_UNDONE/CLOSED)."""
+    start = next((e.get("ts") for e in events
+                  if e.get("stage") in ("FAULT_INJECTED", "RECEIVED", "RUN_START")), None)
+    end = next((e.get("ts") for e in reversed(events)
+                if e.get("stage") in ("MITIGATED", "ROLLBACK_UNDONE", "CLOSED")), None)
+    try:
+        return float(end) - float(start) if (start and end and float(end) >= float(start)) else None
+    except (TypeError, ValueError):
+        return None
+
+
 def render(rec: dict) -> str:
     iid = _esc(rec.get("incident_id"))
     status = rec.get("status", "—")
@@ -61,6 +78,41 @@ def render(rec: dict) -> str:
     evidence = d.get("evidence") or []
     evidence_html = "".join(f"<li>{_esc(x)}</li>" for x in evidence) or "<li>—</li>"
     tools = d.get("_adk_tools")
+
+    # --- v3 legibility: surface the multi-signal verdict + per-detector breakdown + causal pre-check
+    # (extracted from the already-emitted ANALYZED/CAUSAL events — works whether or not the extra
+    # signals/causal are enabled; in the default 5xx config it just shows the single Wilson verdict) ---
+    events = rec.get("events", [])
+    an, cz = _find(events, "ANALYZED"), _find(events, "CAUSAL")
+    detect_html = ""
+    if an:
+        sig = an.get("signals")
+        if isinstance(sig, dict) and sig:
+            det = "".join(
+                f'<div class="kv"><span>{_esc(k)}</span>'
+                f'<span class="mono">{_esc((v or {}).get("verdict"))} — {_esc((v or {}).get("reason"))}</span></div>'
+                for k, v in sig.items())
+        else:
+            det = '<div class="kv"><span>5xx</span><span class="mono">' \
+                  f'{_esc(an.get("rate"))} rate</span></div>'
+        detect_html = (
+            '<div class="card"><h2>Detection — multi-signal verdict</h2>'
+            f'<div class="act" style="color:#e3b341">{_esc(an.get("verdict"))}</div>'
+            f'<div style="margin:8px 0">{_esc(an.get("reason"))}</div>{det}</div>')
+    causal_html = ""
+    if cz:
+        causal_html = (
+            '<div class="card"><h2>Causal pre-check</h2>'
+            f'<div class="act" style="color:#bc8cff">{_esc(cz.get("verdict"))}</div>'
+            f'<div style="margin:8px 0">{_esc(cz.get("msg"))}</div>'
+            '<div style="color:#6b7a8d;font-size:12px">probed the rollback target before committing — '
+            'a rollback is spent only when it will actually help</div></div>')
+    v3_grid = (f'<div class="grid">{detect_html}{causal_html}</div>'
+               if (detect_html or causal_html) else "")
+    recovery_s = _recovery_seconds(events)
+    recovery_html = (f'<div class="kv"><span>alert → verified recovery</span>'
+                     f'<span class="mono" style="color:#3fb950">{recovery_s:.0f}s</span></div>'
+                     if recovery_s is not None else "")
     return f"""<!doctype html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Airbag incident {iid}</title><style>
@@ -90,6 +142,7 @@ def render(rec: dict) -> str:
    <div style="color:#6b7a8d;margin-top:8px">evidence</div><ul>{evidence_html}</ul>
   </div>
   <div class="card"><h2>Proof of recovery</h2>
+   {recovery_html}
    <div class="kv"><span>5xx error-rate before</span><span class="mono" style="color:#f85149">{_esc(eb)}</span></div>
    <div class="kv"><span>5xx error-rate after</span><span class="mono" style="color:#3fb950">{_esc(ea)}</span></div>
    <div class="kv"><span>rolled back to</span><span class="mono">{_esc(rec.get("rolled_back_to") or "—")}</span></div>
@@ -97,6 +150,7 @@ def render(rec: dict) -> str:
    <div class="kv"><span>fix PR</span><span class="mono">{pr_html}</span></div>
   </div>
  </div>
+ {v3_grid}
  <div class="card"><h2>Thought-chain timeline</h2>
   <table><tbody>{rows}</tbody></table>
  </div>
