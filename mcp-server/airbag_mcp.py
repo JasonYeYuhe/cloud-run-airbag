@@ -15,9 +15,9 @@ Add to Claude Desktop (claude_desktop_config.json):
       "env": {"AIRBAG_URL": "https://airbag-agent-...run.app", "AIRBAG_DEMO_TOKEN": "<token>"}
     }
 
-Read tools (safe, no token): airbag_health, airbag_incidents, airbag_incident, airbag_autonomy,
-airbag_memory. Action tools (need AIRBAG_DEMO_TOKEN): airbag_trigger_heal, airbag_approve,
-airbag_set_autonomy, airbag_break, airbag_reset.
+Read tools (safe, no token): airbag_health, airbag_incidents, airbag_incident,
+airbag_incident_proof, airbag_autonomy, airbag_memory. Action tools (need AIRBAG_DEMO_TOKEN):
+airbag_trigger_heal, airbag_approve, airbag_set_autonomy, airbag_break, airbag_reset.
 """
 from __future__ import annotations
 
@@ -83,6 +83,15 @@ def airbag_incident(incident_id: str) -> dict:
     """Full evidence for one incident: the ADK/Gemini decision, the signals it acted on, the
     before/after error rate, and the complete stage-by-stage thought-chain timeline."""
     return _get(f"/incidents/{quote(incident_id, safe='')}")
+
+
+@mcp.tool()
+def airbag_incident_proof(incident_id: str) -> dict:
+    """The tamper-evident PROOF BUNDLE for one incident (A2A-consumable): a canonical stitch of the
+    decision, detection signals, causal pre-check, recovery proof (incl. Alert→Verified-Recovery
+    seconds), fix PR, and the FSM transition log, plus a sha256 content DIGEST. Verify integrity by
+    recomputing sha256 over the canonical bundle and comparing — it is NOT a cryptographic signature."""
+    return _get(f"/incidents/{quote(incident_id, safe='')}/proof")
 
 
 @mcp.tool()

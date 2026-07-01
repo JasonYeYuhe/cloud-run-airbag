@@ -9,8 +9,16 @@ import airbag_mcp as m
 def test_all_tools_registered():
     names = {t.name for t in asyncio.run(m.mcp.list_tools())}
     assert names == {
-        "airbag_health", "airbag_incidents", "airbag_incident", "airbag_autonomy", "airbag_memory",
+        "airbag_health", "airbag_incidents", "airbag_incident", "airbag_incident_proof",
+        "airbag_autonomy", "airbag_memory",
         "airbag_trigger_heal", "airbag_approve", "airbag_set_autonomy", "airbag_break", "airbag_reset"}
+
+
+def test_incident_proof_is_a_read_tool():
+    with patch.object(m.httpx, "get", return_value=_Resp({"digest": "sha256:abc"})) as g:
+        assert m.airbag_incident_proof("inc-1") == {"digest": "sha256:abc"}
+        assert g.call_args[0][0].endswith("/incidents/inc-1/proof")
+        assert "headers" not in g.call_args.kwargs   # read tool — no token
 
 
 class _Resp:

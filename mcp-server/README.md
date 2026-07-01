@@ -13,6 +13,7 @@ Cloud Run agent or a local `./run-local.sh` instance — nothing about the deplo
 | `airbag_health` | — | backend + Gemini status |
 | `airbag_incidents(limit)` | — | recent self-heal runs + outcomes |
 | `airbag_incident(incident_id)` | — | full decision + signals + thought-chain timeline |
+| `airbag_incident_proof(incident_id)` | — | tamper-evident proof bundle (sha256 digest) for A2A/audit |
 | `airbag_autonomy` | — | autonomy level (L0–L3), trust streak, pending approvals |
 | `airbag_memory` | — | learned per-service baseline + incident memory |
 | `airbag_trigger_heal` | token | run a self-heal now → returns `incident_id` |
