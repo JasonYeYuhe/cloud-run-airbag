@@ -198,6 +198,79 @@ def release_heal(doc_id: str) -> None:
     transact("heal_runs", doc_id, _m)
 
 
+# --- per-service correlation lease (v5 Phase 1.1): coalesce an alert STORM into one heal ----------
+_SERVICE_HEALS = "service_heals"
+
+
+def _service_heal_live(cur: dict | None, now: float) -> bool:
+    """Is the leader in `cur` still holding the correlation lease? The lease clock (`lease_until`) is
+    the SINGLE source of truth: a fresh claim / running run sets it to now+backstop; a settle re-aims
+    it to now+hold (a generous hold while a held state's approval/pending is live, or 0 to release on
+    a settled/terminal outcome). So an expired clock ALWAYS means 'take over' — a crashed leader
+    (backstop lapsed), a settled outage, or a terminally-failed leader. Purely time-based: no coupling
+    to autonomy/pending state (the settle caller, which knows those, sets the hold)."""
+    return bool(cur) and cur.get("lease_until", 0) > now
+
+
+def claim_service_heal(service: str, incident_id: str,
+                       lease_seconds: float) -> tuple[str, str | None]:
+    """Per-SERVICE correlation lease (keyed on service, NOT the Monitoring incident id). Returns:
+      ("leader", None)              — THIS incident runs the heal: a fresh outage, a crashed- or
+                                      terminally-failed-leader takeover, OR the same incident resuming
+                                      its own run after a transient retry,
+      ("follower", leader_incident) — a live leader is already healing this service; THIS incident was
+                                      transactionally ATTACHED to it (no lost ids) and should return
+                                      before triage (emit no self-amplifying probes).
+    Mirrors pending.try_begin_complete — the codebase's proven per-service lease — with an attach path
+    added. Liveness is purely the lease clock (see _service_heal_live). Atomic per (collection, service)."""
+    now = time.time()
+
+    def _m(cur):
+        if _service_heal_live(cur, now):
+            if cur.get("leader_incident_id") == incident_id:
+                cur["lease_until"] = now + lease_seconds     # same incident resuming -> refresh backstop
+                cur["updated_at"] = now
+                return cur, ("leader", None)
+            att = list(cur.get("attached", []))
+            if incident_id not in att:
+                att.append(incident_id)                       # transactional append -> no lost ids
+            cur["attached"] = att
+            cur["updated_at"] = now
+            return cur, ("follower", cur.get("leader_incident_id"))
+        # fresh outage / crashed-leader takeover / terminally-failed-leader takeover
+        doc = {"service": service, "leader_incident_id": incident_id,
+               "lease_until": now + lease_seconds, "outcome": None, "attached": [],
+               "created_at": (cur or {}).get("created_at", now), "updated_at": now}
+        return doc, ("leader", None)
+
+    return transact(_SERVICE_HEALS, service, _m)
+
+
+def settle_service_heal(service: str, incident_id: str, outcome: str,
+                        hold_seconds: float) -> list[str]:
+    """Record the leader's settled outcome and re-aim the lease clock. `hold_seconds` > 0 keeps the
+    lease live (a HELD state — a live approval/pending that late re-fires must still coalesce onto);
+    0 releases it (a settled/terminal outcome — the next alert becomes a fresh leader). NO-OP unless
+    `incident_id` is STILL the current leader, so a stale settle from a taken-over leader can never
+    clobber the new one. Returns the attached incident ids (for terminal fan-out settlement in 1.3)."""
+    now = time.time()
+
+    def _m(cur):
+        if not cur or cur.get("leader_incident_id") != incident_id:
+            return KEEP, []
+        cur["outcome"] = outcome
+        cur["lease_until"] = now + hold_seconds
+        cur["settled_at"] = now
+        cur["updated_at"] = now
+        return cur, list(cur.get("attached", []))
+
+    return transact(_SERVICE_HEALS, service, _m)
+
+
+def get_service_heal(service: str) -> dict | None:
+    return get(_SERVICE_HEALS, service)
+
+
 def reset_memory() -> None:
     """Test helper — clear the in-memory store."""
     with _lock:

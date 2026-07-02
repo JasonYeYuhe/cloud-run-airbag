@@ -104,6 +104,100 @@ def test_transact_is_atomic_under_contention():
         assert len(committed) == _N_CONTENTION   # the lock serializes: nobody may abort
 
 
+# --- v5 Phase 1.1: per-service correlation lease (storm coalescing) --------------------------------
+def test_service_heal_exactly_one_leader():
+    """N CONCURRENT alerts (distinct incident ids, ONE service) -> exactly ONE leader; the other N-1
+    ATTACH to it (transactional append, no lost ids). The storm's N-for-1 heal fanout collapses to 1.
+    Same contract + backend-divergence handling as test_transact_is_atomic_under_contention: on the
+    real backend a same-instant WRITE stampede aborts some appenders (their alert is redelivered by
+    Cloud Tasks and attaches on the retry); on memory the lock serializes so every alert commits."""
+    n = _N_CONTENTION
+    barrier = threading.Barrier(n)
+    roles: list[tuple] = []
+    lock = threading.Lock()
+
+    def worker(i):
+        barrier.wait()
+        try:
+            role = state_store.claim_service_heal("svc", f"inc-{i}", 600)
+        except Exception:  # noqa: BLE001 — an optimistic-transaction abort is the caller's to retry
+            return
+        with lock:
+            roles.append(role)
+
+    threads = [threading.Thread(target=worker, args=(i,)) for i in range(n)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    leaders = [r for r in roles if r[0] == "leader"]
+    followers = [r for r in roles if r[0] == "follower"]
+    assert len(leaders) == 1, f"expected exactly ONE leader, got {len(leaders)}"
+    doc = state_store.get_service_heal("svc")
+    leader_id = doc["leader_incident_id"]
+    assert all(f[1] == leader_id for f in followers)              # every follower attached to THE leader
+    assert len(doc["attached"]) == len(followers)                # no lost ids among the commits
+    assert len(set(doc["attached"])) == len(doc["attached"])     # no duplicates
+    assert leader_id not in doc["attached"]                      # the leader never attaches to itself
+    if config.STATE_BACKEND == "memory":
+        assert len(roles) == n and len(followers) == n - 1       # the lock serializes: nobody aborts
+
+
+def test_service_heal_same_incident_resumes_as_leader():
+    """A transient-retry redelivery of the SAME incident resumes as leader — never a follower of itself."""
+    assert state_store.claim_service_heal("svc", "inc-1", 600)[0] == "leader"
+    assert state_store.claim_service_heal("svc", "inc-1", 600)[0] == "leader"  # resume, not attach
+    assert state_store.get_service_heal("svc")["attached"] == []
+
+
+def test_service_heal_ttl_backstop_takeover():
+    """A crashed leader (never settled) is taken over once its lease backstop lapses — no permanent
+    lock. (Window matches test_lease_recovers_after_expiry so it doesn't flake on the emulator.)"""
+    assert state_store.claim_service_heal("svc", "leader", 0.4)[0] == "leader"
+    assert state_store.claim_service_heal("svc", "other", 0.4)[0] == "follower"  # still live -> attach
+    time.sleep(0.5)
+    assert state_store.claim_service_heal("svc", "taker", 0.4)[0] == "leader"    # backstop lapsed -> takeover
+    assert state_store.get_service_heal("svc")["leader_incident_id"] == "taker"
+
+
+def test_service_heal_holds_while_awaiting_then_releases():
+    """A HELD settle keeps the lease live (re-fires coalesce); a RELEASE settle frees it (fresh leader)."""
+    assert state_store.claim_service_heal("svc", "leader", 600)[0] == "leader"
+    state_store.settle_service_heal("svc", "leader", "awaiting_approval", hold_seconds=600)
+    assert state_store.claim_service_heal("svc", "refire", 600) == ("follower", "leader")  # still held
+    state_store.settle_service_heal("svc", "leader", "mitigated", hold_seconds=0)
+    assert state_store.claim_service_heal("svc", "fresh", 600)[0] == "leader"    # released -> fresh leader
+    assert state_store.get_service_heal("svc")["leader_incident_id"] == "fresh"
+
+
+def test_service_heal_terminal_failed_takeover():
+    """STORE PRIMITIVE: a terminally-failed leader (manual_intervention, hold 0) is taken over by the
+    next alert. (The run_self_heal-level wiring — the exhausted branch actually CALLING this settle —
+    is covered by test_storm_coalesce.test_exhausted_leader_releases_lease_for_takeover.)"""
+    assert state_store.claim_service_heal("svc", "leader", 600)[0] == "leader"
+    state_store.settle_service_heal("svc", "leader", "manual_intervention", hold_seconds=0)
+    assert state_store.claim_service_heal("svc", "taker", 600)[0] == "leader"
+
+
+def test_settle_no_clobber_after_takeover():
+    """A stale settle from a taken-over leader must NOT clobber the new leader's live lease."""
+    state_store.claim_service_heal("svc", "old", 0.3)
+    time.sleep(0.4)
+    state_store.claim_service_heal("svc", "new", 600)                            # takes over
+    state_store.settle_service_heal("svc", "old", "mitigated", hold_seconds=0)   # stale -> no-op
+    doc = state_store.get_service_heal("svc")
+    assert doc["leader_incident_id"] == "new" and doc.get("outcome") is None     # 'new' untouched
+    assert state_store.claim_service_heal("svc", "f", 600) == ("follower", "new")  # 'new' still live
+
+
+def test_settle_returns_attached_ids_for_fanout():
+    """settle returns the attached ids — the fan-out set Phase 1.3 settles terminally."""
+    state_store.claim_service_heal("svc", "leader", 600)
+    state_store.claim_service_heal("svc", "f1", 600)
+    state_store.claim_service_heal("svc", "f2", 600)
+    assert set(state_store.settle_service_heal("svc", "leader", "mitigated", hold_seconds=0)) == {"f1", "f2"}
+
+
 def test_bump_attempts_increments():
     pending.set_pending("svc", {"incident_id": "i1"})
     assert pending.bump_attempts("svc") == 1

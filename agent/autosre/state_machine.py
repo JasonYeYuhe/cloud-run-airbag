@@ -23,6 +23,47 @@ def _incident_signature() -> str:
     return f"5xx:{config.PROBE_PATH}"
 
 
+# v5 Phase 1.1: which settled outcomes are ELIGIBLE to keep the per-service correlation lease live.
+# The spec (V5_VISION §3 1.1) holds the lease only while the outcome is unsettled WITH A LIVE
+# approval/pending a late re-fire can coalesce onto — NOT on the bare status. So this set is just the
+# statuses that CAN hold; _service_hold_seconds gates the real hold on a live approval/pending
+# actually existing. "escalated" is here because the verify-FAILURE escalate arms a pending (a re-fire
+# must coalesce, not re-roll-back a still-broken service); but a BARE escalate (decision-gate
+# ESCALATE, reversibility BLOCK, causal COINCIDENT, stale target) armed neither and must RELEASE — it
+# is a corpse a follower must never attach to. Everything else (mitigated/noop settled-good,
+# manual_intervention/exhausted terminal-failed) releases so the next alert becomes a FRESH leader.
+_MAYBE_HELD_STATES = frozenset({"awaiting_approval", "awaiting_fix_approval", "escalated"})
+
+
+def _service_hold_seconds(status: str, incident_id: str, service: str) -> float:
+    """How long the correlation lease stays live after a settle. Holds (the approval window) ONLY when
+    the outcome is eligible AND a live approval/pending actually exists to coalesce onto: the L1/L2
+    gates (a saved approval) or the verify-FAILURE escalate (an armed pending revert). A bare escalate
+    armed neither, so it RELEASES (hold 0). mitigated arms a pending too but is settled-GOOD (not
+    eligible) — the service is healthy, so a new alert is a NEW outage that must heal, not coalesce."""
+    if status in _MAYBE_HELD_STATES and (autonomy.get_approval(incident_id)
+                                         or pending.get_pending(service)):
+        return config.APPROVAL_TTL_S
+    return 0.0
+
+
+def _attach_to_leader(incident_id: str, service: str, leader_incident_id: str | None) -> dict:
+    """A storm FOLLOWER: a live leader is already healing this service, so this alert (a distinct
+    Monitoring incident id for the SAME outage) coalesces onto it instead of running a second heal.
+    Returns BEFORE triage — the whole point of 1.1 is that a follower emits NO diagnostic probes (the
+    self-amplification that fired the very alert being diagnosed on 2026-07-02)."""
+    state_store.finish_heal(incident_id, config.DEDUP_TTL_S)  # this follower id is terminal -> its redelivery no-ops
+    ev = events.publish({"incident_id": incident_id, "service": service, "stage": "ATTACHED",
+                         "leader_incident_id": leader_incident_id,
+                         "msg": f"coalesced onto the in-flight heal {leader_incident_id} for {service} "
+                                f"(storm follower — no second heal, no diagnostic probes)"})
+    incidents.record(incident_id, {"service": service, "status": "attached",
+                                   "leader_incident_id": leader_incident_id, "events": [ev]})
+    log.info("[ATTACHED] %s coalesced onto leader %s for %s", incident_id, leader_incident_id, service)
+    return {"status": "attached", "incident_id": incident_id,
+            "leader_incident_id": leader_incident_id, "events": [ev]}
+
+
 def run_self_heal(incident_id: str, service: str) -> dict:
     """Idempotent entry point: claim a per-incident lease BEFORE any side effect so a duplicate
     trigger (notably Cloud Tasks at-least-once redelivery) can't double-heal. Drop duplicates;
@@ -39,13 +80,33 @@ def run_self_heal(incident_id: str, service: str) -> dict:
                                        "events": [{"stage": "MANUAL_INTERVENTION", "ts": time.time(),
                                                    "msg": f"heal failed {config.MAX_HEAL_ATTEMPTS}x — giving up",
                                                    "incident_id": incident_id, "service": service}]})
+        # v5 Phase 1.1: a terminally-failed leader RELEASES the per-service lease (hold 0) so the next
+        # alert for the still-broken service becomes a FRESH leader — never attaches to a corpse (§3 1.1).
+        # No-op unless this incident is still the current leader (it is: the prior failing attempts
+        # claimed the lease as leader), so it can't clobber a lease already taken over.
+        if config.STORM_COALESCE:
+            state_store.settle_service_heal(service, incident_id, "manual_intervention", 0.0)
         return {"status": "manual_intervention", "incident_id": incident_id,
                 "reason": f"heal failed {config.MAX_HEAL_ATTEMPTS}x"}
+    # v5 Phase 1.1: per-service correlation lease — an alert STORM (N distinct incident ids for ONE
+    # broken service) coalesces onto a single leader; followers ATTACH and return before triage.
+    if config.STORM_COALESCE:
+        role, leader = state_store.claim_service_heal(service, incident_id,
+                                                      config.SERVICE_HEAL_LEASE_S)
+        if role == "follower":
+            return _attach_to_leader(incident_id, service, leader)
     try:
         result = _heal_body(incident_id, service)
     except Exception:
-        state_store.release_heal(incident_id)  # transient failure -> let a retry re-claim (attempts bumped)
+        # transient failure -> let a retry re-claim (attempts bumped). The service lease stays HELD
+        # (outcome still 'running'); the SAME incident's redelivery resumes as leader (never a
+        # follower attaching to itself), and a true crash is caught by the lease's TTL backstop.
+        state_store.release_heal(incident_id)
         raise
+    if config.STORM_COALESCE:
+        status = result.get("status", "unknown")
+        state_store.settle_service_heal(service, incident_id, status,
+                                        _service_hold_seconds(status, incident_id, service))
     state_store.finish_heal(incident_id, config.DEDUP_TTL_S)
     return result
 
@@ -328,6 +389,24 @@ def _arm_pending(service: str, incident_id: str, decision: dict, target: str,
 
 
 def apply_approval(incident_id: str, approve: bool) -> dict:
+    """Resume a gated L1/L2 decision, then (v5 Phase 1.1) settle the per-service correlation lease to
+    MATCH the human decision — release a held storm-lease on mitigated/denied, re-hold it if the
+    resumed heal re-escalates — so late re-fires coalesce or a fresh outage claims a fresh leader.
+    Flag-off (default): this is byte-identical to the pre-v5 body (no lease peek, no settle)."""
+    service = None
+    if config.STORM_COALESCE:  # peek the service (read-only) BEFORE the body atomically claims+deletes it
+        service = (autonomy.get_approval(incident_id) or {}).get("service")
+    result = _apply_approval_body(incident_id, approve)
+    if config.STORM_COALESCE and service:
+        # the approval was CLAIMED (deleted) inside the body, so a re-hold now keys on the live PENDING
+        # a resumed heal armed (verify-fail escalate) — a dead-end re-escalate has none, so it releases.
+        status = result.get("status", "unknown")
+        state_store.settle_service_heal(service, incident_id, status,
+                                        _service_hold_seconds(status, incident_id, service))
+    return result
+
+
+def _apply_approval_body(incident_id: str, approve: bool) -> dict:
     """Resume an L1 rollback or L2 fix-PR that was gated for a human decision. Durable: the approval
     was persisted in the store, so this works even after the deciding instance was recycled."""
     appr = autonomy.claim_approval(incident_id)  # atomic read+delete: a double-click resumes once
@@ -417,6 +496,14 @@ def complete_rollback(service: str, fix_revision: str | None = None,
         incidents.record(incident_id, {"service": service, "status": status,
                                        "events": run_events, **extra})
 
+    def _release_service_lease(status: str) -> None:
+        # v5 Phase 1.1: a TERMINAL completion (closed / manual_intervention) releases the per-service
+        # correlation lease so a genuinely-new outage becomes a fresh leader instead of coalescing onto
+        # this (now-resolved) incident. `compensated` is NOT terminal (pending kept, retry possible) —
+        # it leaves the lease held. No-op unless this incident is still the current leader.
+        if config.STORM_COALESCE:
+            state_store.settle_service_heal(service, incident_id, status, 0.0)
+
     closed = False
     # Cap compensation retries: after MAX failed undos, stop (traffic is already on the safe
     # revision) and require a human — don't keep re-shifting traffic on every re-trigger.
@@ -426,6 +513,7 @@ def complete_rollback(service: str, fix_revision: str | None = None,
              f"safe revision {rec.get('rolled_back_to')}; needs a human")
         pending.clear_pending(service)  # terminal: no further auto-undo
         _save("manual_intervention")
+        _release_service_lease("manual_intervention")
         return {"status": "manual_intervention", "reason": "max attempts", "terminal": True,
                 "incident_id": incident_id, "events": run_events}
     try:
@@ -438,6 +526,7 @@ def complete_rollback(service: str, fix_revision: str | None = None,
             emit("MANUAL_INTERVENTION",
                  "no healthy fix revision found after the rollback — not restoring traffic")
             _save("manual_intervention")
+            _release_service_lease("manual_intervention")
             return {"status": "manual_intervention", "reason": "no candidate fix revision",
                     "incident_id": incident_id, "events": run_events}
         emit("FIX_DEPLOYED", f"candidate fix revision: {candidate}",
@@ -475,6 +564,7 @@ def complete_rollback(service: str, fix_revision: str | None = None,
         emit("CLOSED", "incident closed: rolled back, fixed, and traffic restored to the fix")
         closed = True
         _save("closed", restored_to=candidate, fix_git_sha=git_sha)
+        _release_service_lease("closed")
         return {"status": "closed", "restored_to": candidate,
                 "incident_id": incident_id, "events": run_events}
     finally:

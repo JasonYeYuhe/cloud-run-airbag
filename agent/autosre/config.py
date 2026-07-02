@@ -76,6 +76,17 @@ STATE_BACKEND = os.getenv("AIRBAG_STATE", "memory")
 COMPLETE_LEASE_S = float(os.getenv("AIRBAG_COMPLETE_LEASE_S", "300"))  # complete-rollback lock lease
 DEDUP_TTL_S = float(os.getenv("AIRBAG_DEDUP_TTL_S", "3600"))           # webhook dedup window
 
+# Storm-safe autonomy (v5 Phase 1.1): a per-SERVICE correlation lease coalesces the N alert
+# deliveries for ONE broken service (each carries a DISTINCT Monitoring incident id, so every
+# per-incident dedup passes) into a SINGLE heal — the first alert is the leader (runs the heal), the
+# rest ATTACH their incident id and ack before any triage (no self-amplifying diagnostic probes).
+# The lease holds while the outcome is UNSETTLED (running, or held on a live approval/pending) and
+# has a generous TTL as a crash backstop only. Default OFF -> byte-identical to v4. See state_store.
+STORM_COALESCE = _bool("AIRBAG_STORM_COALESCE", "false")
+# Crash backstop for the correlation lease — must exceed the worst-case heal wall-clock (like
+# HEAL_LEASE_S) so a live leader is never taken over mid-run; a settle re-aims the clock explicitly.
+SERVICE_HEAL_LEASE_S = float(os.getenv("AIRBAG_SERVICE_HEAL_LEASE_S", "900"))
+
 # local backend: where the target-app is reachable
 TARGET_BASE_URL = os.getenv("TARGET_BASE_URL", "http://localhost:8081")
 # demo harness (gcp): after 'break' shifts traffic to the bad revision, generate this many
