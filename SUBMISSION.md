@@ -85,7 +85,7 @@ never freely touches prod. Judges see a governed control loop, not a chatbot wit
 - **Verifiable incident-report Artifact:** every run is persisted and rendered at
   `/incidents/{id}/report` (decision + signals + before/after + full timeline) — *AI isn't guessing*.
 - Three execution backends (mock / local / gcp) behind one agent codebase; `/demo/*` is
-  token-gated so the public dashboard is watch-only. **173 tests (165 agent + 8 mcp-server), CI green.**
+  token-gated so the public dashboard is watch-only. **175 tests (167 agent + 8 mcp-server), CI green.**
 
 **v2 — production-grade autonomy (real, verified on live Cloud Run):**
 - **Statistical decision gate** — the rollback trigger is a **Wilson confidence-interval** verdict
@@ -122,11 +122,13 @@ never freely touches prod. Judges see a governed control loop, not a chatbot wit
 > deterministic transaction (`state_machine`)**; every durability/governance feature above is a thin
 > policy on top. That's design discipline, not feature-stacking.
 
-**v3 — causal certainty across more than one signal (real, on live Cloud Run rev 00029):**
+**v3 — causal certainty across more than one signal (real, LIVE by default on Cloud Run, agent rev 00031):**
 The v2 moat ("catch a bad deploy out-of-window and act reversibly") was single-signal (5xx) and
 un-measured. v3 makes Airbag *causally certain before it acts, across more than one signal* — and
 builds a measuring stick to prove it. All new intelligence is **deterministic + LLM-free** (guarded
-by an AST architecture-invariant test); the FSM still acts, the LLM only advises.
+by an AST architecture-invariant test); the FSM still acts, the LLM only advises. **Multi-signal +
+causal are now ON by default in the live demo** (`AIRBAG_SIGNALS=all`, `AIRBAG_CAUSAL_CHECK=1`) —
+verified end-to-end on a live latency-regression scenario (below).
 - **Airbag-Bench** ([`docs/AIRBAG_BENCH.md`](docs/AIRBAG_BENCH.md)) — a labeled incident-replay harness
   that scores rollback precision/recall, false-rollback rate, and Alert-to-Verified-Recovery over a
   17-case corpus; committed scorecards + a golden-ratchet CI gate make it a real TDD loop.
@@ -134,7 +136,14 @@ by an AST architecture-invariant test); the FSM still acts, the LLM only advises
   proportion, N-window debounce) fused into the same FAIL/PASS/INCONCLUSIVE verdict the gate consumes,
   + a deterministic **promotion** so a confident statistical FAIL drives a rollback even when the LLM
   hedged. Bench: rollback **recall 50%→75%** (catches the out-of-window latency regression 5xx misses),
-  false-rollback rate flat. Behind `AIRBAG_SIGNALS` (default 5xx → demo unchanged).
+  false-rollback rate flat. **Live-verified**: a `slow` revision (200s past the SLO, ~0 5xx) — the 5xx
+  detector reads INCONCLUSIVE (a 5xx monitor sees *nothing*) while the latency detector FAILs (4/4
+  windows over SLO) and the promotion drives the rollback the ADK/Gemini decision explicitly declined.
+- **Signal-aware verify + remediation** — because we *detect* on multiple signals, we *verify* +
+  *remediate* on the triggering one: recovery for a latency incident is proven by re-measuring the
+  business-path latency back under SLO (not a 5xx-blind "200 + 0 errors"), and a latency regression is
+  remedied by the rollback itself — no bogus HTTP-500 fix-PR is fabricated (the code-fix path stays for
+  5xx/code-bug incidents). Live-verified (recovery proven at 38.9 ms « 800 ms SLO).
 - **Causal pre-check** (`causal.py`) — before spending the one reversible action, **probe the rollback
   target's health**: if the last-good revision is *also* degraded, the cause is external
   (dependency/quota), not this revision → ESCALATE without a futile rollback. Only a *confident*-unhealthy
@@ -150,12 +159,15 @@ by an AST architecture-invariant test); the FSM still acts, the LLM only advises
 - **Honest scope (first-principles):** a graded-confidence *verifier* (a second Gemini gating pass) was
   **cut** after review showed it was redundant with the deterministic gates for safety and its ratchet
   would force a human on a confident real outage; saturation + SLO-burn detectors are **deferred**
-  (false-positive-prone / not yet provable). Multi-signal + causal are opt-in (off in the demo).
+  (false-positive-prone / not yet provable). Multi-signal + causal are now **on by default** (both
+  remain flag-toggleable). Known limitation, stated plainly: the rollback *target* is the newest
+  ready 0-traffic revision, so the demo baseline keeps the healthy revision newest; deriving the true
+  last-good from sustained-traffic history is a roadmap item.
 
 **Roadmap (P2, honestly not done):**
 - ChatOps (Slack approvals on top of the autonomy gate); Cloud Assist composition.
-- Enable multi-signal + causal in the live demo (a latency-fault scenario); saturation/burn-rate
-  detectors; a WIF/KMS-signed (not just digest) proof bundle; MCP action tools for A2A.
+- Saturation / SLO-burn detectors; true-last-good rollback-target selection (from sustained-traffic
+  history, not revision recency); a WIF/KMS-signed (not just digest) proof bundle; MCP action tools for A2A.
 
 ## 6. The demo
 - **Live:** open the agent URL (operator link pre-fills the demo token), click **Break → Heal →

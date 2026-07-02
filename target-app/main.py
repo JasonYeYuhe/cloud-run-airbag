@@ -14,7 +14,9 @@ open a PR that fixes the exact cause. `http500` is a blunt alternative (explicit
 `slow` is the v3 LATENCY regression: /api/orders still returns 200, just slowly (> the
 latency SLO) with ~0 5xx — the canonical out-of-window regression a 5xx-only monitor
 MISSES but Airbag's multi-signal latency detector catches.
-/healthz stays fast+200 so Cloud Run readiness and the agent's synthetic probe work.
+Airbag probes the BUSINESS path (AIRBAG_PROBE_PATH, default /api/orders) for detection,
+recovery + latency — NOT /healthz — so the `slow` fault is actually observed. Cloud Run
+readiness uses a TCP startup probe (port 8080); /healthz is just a fast liveness endpoint.
 """
 from __future__ import annotations
 

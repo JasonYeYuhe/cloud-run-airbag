@@ -22,11 +22,40 @@ Repeatable: Break → Heal → Reset, as many times as you like.
 > Run it locally: `./run-local.sh` → http://localhost:8080. (The dashboard also self-plays offline if the agent isn't up.)
 > Run it on live Cloud Run: open the agent URL (operator link with `?token=` pre-fills the demo token), then Break → Heal → Reset.
 
-**Demo-flow note (gcp):** a *rollback* goes to a **previous** good revision, so the bad revision
-must be the **newest** one — which is exactly what `scripts/gcp-demo-setup.sh` sets up. Break →
-Heal → Reset is infinitely repeatable (it only shifts traffic, creates no revisions). The **Verify
-& Undo** step deploys a *new* fix revision (now the newest), which inverts that ordering — so after
-demoing Verify & Undo, re-run `./scripts/gcp-demo-setup.sh` before the next full Break → Heal cycle.
+## Scenario B — the v3 LATENCY regression (a 5xx monitor is blind to this)
+This is the payoff scenario: **a bad revision that returns HTTP 200 but slowly** (past the latency
+SLO) with **~0 5xx**. A 5xx-only monitor — every auto-rollback tool on the market — sees a perfectly
+healthy service. Airbag's multi-signal engine catches it and heals it. Multi-signal + causal are
+**on by default** on the live agent (`AIRBAG_SIGNALS=all`, `AIRBAG_CAUSAL_CHECK=1`).
+
+Trigger it one-click (`POST /demo/run-latency`) or as two steps (`/demo/break-latency` then Heal):
+```bash
+AURL=https://airbag-agent-946577240607.asia-northeast1.run.app
+curl -sX POST "$AURL/demo/run-latency" -H "x-airbag-demo-token: <demo-token>"
+```
+What the thought-chain shows (live-verified, incident `inc-1d1a7160`):
+`TRIAGED (5xx rate 0.0%) → ANALYZED FAIL` with the **per-detector split** — `5xx: INCONCLUSIVE`
+(the monitor is blind) next to `latency: FAIL — 4/4 windows over SLO` — → `DECISION` (the ADK/Gemini
+brain says *"no 5xx correlation, rollback not warranted, observe"* — and the **deterministic
+promotion overrides it** on the statistical FAIL: *the FSM acts where the LLM hedged*) → `CAUSAL
+INCONCLUSIVE` (probed the rollback target: 0/8 failures → proceed) → `ROLLBACK_APPLIED` → `VERIFYING`
+(**recovery proven on the latency signal** — probe back to ~40 ms « the 800 ms SLO, not just "0 5xx")
+→ `MITIGATED`. No forward code-fix PR is opened: **the rollback to the healthy revision IS the
+remedy** for a latency regression (the fix-PR path stays for 5xx/code-bug incidents). Target left healthy.
+
+**The one line for judges:** *"That regression fired zero 5xx. Every rollback tool on the market
+would call it healthy. Airbag caught it on latency, proved the target was safe before touching prod,
+rolled back, and proved recovery on the same signal that triggered it — the LLM even voted to do
+nothing, and the deterministic gate acted anyway."*
+
+**Demo-flow note (gcp):** the rollback target is the **newest ready 0-traffic** revision, so
+`scripts/gcp-demo-setup.sh` stages three revisions with the **HEALTHY one newest** (serving 100%),
+plus the `bug` and `slow` fault revisions at 0%. That single invariant means **both** scenarios
+(5xx via Break, latency via Break-latency) roll back onto the genuinely-good revision, and because
+traffic shifts don't change revision creation order, Break → Heal → Reset is **infinitely repeatable
+back-to-back** (it only shifts traffic, creates no revisions). The **Verify & Undo** step deploys a
+*new* fix revision (now the newest) — after demoing it, re-run `./scripts/gcp-demo-setup.sh` to
+restore the healthy-newest baseline before the next cycle.
 
 ## Why judges should care (the differentiation, grounded)
 - **Out-of-window detection.** Every auto-rollback tool (Argo/Harness/LaunchDarkly/Sedai) only acts inside the deploy/canary window. **78% of orgs have had an incident with *no* alert firing** — that's the gap we own: an independent production alert, hours later, still triggers a rollback.
@@ -45,5 +74,5 @@ governance. (ADK can be disabled with `AIRBAG_USE_ADK=false`, falling back to a 
 call then a heuristic — the heal never blocks on the LLM.)
 
 ## Real vs stretch (be honest with judges)
-- **Real now:** detection → **ADK/Gemini decision** → **rollback** → **verified recovery** → **Gemini fix PR through real CI** (with **CI self-correction** on red) → **verify the fix + undo the rollback via a gradual canary** (10→50→100, compensate on failure), end-to-end on a live target. Every run is persisted as a **verifiable incident-report Artifact** (`/incidents/{id}/report`). Three execution backends (mock/local/gcp); same agent code; 173 tests.
+- **Real now:** detection → **ADK/Gemini decision** → **rollback** → **verified recovery** → **Gemini fix PR through real CI** (with **CI self-correction** on red) → **verify the fix + undo the rollback via a gradual canary** (10→50→100, compensate on failure), end-to-end on a live target. Every run is persisted as a **verifiable incident-report Artifact** (`/incidents/{id}/report`). Three execution backends (mock/local/gcp); same agent code; 175 tests (167 agent + 8 mcp-server).
 - **Stretch / roadmap (P2):** the *fully-unattended* CI trigger (`complete-rollback.yml` deploys the fix then calls the endpoint) needs a one-time Workload Identity Federation binding; durable Firestore state; Cloud Tasks/Pub-Sub worker.
