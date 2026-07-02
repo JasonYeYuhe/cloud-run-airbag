@@ -51,8 +51,9 @@ MCP_TOKEN="$(grep '^AIRBAG_MCP_TOKEN=' "$ROOT/agent/.env" 2>/dev/null | cut -d= 
 AURL="https://airbag-agent-${PNUM}.${REGION}.run.app"   # the agent's own URL (Cloud Tasks target)
 
 # AGENT_ONLY=1 redeploys just the agent (skips the target) — use it to ship an agent code change
-# WITHOUT creating a new healthy target revision, which would invert the demo's "bug revision is
-# newest" ordering and force a scripts/gcp-demo-setup.sh re-run.
+# WITHOUT creating a new target revision, which would land ABOVE the demo baseline's HEALTHY (newest)
+# revision and break the "healthy is newest" rollback-target invariant (see scripts/gcp-demo-setup.sh),
+# forcing a re-run of that script.
 if [ "${AGENT_ONLY:-}" != "1" ]; then
   echo "== deploy target-app (healthy baseline; FAULT_MODE=off; /__fault gated by FAULT_TOKEN) =="
   # Explicit FAULT_MODE=off: scripts/gcp-demo-setup.sh later flips the service spec to FAULT_MODE=bug
@@ -96,7 +97,14 @@ fi
 # (AIRBAG_EVENTS=pubsub fan-out) make scale-out safe, so the agent runs --max-instances 3.
 # AIRBAG_QUEUE + AIRBAG_MCP_HTTP are left UNSET (inproc + MCP off) — built + tested opt-in flags,
 # kept off in the demo for simplicity + a small attack surface.
-ENVS="AIRBAG_BACKEND=gcp,GOOGLE_CLOUD_PROJECT=${PROJECT},GOOGLE_CLOUD_LOCATION=${REGION},TARGET_SERVICE=airbag-target,TARGET_BASE_URL=${TURL},AIRBAG_VERIFY_INTERVAL_S=4,AIRBAG_VERIFY_ATTEMPTS=8,AIRBAG_STATE=firestore,AIRBAG_EVENTS=pubsub,AIRBAG_SELF_URL=${AURL},AIRBAG_TASKS_QUEUE=airbag-heals,AIRBAG_TASKS_LOCATION=${REGION}"
+# v3 is ON by default. AIRBAG_SIGNALS=all runs every shipped detector — today 5xx + latency — so the
+# multi-signal engine catches a latency regression with ~0 5xx, not just outright 5xx. (We use "all"
+# rather than "5xx,latency" because gcloud --set-env-vars treats a comma as a KEY=VALUE separator, so a
+# comma INSIDE a value would be mis-split; "all" is comma-free and documented as "every shipped
+# detector".) AIRBAG_CAUSAL_CHECK=1 probes the rollback target's health before committing, so a
+# dependency/quota outage that isn't THIS revision's fault escalates instead of a futile rollback.
+# Both are deterministic — the action tier never calls the LLM.
+ENVS="AIRBAG_BACKEND=gcp,GOOGLE_CLOUD_PROJECT=${PROJECT},GOOGLE_CLOUD_LOCATION=${REGION},TARGET_SERVICE=airbag-target,TARGET_BASE_URL=${TURL},AIRBAG_SIGNALS=all,AIRBAG_CAUSAL_CHECK=1,AIRBAG_VERIFY_INTERVAL_S=4,AIRBAG_VERIFY_ATTEMPTS=8,AIRBAG_STATE=firestore,AIRBAG_EVENTS=pubsub,AIRBAG_SELF_URL=${AURL},AIRBAG_TASKS_QUEUE=airbag-heals,AIRBAG_TASKS_LOCATION=${REGION}"
 SECRETS="GEMINI_API_KEY=airbag-gemini-key:latest,AIRBAG_DEMO_TOKEN=airbag-demo-secret:latest,AIRBAG_WEBHOOK_TOKEN=airbag-webhook-secret:latest,AIRBAG_INTERNAL_TOKEN=airbag-internal-token:latest,AIRBAG_MCP_TOKEN=airbag-mcp-token:latest"
 
 # Optional fix-PR slow path: use a FINE-GRAINED, repo-scoped GitHub token (Contents +
@@ -113,8 +121,6 @@ if grep -q '^GITHUB_TOKEN=..' "$ROOT/agent/.env" 2>/dev/null; then
 fi
 
 echo "== deploy agent =="
-# GOTCHA 3: the background self-heal needs CPU always allocated (--no-cpu-throttling),
-# else CPU is throttled after the 202 response and the heal stalls.
 # GOTCHA 3: the background self-heal needs CPU always allocated (--no-cpu-throttling),
 # else CPU is throttled after the 202 response and the heal stalls.
 # Multi-instance is safe now: state is durable (Firestore) + idempotent (per-incident leases) and
