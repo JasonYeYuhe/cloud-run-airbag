@@ -39,6 +39,11 @@ class Scorecard:
     false_escalation_rate: Ratio
     wasted_rollback_rate: Ratio
     accuracy: Ratio
+    target_correctness: Ratio            # v4: of the ROLLBACK DECISIONS on cases that pin an
+                                         # expected_target, how many AIMED at the right revision
+                                         # (decided-keyed: a wrong aim the causal veto stops
+                                         # pre-shift still counts as a wrong aim — the metric
+                                         # scores the SELECTOR, not the downstream safety net)
     mean_stages_to_mitigate: float | None
     confusion: dict                      # expected -> {decided -> count}
     per_case: list[dict] = field(default_factory=list)
@@ -52,6 +57,7 @@ class Scorecard:
             "false_escalation_rate": self.false_escalation_rate.as_dict(),
             "wasted_rollback_rate": self.wasted_rollback_rate.as_dict(),
             "accuracy": self.accuracy.as_dict(),
+            "target_correctness": self.target_correctness.as_dict(),
             "mean_stages_to_mitigate": (round(self.mean_stages_to_mitigate, 2)
                                         if self.mean_stages_to_mitigate is not None else None),
             "confusion": self.confusion,
@@ -78,6 +84,9 @@ class Scorecard:
             f"| Wasted-rollback rate | {self.wasted_rollback_rate.fmt()} | rolled back, the rollback "
             "did not clear, then escalated (of all cases) |",
             f"| Accuracy | {self.accuracy.fmt()} | decided == ground-truth action |",
+            f"| Target correctness | {self.target_correctness.fmt()} | of the ROLLBACK decisions "
+            "on target-pinned cases, how many AIMED at the ground-truth revision (v4: scores the "
+            "SELECTOR — a wrong aim counts even when the causal veto stops it pre-shift) |",
             f"| Mean stages-to-mitigate | "
             f"{self.mean_stages_to_mitigate if self.mean_stages_to_mitigate is not None else 'n/a'} | "
             "FSM stages emitted on a successful mitigation |",
@@ -91,16 +100,29 @@ class Scorecard:
             row = self.confusion.get(exp, {})
             lines.append(f"| {exp} | {row.get('ROLLBACK', 0)} | {row.get('OBSERVE', 0)} | "
                          f"{row.get('ESCALATE', 0)} |")
-        lines += ["", "**Per case:** (final = what Airbag ultimately did; scoring keys off it)", "",
-                  "| case | category | expected | final | status | stages |",
-                  "|---|---|---|---|---|---|"]
+        lines += ["", "**Per case:** (final = what Airbag ultimately did; scoring keys off it. "
+                  "target = chosen → ✓/✗ vs the pinned expected target, with the selection source)", "",
+                  "| case | category | expected | final | target | status | stages |",
+                  "|---|---|---|---|---|---|---|"]
         for c in self.per_case:
             final = c.get("final", c["decided"])
             mark = "✓" if final == c["expected"] else "✗"
             note = "" if final == c["decided"] else f" (decided {c['decided']})"
             lines.append(f"| {c['name']} | {c['category']} | {c['expected']} | {final} {mark}{note} "
-                         f"| {c['status']} | {c['stages']} |")
+                         f"| {_target_cell(c)} | {c['status']} | {c['stages']} |")
         return "\n".join(lines)
+
+
+def _target_cell(c: dict) -> str:
+    """Markdown cell for the per-case target column: '—' when no target was pinned/chosen."""
+    chosen, expected = c.get("chosen_target"), c.get("expected_target")
+    if not expected and not chosen:
+        return "—"
+    if not chosen:
+        return f"— (expected {expected})"
+    mark = "" if not expected else (" ✓" if chosen == expected else f" ✗ (expected {expected})")
+    src = f" [{c['target_source']}]" if c.get("target_source") else ""
+    return f"{chosen}{mark}{src}"
 
 
 def score(results, label: str = "v2 deterministic floor (LLM off)") -> Scorecard:
@@ -124,10 +146,18 @@ def score(results, label: str = "v2 deterministic floor (LLM off)") -> Scorecard
     correct = [r for r in results if r.final_action == r.expected_action]
     mitigated = [r for r in results if r.status == "mitigated"]
     mean_stages = (sum(r.stages for r in mitigated) / len(mitigated)) if mitigated else None
+    # v4 TARGET correctness — DECIDED-keyed (the Gemini review caught the executed-keyed version
+    # reading 100% in causal mode purely because the veto stopped the wrong aim pre-shift): of the
+    # ROLLBACK decisions on cases that PIN an expected target, how many AIMED at the ground-truth
+    # revision. This scores the SELECTOR; whether the aim was then executed, vetoed, or wasted is
+    # the action metrics' job.
+    aimed = [r for r in results if r.decided_action == "ROLLBACK" and r.expected_target]
+    aimed_right = [r for r in aimed if r.chosen_target == r.expected_target]
 
     per_case = [{"name": r.name, "category": r.category, "expected": r.expected_action,
                  "decided": r.decided_action, "final": r.final_action, "status": r.status,
-                 "stages": r.stages}
+                 "stages": r.stages, "expected_target": r.expected_target,
+                 "chosen_target": r.chosen_target, "target_source": r.target_source}
                 for r in results]
 
     return Scorecard(
@@ -138,5 +168,6 @@ def score(results, label: str = "v2 deterministic floor (LLM off)") -> Scorecard
         false_escalation_rate=Ratio(len(false_esc), len(expected_obs)),
         wasted_rollback_rate=Ratio(len(wasted_rb), n),
         accuracy=Ratio(len(correct), n),
+        target_correctness=Ratio(len(aimed_right), len(aimed)),
         mean_stages_to_mitigate=mean_stages,
         confusion=confusion, per_case=per_case)

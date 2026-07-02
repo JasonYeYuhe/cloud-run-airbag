@@ -23,11 +23,30 @@ from autosre.state_machine import run_self_heal
 
 class FixtureBackend:
     """A backend whose observations come from one BenchCase ``world``. Holds post-rollback state on
-    the instance, so a single instance must back an entire ``run_self_heal`` (see harness note)."""
+    the instance, so a single instance must back an entire ``run_self_heal`` (see harness note).
+
+    v4 (target-correctness) per-revision fields, all optional so existing worlds are unchanged:
+      * ``clears_on``: [revision, …] — the rollback clears ONLY when traffic landed on one of these
+        (a bad→bad world clears on the witnessed-good revision, not the landmine). When absent, the
+        original ``rollback_clears`` bool applies to any rollback.
+      * ``target_probes``: {revision: {errs,total}} — PER-REVISION causal-probe results (the
+        landmine probes degraded, the good one clean). Falls back to ``target_probe`` (one result
+        for any revision), then to the healthy default."""
 
     def __init__(self, world: dict):
         self.world = world
         self.rolled_back = False
+        self.rolled_to: str | None = None   # the revision the last shift landed on
+
+    def _cleared(self) -> bool:
+        """Did the (simulated) rollback actually fix the world? Per-revision when clears_on is
+        given; else the original whole-world rollback_clears bool."""
+        if not self.rolled_back:
+            return False
+        clears_on = self.world.get("clears_on")
+        if clears_on is not None:
+            return self.rolled_to in clears_on
+        return self.world.get("rollback_clears", True)
 
     # --- read signals --------------------------------------------------------------------------
     def list_cloud_run_revisions(self, service: str, region: str) -> dict:
@@ -35,8 +54,7 @@ class FixtureBackend:
 
     def query_error_rate(self, service: str, region: str, window_minutes: int = 5,
                          since_epoch: float | None = None) -> dict:
-        cleared = self.rolled_back and self.world.get("rollback_clears", True)
-        rate = 0.0 if cleared else float(self.world["error_rate"])
+        rate = 0.0 if self._cleared() else float(self.world["error_rate"])
         total = int(self.world.get("sample", {}).get("total", 200)) or 200
         return {"service": service, "error_rate": rate, "total_requests": total,
                 "window_minutes": window_minutes}
@@ -54,36 +72,46 @@ class FixtureBackend:
 
     def sample_business_path(self, service: str, region: str, n: int = 20) -> dict:
         # the pinned observed sample (active probe at triage time); post-rollback it would read clean
-        if self.rolled_back and self.world.get("rollback_clears", True):
+        if self._cleared():
             return {"errs": 0, "total": int(self.world.get("sample", {}).get("total", n))}
         s = self.world["sample"]
         return {"errs": int(s["errs"]), "total": int(s["total"])}
 
     def synthetic_probe(self, service: str, path: str = "/healthz") -> dict:
-        ok = self.rolled_back and self.world.get("rollback_clears", True)
+        ok = self._cleared()
         return {"ok": ok, "path": path, "status": 200 if ok else 503}
 
     def probe_revision_health(self, service: str, region: str, revision: str, n: int = 8) -> dict:
         # the fixture's probe MODEL {errs,total} — the causal Wilson math runs for real in-bench.
-        # Default healthy (0 errs): a bad DEPLOY's last-good target is fine (only a dependency/quota
-        # outage makes the target ALSO fail). Cases that model an external cause set target_probe.
-        p = self.world.get("target_probe")
+        # PER-REVISION first (target_probes — a bad→bad world's landmine probes degraded while the
+        # witnessed-good probes clean), then the whole-world target_probe (an external cause breaks
+        # EVERY revision), then the healthy default (a bad DEPLOY's last-good target is fine).
+        p = self.world.get("target_probes", {}).get(revision) or self.world.get("target_probe")
         if p is None:
             return {"errs": 0, "total": n}
         return {"errs": int(p["errs"]), "total": int(p["total"])}
 
     def probe_candidate(self, service: str, region: str, revision: str) -> dict:
-        ok = self.rolled_back and self.world.get("rollback_clears", True)
+        ok = self._cleared()
         return {"ok": ok, "errors": 0 if ok else 1, "total": 1}
 
     # --- act -----------------------------------------------------------------------------------
     def rollback_traffic_to_revision(self, service: str, region: str, revision: str) -> dict:
         self.rolled_back = True
+        self.rolled_to = revision
         return {"status": "success", "service": service, "active_revision": revision}
 
     def set_traffic_split(self, service: str, region: str, splits: dict,
                          tag_revision: str | None = None) -> dict:
+        # The heal path under bench replay never splits traffic (rollback is a 100% flip); the
+        # fixture world has no per-split error model, so a partial canary would read the WHOLE
+        # world's error rate and mislead — fail loudly if a future phase exercises it here.
+        if splits and max(int(p) for p in splits.values()) < 100:
+            raise NotImplementedError(
+                "FixtureBackend does not simulate partial traffic splits — extend the world model "
+                "(per-split error rates) before benching a canary path.")
         self.rolled_back = True
+        self.rolled_to = max(splits, key=splits.get) if splits else self.rolled_to
         return {"status": "success", "service": service, "traffic": dict(splits)}
 
     def break_target(self, service: str, region: str) -> dict:
@@ -117,6 +145,9 @@ class CaseResult:
                                  # scoring keys off this so a causal pre-check ESCALATE is observable
     rolled_back: bool            # was ROLLBACK_APPLIED emitted (traffic actually shifted)?
     status: str                  # terminal run_self_heal status (mitigated/escalated/noop/...)
+    expected_target: str | None  # ground-truth rollback target (None when the case pins no target)
+    chosen_target: str | None    # the DECISION's rollback_revision — WHICH revision Airbag aimed at
+    target_source: str | None    # 'ledger' | 'recency' (deterministic selectors) | None (no rollback)
     stages: int                  # number of emitted events (mean-stages metric uses status==mitigated)
     cleared: bool                # did the (simulated) rollback actually clear the errors?
 
@@ -143,11 +174,8 @@ _PINNED = {
 SERVICE = "airbag-target"   # the service the corpus revisions belong to (run_self_heal target)
 
 
-def _decided_action(events: list[dict]) -> str:
-    for ev in events:
-        if ev.get("stage") == "DECISION":
-            return ev.get("action", "OBSERVE")
-    return "OBSERVE"   # no DECISION emitted (shouldn't happen) -> treat as a no-op
+def _decision_event(events: list[dict]) -> dict:
+    return next((ev for ev in events if ev.get("stage") == "DECISION"), {})
 
 
 def run_case(case, signals: str | None = None, causal: bool = False) -> CaseResult:
@@ -172,6 +200,10 @@ def run_case(case, signals: str | None = None, causal: bool = False) -> CaseResu
         # default after the reset, so a prior case can't poison this one.
         from autosre import memory
         assert memory.baseline_for(SERVICE) == config.STAT_BASELINE_RATE, "state bled across cases"
+        # v4: seed the serving-history ledger from the fixture (the revisions Airbag is said to
+        # have witnessed serving healthily BEFORE this incident). Omitted = cold start (recency).
+        for rev in case.world.get("witnessed", []):
+            memory.witness_serving(SERVICE, rev)
         result = run_self_heal(f"bench-{case.name}", SERVICE)
     finally:
         tools.get_backend = saved_get_backend
@@ -180,7 +212,8 @@ def run_case(case, signals: str | None = None, causal: bool = False) -> CaseResu
     events = result.get("events", [])
     status = result.get("status", "unknown")
     rolled_back = any(e.get("stage") == "ROLLBACK_APPLIED" for e in events)
-    decided = _decided_action(events)
+    decision = _decision_event(events)
+    decided = decision.get("action", "OBSERVE")   # no DECISION emitted -> treat as a no-op
     # what Airbag ULTIMATELY did: a rollback iff traffic actually shifted (so a causal pre-check that
     # escalates BEFORE the shift is scored ESCALATE, not ROLLBACK); else the terminal outcome.
     if rolled_back:
@@ -195,7 +228,11 @@ def run_case(case, signals: str | None = None, causal: bool = False) -> CaseResu
         name=case.name, category=case.category, expected_action=case.expected_action,
         is_bad_deploy=case.is_bad_deploy, decided_action=decided, final_action=final,
         rolled_back=rolled_back, status=status, stages=len(events),
-        cleared=bool(case.world.get("rollback_clears", True)))
+        cleared=fb._cleared(),   # the world's ACTUAL end state (per-revision worlds: depends on
+                                 # WHICH revision traffic landed on, not just whether it shifted)
+        expected_target=getattr(case, "expected_target", None),
+        chosen_target=decision.get("rollback_revision") if decided == "ROLLBACK" else None,
+        target_source=decision.get("_target_source") if decided == "ROLLBACK" else None)
 
 
 def run_bench(cases=None, signals: str | None = None, causal: bool = False) -> list[CaseResult]:

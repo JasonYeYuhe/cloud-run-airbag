@@ -72,7 +72,7 @@ def test_default_signals_reproduce_committed_baseline():
     card = score(run_bench(signals="5xx"))
     got = card.to_dict()
     for metric in ("rollback_precision", "rollback_recall", "false_rollback_rate",
-                   "false_escalation_rate", "accuracy"):
+                   "false_escalation_rate", "accuracy", "target_correctness"):
         assert got[metric] == committed[metric], f"{metric} drifted vs committed baseline"
     assert {c["name"]: c["decided"] for c in got["per_case"]} == \
         {c["name"]: c["decided"] for c in committed["per_case"]}
@@ -89,9 +89,11 @@ def test_false_rates_do_not_regress_vs_baseline():
 
 # --- 3. MEANING (the pre-registered v2 gaps Phases 1-2 close) -------------------------------------
 def test_v2_floor_misses_non_5xx_regressions_recall_gap():
-    """Phase 1 target: v2 is 5xx-only, so latency/saturation/slo regressions slip through."""
+    """Phase 1 target: v2 is 5xx-only, so latency/saturation/slo regressions slip through.
+    (Threshold recalibrated for the v4 bad_bad cases — 3 new 5xx-catchable ROLLBACK worlds lift the
+    5xx floor to 7/11 ≈ 0.64; the per-miss asserts below are the real content.)"""
     card = score(_results())
-    assert card.rollback_recall.value is not None and card.rollback_recall.value < 0.6, \
+    assert card.rollback_recall.value is not None and card.rollback_recall.value < 0.7, \
         "recall unexpectedly high — has the multi-signal detector landed? update the baseline"
     by_name = {r.name: r for r in _results()}
     for miss in ("latency_regression", "saturation_cpu", "slo_slow_burn"):
@@ -159,18 +161,41 @@ def test_causal_precheck_eliminates_false_rollbacks():
         assert caus.rollback_precision.value > base.rollback_precision.value
 
 
-def test_causal_never_blocks_a_legitimate_rollback():
-    """SAFETY — the worst failure is protecting a bad revision. Recall must be UNCHANGED by the causal
-    check, and the masquerade (healthy target) + intermittent (flaky target) bad-deploys still roll back."""
+def test_causal_never_blocks_a_rollback_aimed_at_a_healthy_target():
+    """SAFETY — the worst failure is protecting a bad revision. For every case whose causal-OFF
+    rollback AIMED at a target the world models as healthy (probe below the confidence bar), the
+    causal check must still roll back. (v4 recalibration: a veto of a rollback aimed at a
+    CONFIDENTLY-degraded target — bad_bad_cold_ledger's landmine — is the check working as
+    designed, so plain recall equality no longer holds on this corpus; the healthy-AIMED subset is
+    the real invariant. The bad→bad escalate-vs-heal contrast is pinned in section 6.)"""
+    from bench.fixtures import case_by_name
+    causal_cards = {"5xx": "causal_5xx_scorecard.json", "5xx,latency": "causal_scorecard.json"}
     for sig in ("5xx", "5xx,latency"):
-        base = score(run_bench(signals=sig, causal=False))
-        caus = score(run_bench(signals=sig, causal=True))
-        assert caus.rollback_recall.num == base.rollback_recall.num, "causal check blocked a real rollback!"
+        base = {r.name: r for r in run_bench(signals=sig, causal=False)}
+        caus_results = run_bench(signals=sig, causal=True)
+        caus = {r.name: r for r in caus_results}
+        for name, b in base.items():
+            if not (b.rolled_back and b.expected_action == "ROLLBACK"):
+                continue
+            world = case_by_name(name).world
+            probe = (world.get("target_probes", {}).get(b.chosen_target)
+                     or world.get("target_probe"))
+            if probe and int(probe.get("errs", 0)) >= 3:
+                continue   # aimed at a confidently-degraded target — a veto is correct, not a block
+            assert caus[name].rolled_back, f"causal check blocked a healthy-aimed rollback: {name}"
+        # RATCHET (Gemini review): the subset loop alone would let an aim-everything-at-broken-
+        # targets regression hide (every case would be exempted, recall would tank silently). The
+        # committed causal scorecard pins the mitigation floor — recall can never drop below it.
+        committed = json.loads((_BASELINE.parent / causal_cards[sig]).read_text(encoding="utf-8"))
+        got = score(caus_results)
+        assert got.rollback_recall.num >= committed["rollback_recall"]["num"], \
+            f"causal-mode recall dropped below the committed floor ({sig})"
     by_name = {r.name: r for r in run_bench(signals="5xx,latency", causal=True)}
     assert by_name["masquerade_real_bad_deploy"].rolled_back is True   # healthy target -> proceed
     assert by_name["intermittent_target"].rolled_back is True          # flaky target -> proceed
     assert by_name["coincident_dependency_outage"].rolled_back is False  # target also down -> escalate
     assert by_name["coincident_quota_exhaustion"].rolled_back is False
+    assert by_name["bad_bad_ledger_heals"].rolled_back is True    # the ledger's aim passes the probe
 
 
 def test_causal_off_reproduces_committed_scorecards():
@@ -200,8 +225,87 @@ def test_fixture_coupling_dependency_target_is_unhealthy():
     for c in CASES:
         clears = c.world.get("rollback_clears", True)
         probe = c.world.get("target_probe")
+        if "clears_on" in c.world:
+            continue   # per-revision worlds: the coupling is enforced per-revision below
         if not clears:
             assert probe is not None and probe["errs"] >= 3, \
                 f"{c.name}: rollback_clears=False must have a confidently-unhealthy target_probe"
         if probe is not None and clears:
             assert probe["errs"] < 3, f"{c.name}: a clearing rollback must have a healthy target_probe"
+
+
+def test_fixture_coupling_per_revision_worlds():
+    """Anti-gaming for the v4 per-revision (bad→bad) worlds: a revision the rollback CLEARS on must
+    probe healthy, and a non-clearing candidate (the landmine) must probe confidently unhealthy —
+    the probe model and the outcome model can't be tuned independently to flip a case."""
+    from bench.fixtures import CASES
+    for c in CASES:
+        clears_on = c.world.get("clears_on")
+        if clears_on is None:
+            continue
+        probes = c.world.get("target_probes", {})
+        for rev, p in probes.items():
+            if p["errs"] >= 3:
+                assert rev not in clears_on, \
+                    f"{c.name}: {rev} probes unhealthy yet the rollback clears on it"
+        for rev in clears_on:
+            p = probes.get(rev)
+            assert p is None or p["errs"] < 3, \
+                f"{c.name}: clears_on revision {rev} must not carry an unhealthy probe"
+        # every 0-traffic ready candidate NOT in clears_on is a landmine: it must probe unhealthy,
+        # or the world would let a wrong-target rollback look successful.
+        for r in c.world["revisions"]:
+            if r.get("traffic_percent", 0) == 0 and r.get("ready") and r["name"] not in clears_on:
+                p = probes.get(r["name"])
+                assert p is not None and p["errs"] >= 3, \
+                    f"{c.name}: non-clearing candidate {r['name']} must probe confidently unhealthy"
+
+
+# --- 6. TARGET-CORRECTNESS (v4 Phase 1): the ledger aims at witnessed-good; recency can't --------
+_BB_GOOD = "airbag-target-00009-good"
+_BB_LANDMINE = "airbag-target-00011-landmine"
+
+
+def test_ledger_aims_at_witnessed_good_in_every_mode():
+    """The marquee positive: with a witnessed history, the rollback is aimed at the proven-good
+    OLDER revision (not the newer landmine) and the heal completes — in the 5xx floor, multisignal,
+    and causal configurations alike."""
+    for kw in ({}, {"signals": "5xx,latency"}, {"signals": "5xx,latency", "causal": True}):
+        warm = next(r for r in run_bench(**kw) if r.name == "bad_bad_ledger_heals")
+        assert warm.chosen_target == _BB_GOOD and warm.target_source == "ledger"
+        assert warm.final_action == "ROLLBACK" and warm.status == "mitigated"
+
+
+def test_cold_ledger_recency_aims_at_the_landmine():
+    """The matched control (the committed OLD-behavior proof): cold start = recency aims at the
+    landmine. Causal OFF: the rollback is WASTED (shift, fail verify, escalate). Causal ON: the
+    live probe vetoes pre-shift and a human is paged even though a proven-good revision exists —
+    exactly the ESCALATE the ledger turns into an autonomous heal."""
+    cold = next(r for r in run_bench() if r.name == "bad_bad_cold_ledger")
+    assert cold.chosen_target == _BB_LANDMINE and cold.target_source == "recency"
+    assert cold.rolled_back and cold.status == "escalated" and cold.cleared is False   # wasted
+    cold = next(r for r in run_bench(signals="5xx,latency", causal=True)
+                if r.name == "bad_bad_cold_ledger")
+    assert cold.final_action == "ESCALATE" and not cold.rolled_back   # vetoed pre-shift, human paged
+
+
+def test_negative_control_ledger_agrees_with_recency():
+    """Anti-distortion: when the newest ready candidate IS the witnessed one (the common case), the
+    ledger picks exactly what recency would — same target, same heal."""
+    ctl = next(r for r in run_bench() if r.name == "bad_deploy_newest_is_witnessed")
+    assert ctl.chosen_target == "airbag-target-00001-good" and ctl.status == "mitigated"
+
+
+def test_target_correctness_metric_scores_the_aim():
+    """The metric is DECIDED-keyed — it scores the SELECTOR's aim, not the safety net downstream:
+    the cold bad→bad control aims at the landmine and is the ONE wrong aim in EVERY mode, whether
+    that aim then shipped (causal off: the wasted rollback) or was vetoed pre-shift (causal on —
+    an executed-keyed metric would have read a flattering 100% there, per the Gemini review)."""
+    for kw in ({}, {"signals": "5xx,latency", "causal": True}):
+        card = score(run_bench(**kw))
+        assert card.target_correctness.den >= 7
+        assert card.target_correctness.num == card.target_correctness.den - 1
+        wrong = [c for c in card.per_case
+                 if c["decided"] == "ROLLBACK" and c["expected_target"]
+                 and c["chosen_target"] != c["expected_target"]]
+        assert [c["name"] for c in wrong] == ["bad_bad_cold_ledger"]   # exactly the cold control

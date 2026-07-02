@@ -1,20 +1,20 @@
 {
   "label": "signals=5xx",
-  "n": 17,
+  "n": 20,
   "rollback_precision": {
-    "num": 4,
-    "den": 6,
-    "value": 0.6667
+    "num": 7,
+    "den": 9,
+    "value": 0.7778
   },
   "rollback_recall": {
-    "num": 4,
-    "den": 8,
-    "value": 0.5
+    "num": 7,
+    "den": 11,
+    "value": 0.6364
   },
   "false_rollback_rate": {
     "num": 2,
-    "den": 17,
-    "value": 0.1176
+    "den": 20,
+    "value": 0.1
   },
   "false_escalation_rate": {
     "num": 1,
@@ -22,19 +22,24 @@
     "value": 0.1667
   },
   "wasted_rollback_rate": {
-    "num": 2,
-    "den": 17,
-    "value": 0.1176
+    "num": 3,
+    "den": 20,
+    "value": 0.15
   },
   "accuracy": {
-    "num": 10,
-    "den": 17,
-    "value": 0.5882
+    "num": 13,
+    "den": 20,
+    "value": 0.65
+  },
+  "target_correctness": {
+    "num": 6,
+    "den": 7,
+    "value": 0.8571
   },
   "mean_stages_to_mitigate": 10.0,
   "confusion": {
     "ROLLBACK": {
-      "ROLLBACK": 4,
+      "ROLLBACK": 7,
       "OBSERVE": 4,
       "ESCALATE": 0
     },
@@ -57,7 +62,10 @@
       "decided": "ROLLBACK",
       "final": "ROLLBACK",
       "status": "mitigated",
-      "stages": 10
+      "stages": 10,
+      "expected_target": "airbag-target-00001-good",
+      "chosen_target": "airbag-target-00001-good",
+      "target_source": "recency"
     },
     {
       "name": "crash_high_5xx",
@@ -66,7 +74,10 @@
       "decided": "ROLLBACK",
       "final": "ROLLBACK",
       "status": "mitigated",
-      "stages": 10
+      "stages": 10,
+      "expected_target": "airbag-target-00001-good",
+      "chosen_target": "airbag-target-00001-good",
+      "target_source": "recency"
     },
     {
       "name": "healthy_steady",
@@ -75,7 +86,10 @@
       "decided": "OBSERVE",
       "final": "OBSERVE",
       "status": "noop",
-      "stages": 6
+      "stages": 6,
+      "expected_target": null,
+      "chosen_target": null,
+      "target_source": null
     },
     {
       "name": "healthy_noisy",
@@ -84,7 +98,10 @@
       "decided": "OBSERVE",
       "final": "OBSERVE",
       "status": "noop",
-      "stages": 6
+      "stages": 6,
+      "expected_target": null,
+      "chosen_target": null,
+      "target_source": null
     },
     {
       "name": "recovered_before_heal",
@@ -93,7 +110,10 @@
       "decided": "OBSERVE",
       "final": "OBSERVE",
       "status": "noop",
-      "stages": 6
+      "stages": 6,
+      "expected_target": null,
+      "chosen_target": null,
+      "target_source": null
     },
     {
       "name": "latency_regression",
@@ -102,7 +122,10 @@
       "decided": "OBSERVE",
       "final": "OBSERVE",
       "status": "noop",
-      "stages": 6
+      "stages": 6,
+      "expected_target": "airbag-target-00001-good",
+      "chosen_target": null,
+      "target_source": null
     },
     {
       "name": "latency_regression_moderate",
@@ -111,7 +134,10 @@
       "decided": "OBSERVE",
       "final": "OBSERVE",
       "status": "noop",
-      "stages": 6
+      "stages": 6,
+      "expected_target": "airbag-target-00001-good",
+      "chosen_target": null,
+      "target_source": null
     },
     {
       "name": "latency_within_slo",
@@ -120,7 +146,10 @@
       "decided": "OBSERVE",
       "final": "OBSERVE",
       "status": "noop",
-      "stages": 6
+      "stages": 6,
+      "expected_target": null,
+      "chosen_target": null,
+      "target_source": null
     },
     {
       "name": "latency_spike_transient",
@@ -129,7 +158,10 @@
       "decided": "OBSERVE",
       "final": "OBSERVE",
       "status": "noop",
-      "stages": 6
+      "stages": 6,
+      "expected_target": null,
+      "chosen_target": null,
+      "target_source": null
     },
     {
       "name": "saturation_cpu",
@@ -138,7 +170,10 @@
       "decided": "OBSERVE",
       "final": "OBSERVE",
       "status": "noop",
-      "stages": 6
+      "stages": 6,
+      "expected_target": "airbag-target-00001-good",
+      "chosen_target": null,
+      "target_source": null
     },
     {
       "name": "slo_slow_burn",
@@ -147,7 +182,10 @@
       "decided": "OBSERVE",
       "final": "OBSERVE",
       "status": "noop",
-      "stages": 6
+      "stages": 6,
+      "expected_target": "airbag-target-00001-good",
+      "chosen_target": null,
+      "target_source": null
     },
     {
       "name": "coincident_dependency_outage",
@@ -156,7 +194,10 @@
       "decided": "ROLLBACK",
       "final": "ROLLBACK",
       "status": "escalated",
-      "stages": 9
+      "stages": 9,
+      "expected_target": null,
+      "chosen_target": "airbag-target-00004-prev",
+      "target_source": "recency"
     },
     {
       "name": "coincident_quota_exhaustion",
@@ -165,7 +206,10 @@
       "decided": "ROLLBACK",
       "final": "ROLLBACK",
       "status": "escalated",
-      "stages": 9
+      "stages": 9,
+      "expected_target": null,
+      "chosen_target": "airbag-target-00004-prev",
+      "target_source": "recency"
     },
     {
       "name": "masquerade_real_bad_deploy",
@@ -174,7 +218,10 @@
       "decided": "ROLLBACK",
       "final": "ROLLBACK",
       "status": "mitigated",
-      "stages": 10
+      "stages": 10,
+      "expected_target": "airbag-target-00001-good",
+      "chosen_target": "airbag-target-00001-good",
+      "target_source": "recency"
     },
     {
       "name": "intermittent_target",
@@ -183,7 +230,46 @@
       "decided": "ROLLBACK",
       "final": "ROLLBACK",
       "status": "mitigated",
-      "stages": 10
+      "stages": 10,
+      "expected_target": "airbag-target-00001-good",
+      "chosen_target": "airbag-target-00001-good",
+      "target_source": "recency"
+    },
+    {
+      "name": "bad_bad_ledger_heals",
+      "category": "bad_bad",
+      "expected": "ROLLBACK",
+      "decided": "ROLLBACK",
+      "final": "ROLLBACK",
+      "status": "mitigated",
+      "stages": 10,
+      "expected_target": "airbag-target-00009-good",
+      "chosen_target": "airbag-target-00009-good",
+      "target_source": "ledger"
+    },
+    {
+      "name": "bad_bad_cold_ledger",
+      "category": "bad_bad",
+      "expected": "ROLLBACK",
+      "decided": "ROLLBACK",
+      "final": "ROLLBACK",
+      "status": "escalated",
+      "stages": 9,
+      "expected_target": "airbag-target-00009-good",
+      "chosen_target": "airbag-target-00011-landmine",
+      "target_source": "recency"
+    },
+    {
+      "name": "bad_deploy_newest_is_witnessed",
+      "category": "bad_bad",
+      "expected": "ROLLBACK",
+      "decided": "ROLLBACK",
+      "final": "ROLLBACK",
+      "status": "mitigated",
+      "stages": 10,
+      "expected_target": "airbag-target-00001-good",
+      "chosen_target": "airbag-target-00001-good",
+      "target_source": "ledger"
     },
     {
       "name": "low_traffic_blip",
@@ -192,7 +278,10 @@
       "decided": "ESCALATE",
       "final": "ESCALATE",
       "status": "escalated",
-      "stages": 6
+      "stages": 6,
+      "expected_target": null,
+      "chosen_target": null,
+      "target_source": null
     },
     {
       "name": "no_healthy_target",
@@ -201,7 +290,10 @@
       "decided": "ESCALATE",
       "final": "ESCALATE",
       "status": "escalated",
-      "stages": 6
+      "stages": 6,
+      "expected_target": null,
+      "chosen_target": null,
+      "target_source": null
     }
   ]
 }

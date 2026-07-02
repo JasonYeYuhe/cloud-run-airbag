@@ -24,6 +24,7 @@ and is excluded from any gate):
 | **False-rollback rate** | rolled back when it shouldn't (÷ all cases) |
 | **False-escalation rate** | paged a human on a benign case (÷ OBSERVE-expected cases) |
 | **Wasted-rollback rate** | decided rollback, it didn't clear, then escalated (÷ all cases) |
+| **Target correctness** (v4) | of the ROLLBACK decisions on cases that pin an `expected_target`, how many AIMED at the ground-truth revision. **Decided-keyed — it scores the SELECTOR**: a wrong aim counts even when the causal veto stops it pre-shift (an executed-keyed metric would read a flattering 100% there) |
 | **Mean stages-to-mitigate** | FSM stages emitted on a successful mitigation |
 | **Accuracy** + confusion matrix | decided == ground truth |
 
@@ -43,7 +44,9 @@ and is excluded from any gate):
    5/11 and has a named gap on 6/11). Each gap is registered below *before* v3 exists, with the phase
    that closes it — so the scorecard is a roadmap, not a deck-stacking exercise. Three cases
    (`coincident_dependency_outage`, `low_traffic_blip`, `no_healthy_target`) are explicit **judgment
-   calls** whose label rationale is in `agent/tests/bench/fixtures.py` and below.
+   calls** whose label rationale is in `agent/tests/bench/fixtures.py` and below. The corpus grew
+   with the roadmap (11 → 17 in v3, 20 in v4 with the `bad_bad` target-correctness family); each
+   section below states the corpus size its numbers were computed on.
 
 ## Baseline scorecard — 5xx-signal deterministic floor (LLM off)
 
@@ -128,6 +131,11 @@ revision — so a rollback is futile → **ESCALATE without the wasted traffic s
 *confident*-unhealthy target blocks (Wilson gate over N probes); a transient/flaky/errored probe →
 INCONCLUSIVE → **proceed with the rollback** (a legitimate rollback is never blocked).
 
+_(v3-era corpus, 17 cases — the v4 bad→bad cases below change the denominators and deliberately
+recalibrate the "recall UNCHANGED" invariant: a veto of a rollback AIMED at a landmine is the check
+working, so the safety guard is now "never block a rollback aimed at a HEALTHY target" + a committed
+recall ratchet — see the v4 section.)_
+
 | Metric | 5xx,latency (causal off) | **+ causal** | What moved |
 |---|---|---|---|
 | Rollback precision | 75% (6/8) | **100% (6/6)** | both external-cause outages stop rolling back |
@@ -147,6 +155,36 @@ pre-action reason. It adds **no** new correctness class for stateful/data-migrat
 GET probe doesn't exercise a mutation). Deterministic + LLM-free (`causal.py` under the AST invariant);
 default OFF (demo unchanged). The gcp target-probe (tag-at-0% + probe + restore) is implemented,
 defensive (any error → proceed), and OPT-IN — not live-verified this session.
+
+## Target correctness — v4 Phase 1 (the serving-history ledger)
+
+_Regenerate: `--write` in each mode. Corpus: **20 cases** (the 17 above + the `bad_bad` family).
+The v4 marquee claim is about the rollback **TARGET**: "roll back to a known-good revision" was
+recency-as-proxy ("newest ready 0-traffic"), which a **bad→bad deploy sequence defeats** — ship
+broken R12, panic-ship broken R11: recency aims at R11, the second landmine, even when an older R9
+was WITNESSED serving healthily. The action-only scorecard **cannot see this miss** (the wrong-target
+rollback still reads "ROLLBACK ✓"), which is why v4 adds the target dimension._
+
+Three committed cases, one world (newest serving bad · newer-ready landmine · older witnessed-good):
+
+| case | ledger | aims at | causal OFF outcome | causal ON outcome |
+|---|---|---|---|---|
+| `bad_bad_ledger_heals` | **warm** (R9 witnessed) | R9 ✓ `[ledger]` | **mitigated** | **mitigated** (live probe agrees) |
+| `bad_bad_cold_ledger` | cold (the pre-v4 control) | landmine ✗ `[recency]` | **WASTED rollback** (shift → fail verify → escalate) | **vetoed pre-shift → ESCALATE** — safe, but a human is paged though a proven-good revision exists |
+| `bad_deploy_newest_is_witnessed` | warm, newest IS witnessed | same as recency ✓ | mitigated | mitigated (negative control: no distortion of the common case) |
+
+Committed numbers: target correctness **6/7 (5xx floor)** and **8/9 (multisignal)** — the single ✗
+in every mode is the deliberate cold-start control; the warm ledger case converts its ESCALATE into
+an autonomous heal onto the witnessed-good revision.
+
+**Honesty:** the ledger only **PROPOSES** — the live causal pre-check still probes whatever target is
+selected before any traffic shifts (a stale witness is vetoed live; pinned by
+`test_stale_ledger_entry_cannot_bypass_the_live_probe`). Cold start falls back to recency,
+byte-identical to v3. "Witnessed-healthy" means *observed serving healthily at witness time* (a PASS
+or zero-5xx no-op run, or a `_verify`-proven mitigation target) — not a guarantee about now. The old
+"recall UNCHANGED by causal" invariant was recalibrated (a veto of a landmine-AIMED rollback is
+correct): the committed guard is now *never block a rollback aimed at a healthy-modeled target* plus
+a recall ratchet against the committed causal scorecards.
 
 ## How Phases 1–2 use this (the TDD loop)
 

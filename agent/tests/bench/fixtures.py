@@ -28,12 +28,19 @@ Action = Literal["ROLLBACK", "OBSERVE", "ESCALATE"]
 @dataclass(frozen=True)
 class BenchCase:
     name: str
-    category: str                 # crash | latency | saturation | slo_burn | dependency | blip | healthy | stuck
+    category: str                 # crash | latency | saturation | slo_burn | dependency | blip | healthy | stuck | bad_bad
     description: str
     world: dict                   # see FixtureBackend for the consumed fields
     expected_action: Action       # GROUND TRUTH: the action a correct agent should take
     is_bad_deploy: bool           # was this a deploy-caused regression that warranted a rollback?
     rationale: str                # WHY this label (esp. for the judgment-call cases) — committed honesty
+    expected_target: str | None = None   # GROUND TRUTH rollback target (v4): the revision a correct
+                                         # agent should aim the rollback at. Only set when
+                                         # expected_action == ROLLBACK; scored as TARGET-correctness.
+
+
+_GOOD = "airbag-target-00001-good"   # the healthy prior in _bad_and_good — every 2-revision
+                                     # ROLLBACK case's ground-truth target (the only candidate)
 
 
 # Two ready revisions: a bad one serving 100% and a healthy prior at 0% (a valid rollback target).
@@ -60,6 +67,23 @@ _KEYERROR_TRACE = ('Traceback (most recent call last):\n  File "main.py", line 5
                    "    ... total_revenue(ORDERS, buggy=True)\n  File \"main.py\", line 46, in "
                    "total_revenue\n    return sum(o[key] for o in orders)\nKeyError: 'amount'")
 
+# The bad→bad (v4 target-correctness) world: newest serving is bad, the newest READY 0-traffic
+# revision is a SECOND bad deploy (the landmine recency would aim at), and an older revision is
+# the genuinely-good one the ledger has witnessed.
+_BB_LANDMINE = "airbag-target-00011-landmine"
+_BB_GOOD = "airbag-target-00009-good"
+
+
+def _bad_bad_revs(svc: str = "airbag-target") -> list[dict]:
+    return [
+        {"name": f"{svc}-00012-bad", "ready": True, "traffic_percent": 100,
+         "create_time": "2026-07-01T12:00:00Z"},
+        {"name": _BB_LANDMINE, "ready": True, "traffic_percent": 0,
+         "create_time": "2026-07-01T10:00:00Z"},
+        {"name": _BB_GOOD, "ready": True, "traffic_percent": 0,
+         "create_time": "2026-06-30T08:00:00Z"},
+    ]
+
 
 def _lat(slow: int, total: int = 20, n: int = 4) -> list[dict]:
     """N identical latency windows, each with `slow` of `total` requests over the SLO (a SUSTAINED
@@ -74,7 +98,7 @@ CASES: list[BenchCase] = [
         description="Bad revision serving 100%; the business path 5xxs on every request.",
         world={"revisions": _bad_and_good(), "error_rate": 1.0, "sample": {"errs": 20, "total": 20},
                "rollback_clears": True, "logs": [_KEYERROR_TRACE]},
-        expected_action="ROLLBACK", is_bad_deploy=True,
+        expected_action="ROLLBACK", is_bad_deploy=True, expected_target=_GOOD,
         rationale="Unambiguous crash with a healthy prior revision — auto-rollback is correct and "
                   "reversible. The v2 floor catches it (error_rate 1.0 >= 0.05; Wilson FAIL)."),
     BenchCase(
@@ -82,7 +106,7 @@ CASES: list[BenchCase] = [
         description="New revision 5xxs on the majority of requests (0.65), healthy prior exists.",
         world={"revisions": _bad_and_good(), "error_rate": 0.65, "sample": {"errs": 14, "total": 20},
                "rollback_clears": True, "logs": [_KEYERROR_TRACE]},
-        expected_action="ROLLBACK", is_bad_deploy=True,
+        expected_action="ROLLBACK", is_bad_deploy=True, expected_target=_GOOD,
         rationale="High, statistically-confident 5xx rate above BOTH the heuristic (0.05) and the "
                   "live-LLM (0.5) thresholds — a clean rollback anchor that doesn't depend on which "
                   "decider is used."),
@@ -122,7 +146,7 @@ CASES: list[BenchCase] = [
         world={"revisions": _bad_and_good(), "error_rate": 0.0, "sample": {"errs": 0, "total": 20},
                "rollback_clears": True, "baseline_latency_ms": 320,
                "latency_windows": _lat(18, 20)},   # 18/20 requests over SLO, sustained across 4 windows
-        expected_action="ROLLBACK", is_bad_deploy=True,
+        expected_action="ROLLBACK", is_bad_deploy=True, expected_target=_GOOD,
         rationale="Canonical out-of-window bad deploy. 5xx-only MISSES it (sample 0/20 -> heuristic + "
                   "Wilson both blind -> OBSERVE); the Phase 1.2 latency detector confidently FAILs "
                   "(18/20 over SLO across 4 windows) and the promotion drives a rollback."),
@@ -133,7 +157,7 @@ CASES: list[BenchCase] = [
         world={"revisions": _bad_and_good(), "error_rate": 0.0, "sample": {"errs": 0, "total": 20},
                "rollback_clears": True, "baseline_latency_ms": 320,
                "latency_windows": _lat(8, 20)},    # 8/20 over SLO — still Wilson-confident, sustained
-        expected_action="ROLLBACK", is_bad_deploy=True,
+        expected_action="ROLLBACK", is_bad_deploy=True, expected_target=_GOOD,
         rationale="A second latency positive at a different magnitude, so recall can't be an artifact "
                   "of one fixture hand-matched to the threshold. Multi-signal catches it; 5xx misses."),
     BenchCase(
@@ -163,7 +187,7 @@ CASES: list[BenchCase] = [
         description="CPU 98% / mem 95% / instance pressure; only sporadic 5xx (1%).",
         world={"revisions": _bad_and_good(), "error_rate": 0.01, "sample": {"errs": 0, "total": 20},
                "rollback_clears": True, "saturation": {"cpu": 0.98, "mem": 0.95}},
-        expected_action="ROLLBACK", is_bad_deploy=True,
+        expected_action="ROLLBACK", is_bad_deploy=True, expected_target=_GOOD,
         rationale="Resource saturation from a bad deploy. Pre-registered RECALL GAP: error_rate 0.01 "
                   "< 0.05 -> v2 OBSERVEs. Phase 1's saturation detector closes this."),
     BenchCase(
@@ -171,7 +195,7 @@ CASES: list[BenchCase] = [
         description="Sustained 3% error budget burn — individually sub-threshold, but burning SLO over hours.",
         world={"revisions": _bad_and_good(), "error_rate": 0.03, "sample": {"errs": 1, "total": 40},
                "rollback_clears": True, "logs": [_KEYERROR_TRACE]},
-        expected_action="ROLLBACK", is_bad_deploy=True,
+        expected_action="ROLLBACK", is_bad_deploy=True, expected_target=_GOOD,
         rationale="A slow burn below the instant 5% threshold but exhausting the error budget. "
                   "Pre-registered RECALL GAP: v2's single-window 0.05 check OBSERVEs. Phase 1's "
                   "multi-window burn-rate detector closes this."),
@@ -210,7 +234,7 @@ CASES: list[BenchCase] = [
         world={"revisions": _bad_and_good(), "error_rate": 0.75, "sample": {"errs": 15, "total": 20},
                "rollback_clears": True, "target_probe": {"errs": 0, "total": 8},
                "logs": [_KEYERROR_TRACE]},
-        expected_action="ROLLBACK", is_bad_deploy=True,
+        expected_action="ROLLBACK", is_bad_deploy=True, expected_target=_GOOD,
         rationale="ANTI-REGRESSION: the causal check must not turn a genuine bad deploy into an escalate. "
                   "Target probes HEALTHY (0/8) → CAUSAL/INCONCLUSIVE → PROCEED → ROLLBACK, with the "
                   "causal check ON."),
@@ -221,10 +245,54 @@ CASES: list[BenchCase] = [
         world={"revisions": _bad_and_good(), "error_rate": 0.75, "sample": {"errs": 15, "total": 20},
                "rollback_clears": True, "target_probe": {"errs": 2, "total": 8},
                "logs": [_KEYERROR_TRACE]},
-        expected_action="ROLLBACK", is_bad_deploy=True,
+        expected_action="ROLLBACK", is_bad_deploy=True, expected_target=_GOOD,
         rationale="SAFETY: a transient/cold-start blip on the target (2/8, below CAUSAL_MIN_ERRORS/CI) "
                   "must resolve to INCONCLUSIVE → PROCEED, never a confident-false COINCIDENT that would "
                   "block a legitimate rollback (protecting a bad revision is the worst failure)."),
+
+    # --- v4 TARGET-correctness: bad→bad deploys — recency aims at a landmine; the serving-history
+    # ledger aims at the witnessed-good revision. World: THREE revisions — newest serving (bad),
+    # a newer-ready 0-traffic LANDMINE (also bad: the panic-ship), an older witnessed-good.
+    # `witnessed` seeds the ledger pre-run; `clears_on`/`target_probes` make outcomes and probes
+    # PER-REVISION (rolling onto the landmine does not clear; probing it shows it degraded).
+    BenchCase(
+        name="bad_bad_ledger_heals", category="bad_bad",
+        description="Two consecutive bad deploys (ship broken, panic-ship broken again). The newest "
+                    "ready 0-traffic revision is the second landmine; an OLDER revision was "
+                    "witnessed serving healthily. The ledger must aim the rollback at it.",
+        world={"revisions": _bad_bad_revs(), "error_rate": 0.9, "sample": {"errs": 18, "total": 20},
+               "witnessed": [_BB_GOOD], "clears_on": [_BB_GOOD],
+               "target_probes": {_BB_LANDMINE: {"errs": 8, "total": 8}},
+               "logs": [_KEYERROR_TRACE]},
+        expected_action="ROLLBACK", is_bad_deploy=True, expected_target=_BB_GOOD,
+        rationale="THE v4 MARQUEE POSITIVE: recency-as-last-good is defeated by a bad→bad sequence "
+                  "(it aims at the landmine — see bad_bad_cold_ledger, the matched pre-v4 control); "
+                  "the witnessed-healthy ledger aims at the proven-good older revision, the live "
+                  "causal probe agrees, and the heal is autonomous. Scored on TARGET, not just action."),
+    BenchCase(
+        name="bad_bad_cold_ledger", category="bad_bad",
+        description="The SAME bad→bad world with a COLD ledger (no witnessed history) — the pre-v4 "
+                    "behavior: recency aims the rollback at the landmine.",
+        world={"revisions": _bad_bad_revs(), "error_rate": 0.9, "sample": {"errs": 18, "total": 20},
+               "clears_on": [_BB_GOOD],
+               "target_probes": {_BB_LANDMINE: {"errs": 8, "total": 8}},
+               "logs": [_KEYERROR_TRACE]},
+        expected_action="ROLLBACK", is_bad_deploy=True, expected_target=_BB_GOOD,
+        rationale="THE MATCHED CONTROL (committed proof of the OLD behavior): cold start falls back "
+                  "to recency, which lands on the landmine — causal OFF: a WASTED rollback (shift, "
+                  "fail verify, escalate); causal ON: the live probe vetoes and a human is paged "
+                  "even though a proven-good revision exists. Either way the TARGET is wrong — the "
+                  "dimension the action-only scorecard could not see. The ledger case above heals."),
+    BenchCase(
+        name="bad_deploy_newest_is_witnessed", category="bad_bad",
+        description="NEGATIVE CONTROL: one bad deploy over a healthy-newest baseline that IS "
+                    "witnessed — the ledger and recency agree on the same target.",
+        world={"revisions": _bad_and_good(), "error_rate": 0.9, "sample": {"errs": 18, "total": 20},
+               "witnessed": [_GOOD], "rollback_clears": True, "logs": [_KEYERROR_TRACE]},
+        expected_action="ROLLBACK", is_bad_deploy=True, expected_target=_GOOD,
+        rationale="Anti-distortion guard: when the newest ready candidate IS the witnessed-good one "
+                  "(the common case), the ledger picks exactly what recency picks — no behavior "
+                  "change, same heal, target correct either way."),
 
     # --- v2 floor OVER-ESCALATES: thin-evidence paging -> Phase 3 verifier / better evidence --------
     BenchCase(
