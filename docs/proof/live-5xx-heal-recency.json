@@ -1,0 +1,101 @@
+{
+    "bundle": {
+        "incident_id": "inc-eb3daee9",
+        "service": "airbag-target",
+        "status": "mitigated",
+        "decision": {
+            "action": "ROLLBACK",
+            "confidence": 1.0,
+            "reasoning": "statistical gate FAIL \u2014 5xx 5xx rate 100.0% (20/20); 95% CI lower bound 83.9% > baseline 1.0% \u2014 confidently elevated; promoted a rollback (deterministic multi-signal verdict, not the LLM). The service 'airbag-target' is experiencing a critical 100% 5xx error rate, directly correlated with revision 'airbag-target-00022-7bf'. However, a safe automated rollback is not possible as there is no identified previous healthy revision to roll back to. Revisions 'airbag-target-00023-ws6' and 'airbag-target-00024-5kp' were created after the problematic revision and are not serving traffic, so their health cannot be confirmed. Following the rule 'Prefer ROLLBACK only when one revision clearly correlates with new 5xx errors AND a previous healthy revision exists. Otherwise OBSERVE', the appropriate action is OBSERVE, indicating that further investigation is required.",
+            "_source": "gemini-adk:gemini-2.5-flash"
+        },
+        "detection": {
+            "verdict": "FAIL",
+            "reason": "5xx 5xx rate 100.0% (20/20); 95% CI lower bound 83.9% > baseline 1.0% \u2014 confidently elevated",
+            "signals": {
+                "5xx": {
+                    "verdict": "FAIL",
+                    "reason": "5xx rate 100.0% (20/20); 95% CI lower bound 83.9% > baseline 1.0% \u2014 confidently elevated"
+                },
+                "latency": {
+                    "verdict": "PASS",
+                    "reason": "latency ok: 0/4 windows over SLO (< 3-window debounce)"
+                }
+            },
+            "rate": 1.0
+        },
+        "causal": {
+            "verdict": "INCONCLUSIVE",
+            "msg": "INCONCLUSIVE \u2014 rollback target airbag-target-00024-5kp is not confidently degraded (0/8 probe failures) \u2014 proceeding with the rollback"
+        },
+        "reversibility": null,
+        "recovery": {
+            "error_before": 1.0,
+            "error_after": 0.0,
+            "rolled_back_to": "airbag-target-00024-5kp",
+            "restored_to": null,
+            "recovery_seconds": 81.55023312568665
+        },
+        "fix_pr": "https://github.com/JasonYeYuhe/cloud-run-airbag/pull/8",
+        "transitions": [
+            {
+                "stage": "RUN_START",
+                "ts": 1782967446.6999784
+            },
+            {
+                "stage": "RECEIVED",
+                "ts": 1782967446.7007613
+            },
+            {
+                "stage": "TRIAGED",
+                "ts": 1782967448.5871892
+            },
+            {
+                "stage": "ANALYZED",
+                "ts": 1782967449.7821198
+            },
+            {
+                "stage": "ADK",
+                "ts": 1782967507.9339046
+            },
+            {
+                "stage": "DECISION",
+                "ts": 1782967507.9345534
+            },
+            {
+                "stage": "CAUSAL",
+                "ts": 1782967518.1722548
+            },
+            {
+                "stage": "ROLLBACK_APPLIED",
+                "ts": 1782967523.6777062
+            },
+            {
+                "stage": "VERIFYING",
+                "ts": 1782967524.7736878
+            },
+            {
+                "stage": "MITIGATED",
+                "ts": 1782967528.2502115
+            },
+            {
+                "stage": "FIX_PR",
+                "ts": 1782967528.8089025
+            },
+            {
+                "stage": "CI_WATCH",
+                "ts": 1782967528.8099942
+            },
+            {
+                "stage": "PENDING_REVERT",
+                "ts": 1782967528.9236825
+            },
+            {
+                "stage": "CI_WATCH",
+                "ts": 1782967529.1956596
+            }
+        ]
+    },
+    "digest": "sha256:9013e1dcb09224622d3000bd93c264b30b807d6b32b5ccce622ca10c4319dac7",
+    "note": "content digest \u2014 tamper-evident (recompute sha256 over the canonical bundle to verify integrity); NOT a cryptographic signature / authorship claim"
+}

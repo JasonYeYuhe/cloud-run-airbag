@@ -1,0 +1,97 @@
+{
+    "bundle": {
+        "incident_id": "inc-7d266764",
+        "service": "airbag-target",
+        "status": "mitigated",
+        "decision": {
+            "action": "ROLLBACK",
+            "confidence": 1.0,
+            "reasoning": "statistical gate FAIL \u2014 latency latency: 4/4 recent windows confidently over the SLO; promoted a rollback (deterministic multi-signal verdict, not the LLM); target airbag-target-00024-5kp is WITNESSED-healthy (serving-history ledger). The service 'airbag-target' in region 'asia-northeast1' has an observed 5xx error rate of 0% and 0 errors in the last 5 minutes. There is no correlation between any revision and new 5xx errors.",
+            "_source": "gemini-adk:gemini-2.5-flash"
+        },
+        "detection": {
+            "verdict": "FAIL",
+            "reason": "latency latency: 4/4 recent windows confidently over the SLO",
+            "signals": {
+                "latency": {
+                    "verdict": "FAIL",
+                    "reason": "latency: 4/4 recent windows confidently over the SLO"
+                },
+                "5xx": {
+                    "verdict": "INCONCLUSIVE",
+                    "reason": "5xx rate 0.0% (0/20); 95% CI [0.0%,16.1%] straddles baseline 1.0% or too few errors (<3)"
+                }
+            },
+            "rate": 0.0
+        },
+        "causal": {
+            "verdict": "INCONCLUSIVE",
+            "msg": "INCONCLUSIVE \u2014 rollback target airbag-target-00024-5kp is not confidently degraded (0/8 probe failures, 0/8 slow) \u2014 proceeding with the rollback"
+        },
+        "reversibility": null,
+        "recovery": {
+            "error_before": 1.0,
+            "error_after": 0.0,
+            "rolled_back_to": "airbag-target-00024-5kp",
+            "restored_to": null,
+            "recovery_seconds": 133.0598623752594
+        },
+        "fix_pr": null,
+        "transitions": [
+            {
+                "stage": "RUN_START",
+                "ts": 1782969196.7837515
+            },
+            {
+                "stage": "RECEIVED",
+                "ts": 1782969196.784331
+            },
+            {
+                "stage": "TRIAGED",
+                "ts": 1782969199.1556072
+            },
+            {
+                "stage": "ANALYZED",
+                "ts": 1782969265.9160542
+            },
+            {
+                "stage": "ADK",
+                "ts": 1782969304.0260572
+            },
+            {
+                "stage": "DECISION",
+                "ts": 1782969304.0266745
+            },
+            {
+                "stage": "RECURRING",
+                "ts": 1782969304.0513556
+            },
+            {
+                "stage": "CAUSAL",
+                "ts": 1782969315.1526833
+            },
+            {
+                "stage": "ROLLBACK_APPLIED",
+                "ts": 1782969325.7712212
+            },
+            {
+                "stage": "VERIFYING",
+                "ts": 1782969326.854767
+            },
+            {
+                "stage": "MITIGATED",
+                "ts": 1782969329.8436139
+            },
+            {
+                "stage": "FIX_PR",
+                "ts": 1782969330.0131428
+            },
+            {
+                "stage": "PENDING_REVERT",
+                "ts": 1782969330.0966108
+            }
+        ]
+    },
+    "digest": "sha256:8c9ca421f852a69f658a65173859a9ec26b8a8bd4877e93f9ebfa36156b692e3",
+    "note": "content digest \u2014 tamper-evident (recompute sha256 over the canonical bundle to verify integrity); NOT a cryptographic signature / authorship claim"
+}
