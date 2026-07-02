@@ -145,9 +145,13 @@ def require_demo_token(request: Request) -> None:
 def _burst(path: str, n: int) -> None:
     """Generate real traffic (→ real 5xx) against the target so Cloud Logging/Monitoring
     detect the fault. On gcp 'break' only shifts traffic; these are the failing user
-    requests a real incident would produce."""
+    requests a real incident would produce.
+
+    v5 Phase 1.2 PIN: this client is DELIBERATELY UNMARKED — it SIMULATES USERS, not Airbag's
+    diagnostics. Marking it with config.PROBE_HEADERS would make the self-traffic exclusion hide the
+    very outage the demo is creating. The probe-marking guard test asserts _burst stays unmarked."""
     base = config.TARGET_BASE_URL.rstrip("/")
-    with httpx.Client(timeout=5.0) as c:
+    with httpx.Client(timeout=5.0) as c:  # v5 1.2: UNMARKED on purpose — simulates USERS (see docstring)
         for _ in range(n):
             try:
                 c.get(base + path)

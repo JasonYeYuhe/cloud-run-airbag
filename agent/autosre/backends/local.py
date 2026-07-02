@@ -20,7 +20,7 @@ def _url(path: str) -> str:
 def _sample(n: int | None = None) -> tuple[int, int]:
     n = n or config.ERROR_SAMPLE_N
     errs = total = 0
-    with httpx.Client(timeout=3.0) as c:
+    with httpx.Client(timeout=3.0, headers=config.PROBE_HEADERS) as c:
         for _ in range(n):
             total += 1
             try:
@@ -70,7 +70,7 @@ def sample_business_path(service: str, region: str, n: int = 20) -> dict:
 def synthetic_probe(service: str, path: str = "/healthz") -> dict:
     import time
     try:
-        with httpx.Client(timeout=5.0) as c:  # > the slow-fault delay so a slow SUCCESS is timed, not dropped
+        with httpx.Client(timeout=5.0, headers=config.PROBE_HEADERS) as c:  # v5 1.2 mark; timeout > slow-fault delay
             t0 = time.monotonic()
             r = c.get(_url(path))
             elapsed_ms = (time.monotonic() - t0) * 1000.0
@@ -81,7 +81,7 @@ def synthetic_probe(service: str, path: str = "/healthz") -> dict:
 
 
 def rollback_traffic_to_revision(service: str, region: str, revision: str) -> dict:
-    with httpx.Client(timeout=3.0) as c:
+    with httpx.Client(timeout=3.0, headers=config.PROBE_HEADERS) as c:
         c.post(_url("/__fault/off"))
     return {"status": "success", "service": service, "active_revision": revision,
             "note": "local: fault cleared = traffic shifted to healthy revision"}
@@ -89,14 +89,14 @@ def rollback_traffic_to_revision(service: str, region: str, revision: str) -> di
 
 # --- demo harness: toggle the runtime KeyError fault on the local target-app ---------
 def break_target(service: str, region: str, prefer: str = "bug") -> dict:
-    with httpx.Client(timeout=3.0) as c:
+    with httpx.Client(timeout=3.0, headers=config.PROBE_HEADERS) as c:
         c.post(_url(f"/__fault/{prefer}"))   # 'bug' (KeyError) or 'slow' (latency regression)
     return {"status": "success", "service": service,
             "active_revision": f"{service}-00002-bad", "fault": prefer}
 
 
 def reset_target(service: str, region: str) -> dict:
-    with httpx.Client(timeout=3.0) as c:
+    with httpx.Client(timeout=3.0, headers=config.PROBE_HEADERS) as c:
         c.post(_url("/__fault/off"))
     return {"status": "success", "service": service,
             "active_revision": f"{service}-00001-good"}
@@ -105,7 +105,7 @@ def reset_target(service: str, region: str) -> dict:
 def set_traffic_split(service: str, region: str, splits: dict, tag_revision: str | None = None) -> dict:
     # local target is a single process — model the canary by clearing the fault once the fix
     # gets any traffic (so the probe/error-rate read healthy at each stage).
-    with httpx.Client(timeout=3.0) as c:
+    with httpx.Client(timeout=3.0, headers=config.PROBE_HEADERS) as c:
         c.post(_url("/__fault/off"))
     return {"status": "success", "service": service, "traffic": dict(splits)}
 
@@ -125,7 +125,7 @@ def probe_revision_health(service: str, region: str, revision: str, n: int = 8) 
     import time
     slo_ms = config.LATENCY_SLO_ABS_MS
     errs = total = slow = 0
-    with httpx.Client(timeout=10.0) as c:
+    with httpx.Client(timeout=10.0, headers=config.PROBE_HEADERS) as c:  # v5 1.2: mark Airbag's own traffic
         for _ in range(n):
             total += 1
             t0 = time.monotonic()

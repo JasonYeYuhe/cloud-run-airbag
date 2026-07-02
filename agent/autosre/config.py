@@ -87,6 +87,23 @@ STORM_COALESCE = _bool("AIRBAG_STORM_COALESCE", "false")
 # HEAL_LEASE_S) so a live leader is never taken over mid-run; a settle re-aims the clock explicitly.
 SERVICE_HEAL_LEASE_S = float(os.getenv("AIRBAG_SERVICE_HEAL_LEASE_S", "900"))
 
+# Observer-safe diagnostics (v5 Phase 1.2). Every diagnostic/probe request Airbag makes to a target
+# carries this marker so its OWN traffic is distinguishable from users'. On 2026-07-02 the causal
+# probe's 8 requests against a broken 0%-traffic target produced 8 REAL 5xx that fired the very Cloud
+# Monitoring alert being diagnosed. The UA lands in Cloud Run request logs (httpRequest.userAgent), so
+# the log-scan detection COUNT + an additive log-based alert metric (infra/alert-setup-v2.sh) can
+# EXCLUDE it. (_burst in app.py stays UNMARKED — it SIMULATES USERS; never mark it.) The marker
+# identifies ALL of Airbag's target-bound httpx traffic (probes AND local control POSTs), so no
+# backend request can be mistaken for a user's — enforced by the probe-marking guard test.
+PROBE_UA = os.getenv("AIRBAG_PROBE_UA", "airbag-probe/1")
+PROBE_HEADERS = {"User-Agent": PROBE_UA, "X-Airbag-Probe": "1"}
+# Exclude Airbag's own marked probe traffic from the log-scan 5xx COUNT (query_error_rate). Default
+# OFF so detection/demo stays byte-identical until flipped. HONESTY SCOPE (Gemini review): covers the
+# DETECTION/COUNT path only — app-emitted tracebacks (fetch_error_logs) and the built-in console 5xx
+# metric are OUT of scope (a probe-triggered traceback is byte-identical to a user one; no decision
+# keys on trace COUNTS, and the built-in request_count metric can't filter on a header at all).
+SELF_TRAFFIC_EXCLUDE = _bool("AIRBAG_SELF_TRAFFIC_EXCLUDE", "false")
+
 # local backend: where the target-app is reachable
 TARGET_BASE_URL = os.getenv("TARGET_BASE_URL", "http://localhost:8081")
 # demo harness (gcp): after 'break' shifts traffic to the bad revision, generate this many

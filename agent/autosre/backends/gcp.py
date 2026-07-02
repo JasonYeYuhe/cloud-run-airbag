@@ -66,6 +66,22 @@ def list_cloud_run_revisions(service: str, region: str) -> dict:
     return {"service": service, "revisions": revs, "uri": svc.uri}
 
 
+def _error_rate_filter(service: str, region: str, start: datetime.datetime) -> str:
+    """The Cloud Logging filter for the 5xx COUNT — pure + unit-testable (v5 Phase 1.2) so the
+    self-traffic exclusion is provable without a live Logging client. With SELF_TRAFFIC_EXCLUDE on,
+    Airbag's OWN marked probe 5xx (a prior heal's causal/triage probes) are excluded from THIS heal's
+    COUNT — the self-poisoning observed on 2026-07-02. `NOT field="..."` (not `!=`) so a request log
+    missing userAgent is KEPT, never wrongly dropped. Scope: this log-scan COUNT path only (see the
+    config.SELF_TRAFFIC_EXCLUDE honesty note — tracebacks + the built-in console metric are out)."""
+    flt = (f'resource.type="cloud_run_revision" '
+           f'resource.labels.service_name="{service}" '
+           f'resource.labels.location="{region}" '
+           f'httpRequest.status>=500 timestamp>="{start.strftime("%Y-%m-%dT%H:%M:%SZ")}"')
+    if config.SELF_TRAFFIC_EXCLUDE:
+        flt += f' NOT httpRequest.userAgent="{config.PROBE_UA}"'
+    return flt
+
+
 def query_error_rate(service: str, region: str, window_minutes: int = 5,
                      since_epoch: float | None = None) -> dict:
     """5xx presence from Cloud Logging. `since_epoch` (set during verify) anchors the
@@ -78,10 +94,7 @@ def query_error_rate(service: str, region: str, window_minutes: int = 5,
     else:
         start = (datetime.datetime.now(datetime.timezone.utc)
                  - datetime.timedelta(minutes=window_minutes))
-    flt = (f'resource.type="cloud_run_revision" '
-           f'resource.labels.service_name="{service}" '
-           f'resource.labels.location="{region}" '
-           f'httpRequest.status>=500 timestamp>="{start.strftime("%Y-%m-%dT%H:%M:%SZ")}"')
+    flt = _error_rate_filter(service, region, start)
     client = cloud_logging.Client(project=config.GCP_PROJECT)
     errs = sum(1 for _ in client.list_entries(
         filter_=flt, resource_names=[f"projects/{config.GCP_PROJECT}"], max_results=50))
@@ -106,7 +119,7 @@ def _active_sample(service: str, n: int = 8) -> tuple[int, int]:
     except Exception:  # noqa: BLE001
         return 0, 0
     errs = 0
-    with httpx.Client(timeout=5.0) as c:
+    with httpx.Client(timeout=5.0, headers=config.PROBE_HEADERS) as c:  # v5 1.2: mark Airbag's own traffic
         for _ in range(n):
             try:
                 if c.get(uri).status_code >= 500:
@@ -161,7 +174,7 @@ def sample_latency_windows(service: str, region: str, windows: int = 4, per_wind
         return [{"slow": 0, "total": 0} for _ in range(windows)]
     slo_ms = config.LATENCY_SLO_ABS_MS  # absolute SLO floor (baseline-relative refinement is a follow-up)
     out: list[dict] = []
-    with httpx.Client(timeout=10.0) as c:
+    with httpx.Client(timeout=10.0, headers=config.PROBE_HEADERS) as c:  # v5 1.2: mark Airbag's own traffic
         for _ in range(windows):
             slow = total = 0
             for _ in range(per_window):
@@ -208,7 +221,7 @@ def probe_revision_health(service: str, region: str, revision: str, n: int = 8) 
         full = uri.rstrip("/") + config.PROBE_PATH
         slo_ms = config.LATENCY_SLO_ABS_MS
         errs = ok = slow = 0
-        with httpx.Client(timeout=10.0) as c:
+        with httpx.Client(timeout=10.0, headers=config.PROBE_HEADERS) as c:  # v5 1.2: mark Airbag's own traffic
             # WARMUP RINSE (Phase-2 review, MAJOR): the target is scaled to zero (0% traffic), so
             # the first request systematically includes instance boot + new-tag-hostname TLS — a
             # slow SUCCESS that is cold start, not latency evidence. One untimed, uncounted request
@@ -255,7 +268,8 @@ def synthetic_probe(service: str, path: str | None = None) -> dict:
     path = path or config.PROBE_PATH
     try:
         uri = _get_service(service, config.GCP_REGION).uri
-        with httpx.Client(timeout=10.0) as c:  # > the slow-fault delay so a slow SUCCESS is timed, not dropped
+        # v5 1.2: mark Airbag's own traffic. timeout > the slow-fault delay so a slow SUCCESS is timed, not dropped
+        with httpx.Client(timeout=10.0, headers=config.PROBE_HEADERS) as c:
             t0 = time.monotonic()
             r = c.get(uri.rstrip("/") + path)
             elapsed_ms = (time.monotonic() - t0) * 1000.0
@@ -336,7 +350,7 @@ def probe_candidate(service: str, region: str, revision: str, n: int = 6) -> dic
         uri = uri or svc.uri  # last resort: load-balanced service URL
         full = uri.rstrip("/") + config.PROBE_PATH
         errs = 0
-        with httpx.Client(timeout=5.0) as c:
+        with httpx.Client(timeout=5.0, headers=config.PROBE_HEADERS) as c:  # v5 1.2: mark Airbag's own traffic
             for _ in range(n):
                 try:
                     if c.get(full).status_code >= 500:
