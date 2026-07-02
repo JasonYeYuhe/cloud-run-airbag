@@ -65,7 +65,7 @@ Gemini fix-PR; alert-driven; secure scoped token). This plan covers what's left.
 12. ~~**Per-incident Artifact**~~ ✅ **Done** — `incidents.py` + `report.py`: each run persisted and
     rendered at `/incidents/{id}/report` (decision, signals, before/after, timeline); linked from the dashboard.
 13. **Tests**: unit-test the gcp traffic-resolution (LATEST → newest) + a local-backend integration test;
-    expand CI beyond the mock smoke test. *(249 tests; gcp backend incl. traffic-etag retry, decision gate, webhooks incl. header-only auth, CI-retry prompt, egress-disabled sandbox, Airbag-Bench, AST architecture-invariant, signal-aware verify/remediation, the v4 serving-history ledger + target selection, latency-axis causal probe, reversibility guard, firestore-emulator job + lint now covered.)*
+    expand CI beyond the mock smoke test. *(254 tests; gcp backend incl. traffic-etag retry, decision gate, webhooks incl. header-only auth, CI-retry prompt, egress-disabled sandbox, Airbag-Bench, AST architecture-invariant, signal-aware verify/remediation, the v4 serving-history ledger + target selection, latency-axis causal probe, reversibility guard, firestore-emulator job + lint now covered.)*
 
 ## Risks / watch-items
 - Fine-grained GitHub token **expires 2026-07-28** — fine for the hackathon, note for after.
