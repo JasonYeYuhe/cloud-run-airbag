@@ -179,7 +179,9 @@ def probe_revision_health(service: str, region: str, revision: str, n: int = 8) 
     """Probe the rollback TARGET (a non-serving revision) directly for the causal pre-check. Tags it
     at 0% traffic (NON-disruptive — serving traffic is untouched; NOT set_traffic_split, which drops
     0% entries) to get a per-revision URL, probes it n times, then RESTORES the original traffic in a
-    finally. Returns {errs, total}. Defensive: ANY error → {errs:0, total:0}, which causal.py reads as
+    finally. Returns {errs, total, slow} — `slow` (v4 Phase 2) counts SUCCESSFUL responses over the
+    latency SLO, timed per-request, so the causal check can veto a still-slow target for a LATENCY
+    incident. Defensive: ANY error → {errs:0, total:0, slow:0}, which causal.py reads as
     INCONCLUSIVE → PROCEED with the rollback — a probe failure must never block a legitimate rollback.
     OPT-IN (AIRBAG_CAUSAL_CHECK); the demo runs with the causal check off."""
     from google.cloud import run_v2
@@ -195,23 +197,45 @@ def probe_revision_health(service: str, region: str, revision: str, n: int = 8) 
         uri = next((t.uri for t in svc2.traffic_statuses
                     if getattr(t, "tag", "") == _CAUSAL_TAG and getattr(t, "uri", "")), None)
         if not uri:
-            return {"errs": 0, "total": 0}
+            return {"errs": 0, "total": 0, "slow": 0}
         full = uri.rstrip("/") + config.PROBE_PATH
-        errs = ok = 0
+        slo_ms = config.LATENCY_SLO_ABS_MS
+        errs = ok = slow = 0
         with httpx.Client(timeout=10.0) as c:
+            # WARMUP RINSE (Phase-2 review, MAJOR): the target is scaled to zero (0% traffic), so
+            # the first request systematically includes instance boot + new-tag-hostname TLS — a
+            # slow SUCCESS that is cold start, not latency evidence. One untimed, uncounted request
+            # enforces "cold start is not evidence" on the LATENCY axis (the except-drop below
+            # already enforces it on the reachability axis). Without it, 3/8 warmup-slow samples
+            # Wilson-FAIL and would falsely veto a legitimate latency rollback — the worst failure.
+            try:
+                c.get(full)
+            except Exception:  # noqa: BLE001 — the rinse is best-effort by definition
+                pass
             for _ in range(n):
+                t0 = time.monotonic()
                 try:
-                    if c.get(full).status_code >= 500:
+                    r = c.get(full)
+                    dt_ms = (time.monotonic() - t0) * 1000.0
+                    if r.status_code >= 500:
                         errs += 1   # a 5xx STATUS is evidence the target served-and-broke
+                    elif dt_ms > slo_ms:
+                        slow += 1   # a slow SUCCESS is the latency-axis evidence (mirrors
+                                    # sample_latency_windows: 5xx and slow are disjoint counts)
                     ok += 1
                 except Exception:  # noqa: BLE001
                     # UNREACHABLE ≠ degraded: a cold start on the scaled-to-zero last-good target (it
                     # has 0% traffic) or a transient timeout is NO evidence of failure — DROP the
-                    # sample. Counting it would falsely block a legitimate rollback (the worst failure).
+                    # sample. Counting it would falsely block a legitimate rollback (the worst
+                    # failure). HONEST LIMIT: this also bounds the latency veto to slowness UNDER the
+                    # 10s client timeout — a >10s-slow target reads as unreachable → INCONCLUSIVE →
+                    # proceed (pre-Phase-2 behavior; _verify still catches it post-shift). Counting
+                    # ReadTimeouts as slow would make an 8/8-timeout cold start a confident false
+                    # COINCIDENT, which is the worse trade.
                     pass
-        return {"errs": errs, "total": ok}   # all-unreachable -> {0,0} -> INCONCLUSIVE -> proceed
+        return {"errs": errs, "total": ok, "slow": slow}   # all-unreachable -> INCONCLUSIVE -> proceed
     except Exception:  # noqa: BLE001 — never let a causal-probe failure block a rollback
-        return {"errs": 0, "total": 0}
+        return {"errs": 0, "total": 0, "slow": 0}
     finally:
         if original is not None:
             try:

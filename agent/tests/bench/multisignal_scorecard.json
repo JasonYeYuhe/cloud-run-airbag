@@ -1,20 +1,20 @@
 {
   "label": "signals=5xx,latency",
-  "n": 20,
+  "n": 22,
   "rollback_precision": {
-    "num": 9,
-    "den": 11,
-    "value": 0.8182
+    "num": 10,
+    "den": 13,
+    "value": 0.7692
   },
   "rollback_recall": {
-    "num": 9,
-    "den": 11,
-    "value": 0.8182
+    "num": 10,
+    "den": 12,
+    "value": 0.8333
   },
   "false_rollback_rate": {
-    "num": 2,
-    "den": 20,
-    "value": 0.1
+    "num": 3,
+    "den": 22,
+    "value": 0.1364
   },
   "false_escalation_rate": {
     "num": 1,
@@ -22,24 +22,24 @@
     "value": 0.1667
   },
   "wasted_rollback_rate": {
-    "num": 3,
-    "den": 20,
-    "value": 0.15
+    "num": 4,
+    "den": 22,
+    "value": 0.1818
   },
   "accuracy": {
-    "num": 15,
-    "den": 20,
-    "value": 0.75
+    "num": 16,
+    "den": 22,
+    "value": 0.7273
   },
   "target_correctness": {
-    "num": 8,
-    "den": 9,
-    "value": 0.8889
+    "num": 9,
+    "den": 10,
+    "value": 0.9
   },
   "mean_stages_to_mitigate": 10.0,
   "confusion": {
     "ROLLBACK": {
-      "ROLLBACK": 9,
+      "ROLLBACK": 10,
       "OBSERVE": 2,
       "ESCALATE": 0
     },
@@ -49,7 +49,7 @@
       "ESCALATE": 1
     },
     "ESCALATE": {
-      "ROLLBACK": 2,
+      "ROLLBACK": 3,
       "OBSERVE": 0,
       "ESCALATE": 1
     }
@@ -226,6 +226,30 @@
     {
       "name": "intermittent_target",
       "category": "crash",
+      "expected": "ROLLBACK",
+      "decided": "ROLLBACK",
+      "final": "ROLLBACK",
+      "status": "mitigated",
+      "stages": 10,
+      "expected_target": "airbag-target-00001-good",
+      "chosen_target": "airbag-target-00001-good",
+      "target_source": "recency"
+    },
+    {
+      "name": "latency_coincident_slow_target",
+      "category": "dependency",
+      "expected": "ESCALATE",
+      "decided": "ROLLBACK",
+      "final": "ROLLBACK",
+      "status": "escalated",
+      "stages": 9,
+      "expected_target": null,
+      "chosen_target": "airbag-target-00004-prev",
+      "target_source": "recency"
+    },
+    {
+      "name": "latency_target_warmup_blip",
+      "category": "latency",
       "expected": "ROLLBACK",
       "decided": "ROLLBACK",
       "final": "ROLLBACK",

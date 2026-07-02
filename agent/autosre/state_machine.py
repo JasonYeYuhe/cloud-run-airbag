@@ -176,7 +176,9 @@ def _mitigate(service: str, incident_id: str, decision: dict, decision_summary: 
     # Sits at the TOP of _mitigate so it covers L2/L3 auto AND the L1-approved resume, and only runs
     # once a rollback is actually imminent (never before the L0/L1 gate). Default off (demo unchanged).
     if config.CAUSAL_CHECK_ENABLED:
-        c = causal.precheck(service, config.GCP_REGION, target)
+        # the probe is keyed on the TRIGGERING signal (v4 Phase 2): a latency incident also vetoes
+        # a confidently-SLOW target — a 200-but-slow target can't remedy a latency regression.
+        c = causal.precheck(service, config.GCP_REGION, target, primary_signal=primary_signal)
         causal_verdict = c
         emit("CAUSAL", f"{c['verdict']} — {c['reason']}", **{k: c[k] for k in ("verdict", "target") if k in c})
         if c["verdict"] == "COINCIDENT":

@@ -82,14 +82,15 @@ class FixtureBackend:
         return {"ok": ok, "path": path, "status": 200 if ok else 503}
 
     def probe_revision_health(self, service: str, region: str, revision: str, n: int = 8) -> dict:
-        # the fixture's probe MODEL {errs,total} — the causal Wilson math runs for real in-bench.
-        # PER-REVISION first (target_probes — a bad→bad world's landmine probes degraded while the
-        # witnessed-good probes clean), then the whole-world target_probe (an external cause breaks
-        # EVERY revision), then the healthy default (a bad DEPLOY's last-good target is fine).
+        # the fixture's probe MODEL {errs,total,slow} — the causal Wilson math runs for real
+        # in-bench (slow feeds the v4 latency axis; omitted = fast target). PER-REVISION first
+        # (target_probes — a bad→bad world's landmine probes degraded while the witnessed-good
+        # probes clean), then the whole-world target_probe (an external cause breaks EVERY
+        # revision), then the healthy default (a bad DEPLOY's last-good target is fine).
         p = self.world.get("target_probes", {}).get(revision) or self.world.get("target_probe")
         if p is None:
-            return {"errs": 0, "total": n}
-        return {"errs": int(p["errs"]), "total": int(p["total"])}
+            return {"errs": 0, "total": n, "slow": 0}
+        return {"errs": int(p["errs"]), "total": int(p["total"]), "slow": int(p.get("slow", 0))}
 
     def probe_candidate(self, service: str, region: str, revision: str) -> dict:
         ok = self._cleared()

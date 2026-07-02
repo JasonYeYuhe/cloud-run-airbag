@@ -54,8 +54,9 @@ def sample_latency_windows(service: str, region: str, windows: int = 4) -> list[
 
 
 def probe_revision_health(service: str, region: str, revision: str, n: int = 8) -> dict:
-    # the mock's last-good revision is healthy (the mock scenario is a bad DEPLOY, not a dependency)
-    return {"errs": 0, "total": n}
+    # the mock's last-good revision is healthy and fast (the mock scenario is a bad DEPLOY,
+    # not a dependency/latency coincidence)
+    return {"errs": 0, "total": n, "slow": 0}
 
 
 def synthetic_probe(service: str, path: str = "/healthz") -> dict:

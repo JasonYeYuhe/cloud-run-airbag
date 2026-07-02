@@ -45,7 +45,8 @@ and is excluded from any gate):
    that closes it — so the scorecard is a roadmap, not a deck-stacking exercise. Three cases
    (`coincident_dependency_outage`, `low_traffic_blip`, `no_healthy_target`) are explicit **judgment
    calls** whose label rationale is in `agent/tests/bench/fixtures.py` and below. The corpus grew
-   with the roadmap (11 → 17 in v3, 20 in v4 with the `bad_bad` target-correctness family); each
+   with the roadmap (11 → 17 in v3, 22 in v4 with the `bad_bad` target-correctness family + the
+   latency-axis causal cases); each
    section below states the corpus size its numbers were computed on.
 
 ## Baseline scorecard — 5xx-signal deterministic floor (LLM off)
@@ -158,7 +159,22 @@ defensive (any error → proceed), and OPT-IN — not live-verified this session
 
 ## Target correctness — v4 Phase 1 (the serving-history ledger)
 
-_Regenerate: `--write` in each mode. Corpus: **20 cases** (the 17 above + the `bad_bad` family).
+_Regenerate: `--write` in each mode. Corpus: **22 cases** (the 17 above + the `bad_bad` family +
+the two v4 latency-axis causal cases)._
+
+**Latency-axis causal veto (v4 Phase 2).** The v3 target-probe counted only 5xx, so a
+200-but-confidently-slow target passed the pre-check for a *latency* incident and the futile
+rollback shipped (`latency_coincident_slow_target`: multisignal causal-off = a wasted rollback;
+causal-on = **COINCIDENT → ESCALATE with zero traffic shifted**). The probe now returns
+`{errs,total,slow}` and, **only when the triggering signal is latency**, a second Wilson gate on
+the slow-proportion (same knobs as the latency detector) can veto. Safety mirrors the 5xx axis:
+`latency_target_warmup_blip` (2/8 slow, below the bar) still rolls back, and the gcp probe RINSES
+the cold start (one untimed request) so a scaled-to-zero target's boot latency is never counted as
+veto evidence. Honest limits: the veto sees slowness between the SLO and the probe's 10s timeout
+(beyond that: INCONCLUSIVE → proceed, `_verify` backstops); with the veto on, **causal-mode false
+rollbacks are 0 across BOTH external-cause axes** (5xx dependency/quota + slow dependency).
+
+_The v4 TARGET-correctness dimension (below) uses the same corpus._
 The v4 marquee claim is about the rollback **TARGET**: "roll back to a known-good revision" was
 recency-as-proxy ("newest ready 0-traffic"), which a **bad→bad deploy sequence defeats** — ship
 broken R12, panic-ship broken R11: recency aims at R11, the second landmine, even when an older R9

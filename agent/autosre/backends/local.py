@@ -118,5 +118,24 @@ def probe_candidate(service: str, region: str, revision: str, n: int = 5) -> dic
 def probe_revision_health(service: str, region: str, revision: str, n: int = 8) -> dict:
     # the local target is a single process (no per-revision URL), so the "rollback target" health
     # equals the current business-path sample — enough to exercise the causal check locally.
-    errs, total = _sample(n)
-    return {"errs": errs, "total": total}
+    # v4: per-request timing so the latency axis ({slow}) is real here too (a slow SUCCESS counts;
+    # 5xx and slow stay disjoint, mirroring the gcp probe + sample_latency_windows). The timeout is
+    # DELIBERATELY 10s (was 3s via _sample): a slow success must be TIMED as slow, not misread as
+    # an err — a 3-10s response now counts on the latency axis instead of the 5xx axis.
+    import time
+    slo_ms = config.LATENCY_SLO_ABS_MS
+    errs = total = slow = 0
+    with httpx.Client(timeout=10.0) as c:
+        for _ in range(n):
+            total += 1
+            t0 = time.monotonic()
+            try:
+                r = c.get(_url("/api/orders"))
+                dt_ms = (time.monotonic() - t0) * 1000.0
+                if r.status_code >= 500:
+                    errs += 1
+                elif dt_ms > slo_ms:
+                    slow += 1
+            except Exception:  # noqa: BLE001 — local single process: unreachable IS evidence
+                errs += 1
+    return {"errs": errs, "total": total, "slow": slow}

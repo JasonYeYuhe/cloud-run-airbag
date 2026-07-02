@@ -117,13 +117,23 @@ def test_v2_floor_catches_the_clear_crashes():
 # --- 4. MULTI-SIGNAL (Phase 1.2): the latency detector lifts recall WITHOUT regressing precision ---
 def test_multisignal_lifts_recall_without_regressing_precision():
     """The core Phase 1 proof: enabling latency catches the out-of-window latency regressions the
-    5xx-only floor misses, and does NOT increase the false-rollback rate (the §6 guard)."""
+    5xx-only floor misses, and adds no false rollback from DETECTOR noise (the §6 guard —
+    latency_within_slo / latency_spike_transient stay OBSERVE). v4 recalibration: the ONE extra
+    false rollback multisignal may show is `latency_coincident_slow_target` — a CORRECT detection
+    whose rollback is futile for causal reasons the detector can't see (an external slow
+    dependency); it is invisible to 5xx-only mode, and the causal latency-veto closes it
+    (asserted below in test_causal_precheck_eliminates_false_rollbacks)."""
     base = score(run_bench(signals="5xx"))
-    multi = score(run_bench(signals="5xx,latency"))
+    multi_results = run_bench(signals="5xx,latency")
+    multi = score(multi_results)
     assert multi.rollback_recall.value > base.rollback_recall.value, "latency detector must lift recall"
     assert multi.rollback_recall.num >= 4                      # catches both latency regressions
-    assert multi.false_rollback_rate.num <= base.false_rollback_rate.num, "no new false rollbacks"
-    assert multi.rollback_precision.value >= base.rollback_precision.value
+    new_false = ({r.name for r in multi_results if r.final_action == "ROLLBACK"
+                  and r.expected_action != "ROLLBACK"}
+                 - {r.name for r in run_bench(signals="5xx") if r.final_action == "ROLLBACK"
+                    and r.expected_action != "ROLLBACK"})
+    assert new_false <= {"latency_coincident_slow_target"}, \
+        f"multisignal added unexpected false rollbacks: {new_false}"
 
 
 def test_multisignal_rolls_back_latency_regressions():
@@ -180,8 +190,9 @@ def test_causal_never_blocks_a_rollback_aimed_at_a_healthy_target():
             world = case_by_name(name).world
             probe = (world.get("target_probes", {}).get(b.chosen_target)
                      or world.get("target_probe"))
-            if probe and int(probe.get("errs", 0)) >= 3:
-                continue   # aimed at a confidently-degraded target — a veto is correct, not a block
+            if _probe_unhealthy(probe, world):
+                continue   # aimed at a confidently-degraded target (on an axis the veto can see
+                           # for THIS incident) — a veto is correct, not a block
             assert caus[name].rolled_back, f"causal check blocked a healthy-aimed rollback: {name}"
         # RATCHET (Gemini review): the subset loop alone would let an aim-everything-at-broken-
         # targets regression hide (every case would be exempted, recall would tank silently). The
@@ -217,10 +228,25 @@ def test_causal_matches_committed_scorecard():
             "`python tests/bench/run_bench.py --signals 5xx,latency --causal --write` and review.")
 
 
+def _probe_unhealthy(probe: dict | None, world: dict | None = None) -> bool:
+    """A probe result models a confidently-degraded target on an axis the causal check can actually
+    SEE for this world's incident: errs (the 5xx gate runs for every incident) always counts;
+    slow counts ONLY when the world models a latency incident (has latency_windows) — the latency
+    gate is keyed on primary_signal, so a slow-only probe on a 5xx-driven world would 'certify' a
+    coupling the veto structurally cannot enforce (review finding)."""
+    if probe is None:
+        return False
+    if int(probe.get("errs", 0)) >= 3:
+        return True
+    latency_world = bool((world or {}).get("latency_windows"))
+    return latency_world and int(probe.get("slow", 0)) >= 3
+
+
 def test_fixture_coupling_dependency_target_is_unhealthy():
     """Anti-gaming: a case that models an external cause (rollback_clears==False) MUST carry a
-    confidently-unhealthy target_probe, and vice-versa — so target_probe can't be tuned to flip one
-    case. (Bad-deploy cases either omit target_probe [healthy default] or set a healthy one.)"""
+    confidently-unhealthy target_probe (on the 5xx OR latency axis), and vice-versa — so
+    target_probe can't be tuned to flip one case. (Bad-deploy cases either omit target_probe
+    [healthy default] or set a below-the-bar one.)"""
     from bench.fixtures import CASES
     for c in CASES:
         clears = c.world.get("rollback_clears", True)
@@ -228,10 +254,11 @@ def test_fixture_coupling_dependency_target_is_unhealthy():
         if "clears_on" in c.world:
             continue   # per-revision worlds: the coupling is enforced per-revision below
         if not clears:
-            assert probe is not None and probe["errs"] >= 3, \
+            assert _probe_unhealthy(probe, c.world), \
                 f"{c.name}: rollback_clears=False must have a confidently-unhealthy target_probe"
         if probe is not None and clears:
-            assert probe["errs"] < 3, f"{c.name}: a clearing rollback must have a healthy target_probe"
+            assert not _probe_unhealthy(probe, c.world), \
+                f"{c.name}: a clearing rollback must have a healthy/below-the-bar target_probe"
 
 
 def test_fixture_coupling_per_revision_worlds():
@@ -245,20 +272,40 @@ def test_fixture_coupling_per_revision_worlds():
             continue
         probes = c.world.get("target_probes", {})
         for rev, p in probes.items():
-            if p["errs"] >= 3:
+            if _probe_unhealthy(p, c.world):
                 assert rev not in clears_on, \
                     f"{c.name}: {rev} probes unhealthy yet the rollback clears on it"
         for rev in clears_on:
-            p = probes.get(rev)
-            assert p is None or p["errs"] < 3, \
+            assert not _probe_unhealthy(probes.get(rev), c.world), \
                 f"{c.name}: clears_on revision {rev} must not carry an unhealthy probe"
         # every 0-traffic ready candidate NOT in clears_on is a landmine: it must probe unhealthy,
         # or the world would let a wrong-target rollback look successful.
         for r in c.world["revisions"]:
             if r.get("traffic_percent", 0) == 0 and r.get("ready") and r["name"] not in clears_on:
-                p = probes.get(r["name"])
-                assert p is not None and p["errs"] >= 3, \
+                assert _probe_unhealthy(probes.get(r["name"]), c.world), \
                     f"{c.name}: non-clearing candidate {r['name']} must probe confidently unhealthy"
+
+
+# --- 5b. LATENCY-AXIS CAUSAL VETO (v4 Phase 2): the probe matches the incident's signal ----------
+def test_latency_veto_escalates_slow_target_without_shifting():
+    """The v4 Phase 2 proof: for a LATENCY incident whose rollback target is 200-but-confidently-
+    slow (an external slow dependency), the latency-keyed probe returns COINCIDENT and Airbag
+    escalates with ZERO traffic shifted — where causal-off ships the futile rollback (wasted)."""
+    off = next(r for r in run_bench(signals="5xx,latency", causal=False)
+               if r.name == "latency_coincident_slow_target")
+    assert off.rolled_back and off.status == "escalated" and off.cleared is False   # wasted shift
+    on = next(r for r in run_bench(signals="5xx,latency", causal=True)
+              if r.name == "latency_coincident_slow_target")
+    assert on.final_action == "ESCALATE" and not on.rolled_back                     # vetoed pre-shift
+
+
+def test_latency_veto_never_blocks_a_fast_or_warming_target():
+    """SAFETY: the latency axis must not protect a genuinely-slow revision — a fast target and a
+    below-the-bar warmup blip both PROCEED and the latency bad-deploys still heal."""
+    by_name = {r.name: r for r in run_bench(signals="5xx,latency", causal=True)}
+    for name in ("latency_regression", "latency_regression_moderate", "latency_target_warmup_blip"):
+        assert by_name[name].rolled_back is True, f"latency veto wrongly blocked {name}"
+        assert by_name[name].status == "mitigated"
 
 
 # --- 6. TARGET-CORRECTNESS (v4 Phase 1): the ledger aims at witnessed-good; recency can't --------

@@ -114,7 +114,7 @@ def test_probe_revision_health_drops_transport_errors(monkeypatch):
     def _raise(self, url, **k):
         raise httpx.ConnectError("unreachable")
     monkeypatch.setattr(httpx.Client, "get", _raise)
-    assert gcp.probe_revision_health("svc", "r", "svc-good", n=6) == {"errs": 0, "total": 0}
+    assert gcp.probe_revision_health("svc", "r", "svc-good", n=6) == {"errs": 0, "total": 0, "slow": 0}
 
 
 def test_probe_revision_health_counts_5xx(monkeypatch):
@@ -124,7 +124,33 @@ def test_probe_revision_health_counts_5xx(monkeypatch):
     monkeypatch.setattr(gcp, "_get_service", lambda s, r: svc)
     monkeypatch.setattr(gcp, "_set_traffic", lambda *a, **k: None)
     monkeypatch.setattr(httpx.Client, "get", lambda self, url, **k: _Resp(500))
-    assert gcp.probe_revision_health("svc", "r", "svc-good", n=6) == {"errs": 6, "total": 6}
+    assert gcp.probe_revision_health("svc", "r", "svc-good", n=6) == {"errs": 6, "total": 6, "slow": 0}
+
+
+def test_probe_revision_health_times_slow_successes(monkeypatch):
+    """v4 Phase 2: a SUCCESSFUL response slower than the latency SLO is counted in `slow` (a 5xx is
+    an err, never double-counted as slow) — the axis the latency-keyed causal veto gates on. The
+    WARMUP RINSE is pinned too: one extra uncounted request precedes the n counted probes, so a
+    scaled-to-zero target's cold start can't masquerade as latency evidence (review MAJOR)."""
+    svc = SimpleNamespace(traffic=[], traffic_statuses=[
+        SimpleNamespace(tag=gcp._CAUSAL_TAG, uri="https://tag---svc.run.app")])
+    monkeypatch.setattr(gcp, "_get_service", lambda s, r: svc)
+    monkeypatch.setattr(gcp, "_set_traffic", lambda *a, **k: None)
+    monkeypatch.setattr(gcp.config, "LATENCY_SLO_ABS_MS", 800.0)   # pin: env must not flip the test
+    calls = {"n": 0}
+
+    def fake_get(self, url, **k):
+        calls["n"] += 1
+        return _Resp(200)
+    monkeypatch.setattr(httpx.Client, "get", fake_get)
+    tick = {"t": 0.0}
+
+    def fake_monotonic():
+        tick["t"] += 1.0        # 2 monotonic() calls per COUNTED request, +1.0 apart -> each
+        return tick["t"]        # request appears to take 1s (> the 800ms SLO pinned above)
+    monkeypatch.setattr(gcp.time, "monotonic", fake_monotonic)
+    assert gcp.probe_revision_health("svc", "r", "svc-good", n=4) == {"errs": 0, "total": 4, "slow": 4}
+    assert calls["n"] == 5, "expected 1 untimed warmup rinse + 4 counted probes"
 
 
 def test_set_traffic_raises_after_exhausting_retries(monkeypatch):

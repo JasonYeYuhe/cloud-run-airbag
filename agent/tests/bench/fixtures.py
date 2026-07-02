@@ -250,6 +250,38 @@ CASES: list[BenchCase] = [
                   "must resolve to INCONCLUSIVE → PROCEED, never a confident-false COINCIDENT that would "
                   "block a legitimate rollback (protecting a bad revision is the worst failure)."),
 
+    # --- v4 LATENCY axis on the causal probe: the target-probe must match the incident's SIGNAL ---
+    BenchCase(
+        name="latency_coincident_slow_target", category="dependency",
+        description="A sustained latency regression whose cause is an EXTERNAL slow dependency — "
+                    "the rollback target responds 200 but is ALSO confidently slow (8/8 over SLO), "
+                    "so rolling back cannot remedy the latency incident.",
+        world={"revisions": _healthy_pair(), "error_rate": 0.0, "sample": {"errs": 0, "total": 20},
+               "rollback_clears": False, "baseline_latency_ms": 320,
+               "latency_windows": _lat(18, 20),
+               "target_probe": {"errs": 0, "total": 8, "slow": 8},
+               "logs": ["upstream db: query latency p99 4200ms (connection pool saturated)"]},
+        expected_action="ESCALATE", is_bad_deploy=False,
+        rationale="The v4 latency-axis PRECISION gap: the v3 causal probe counts only 5xx, so a "
+                  "200-but-slow target passes (0/8 errs) and the futile rollback ships, fails "
+                  "verify, and escalates late. The latency-keyed probe sees 8/8 over-SLO → "
+                  "COINCIDENT → ESCALATE with zero traffic shifted. (5xx-only mode is blind to the "
+                  "whole incident — a pre-registered detection miss, same as latency_regression.)"),
+    BenchCase(
+        name="latency_target_warmup_blip", category="latency",
+        description="A REAL latency bad-deploy whose rollback target shows a small cold-start "
+                    "wobble in the probe (2/8 slow, below the confidence bar) — the latency-keyed "
+                    "veto must NOT block the legitimate rollback.",
+        world={"revisions": _bad_and_good(), "error_rate": 0.0, "sample": {"errs": 0, "total": 20},
+               "rollback_clears": True, "baseline_latency_ms": 320,
+               "latency_windows": _lat(18, 20),
+               "target_probe": {"errs": 0, "total": 8, "slow": 2}},
+        expected_action="ROLLBACK", is_bad_deploy=True, expected_target=_GOOD,
+        rationale="SAFETY anti-regression for the latency axis (mirrors intermittent_target on the "
+                  "5xx axis): a scaled-to-zero target's warmup blip (2/8 < LATENCY_MIN_SLOW) must "
+                  "resolve INCONCLUSIVE → PROCEED — never a confident-false COINCIDENT that would "
+                  "protect the slow revision."),
+
     # --- v4 TARGET-correctness: bad→bad deploys — recency aims at a landmine; the serving-history
     # ledger aims at the witnessed-good revision. World: THREE revisions — newest serving (bad),
     # a newer-ready 0-traffic LANDMINE (also bad: the panic-ship), an older witnessed-good.

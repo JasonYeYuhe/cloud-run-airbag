@@ -1,19 +1,19 @@
 {
   "label": "signals=5xx,latency +causal",
-  "n": 20,
+  "n": 22,
   "rollback_precision": {
-    "num": 8,
-    "den": 8,
+    "num": 9,
+    "den": 9,
     "value": 1.0
   },
   "rollback_recall": {
-    "num": 8,
-    "den": 11,
-    "value": 0.7273
+    "num": 9,
+    "den": 12,
+    "value": 0.75
   },
   "false_rollback_rate": {
     "num": 0,
-    "den": 20,
+    "den": 22,
     "value": 0.0
   },
   "false_escalation_rate": {
@@ -23,23 +23,23 @@
   },
   "wasted_rollback_rate": {
     "num": 0,
-    "den": 20,
+    "den": 22,
     "value": 0.0
   },
   "accuracy": {
-    "num": 16,
-    "den": 20,
-    "value": 0.8
+    "num": 18,
+    "den": 22,
+    "value": 0.8182
   },
   "target_correctness": {
-    "num": 8,
-    "den": 9,
-    "value": 0.8889
+    "num": 9,
+    "den": 10,
+    "value": 0.9
   },
   "mean_stages_to_mitigate": 11.0,
   "confusion": {
     "ROLLBACK": {
-      "ROLLBACK": 8,
+      "ROLLBACK": 9,
       "OBSERVE": 2,
       "ESCALATE": 1
     },
@@ -51,7 +51,7 @@
     "ESCALATE": {
       "ROLLBACK": 0,
       "OBSERVE": 0,
-      "ESCALATE": 3
+      "ESCALATE": 4
     }
   },
   "per_case": [
@@ -226,6 +226,30 @@
     {
       "name": "intermittent_target",
       "category": "crash",
+      "expected": "ROLLBACK",
+      "decided": "ROLLBACK",
+      "final": "ROLLBACK",
+      "status": "mitigated",
+      "stages": 11,
+      "expected_target": "airbag-target-00001-good",
+      "chosen_target": "airbag-target-00001-good",
+      "target_source": "recency"
+    },
+    {
+      "name": "latency_coincident_slow_target",
+      "category": "dependency",
+      "expected": "ESCALATE",
+      "decided": "ROLLBACK",
+      "final": "ESCALATE",
+      "status": "escalated",
+      "stages": 7,
+      "expected_target": null,
+      "chosen_target": "airbag-target-00004-prev",
+      "target_source": "recency"
+    },
+    {
+      "name": "latency_target_warmup_blip",
+      "category": "latency",
       "expected": "ROLLBACK",
       "decided": "ROLLBACK",
       "final": "ROLLBACK",
