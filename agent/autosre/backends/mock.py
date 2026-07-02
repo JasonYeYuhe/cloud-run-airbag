@@ -60,7 +60,9 @@ def probe_revision_health(service: str, region: str, revision: str, n: int = 8) 
 
 def synthetic_probe(service: str, path: str = "/healthz") -> dict:
     ok = _STATE["rolled_back"]
-    return {"ok": ok, "path": path, "status": 200 if ok else 503}
+    # healthy revision responds fast; elapsed_ms lets the latency-aware verify confirm the SIGNAL
+    return {"ok": ok, "path": path, "status": 200 if ok else 503,
+            "elapsed_ms": 10.0 if ok else 0.0}
 
 
 def rollback_traffic_to_revision(service: str, region: str, revision: str) -> dict:

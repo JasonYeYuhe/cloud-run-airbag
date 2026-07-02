@@ -224,9 +224,12 @@ def synthetic_probe(service: str, path: str | None = None) -> dict:
     path = path or config.PROBE_PATH
     try:
         uri = _get_service(service, config.GCP_REGION).uri
-        with httpx.Client(timeout=5.0) as c:
+        with httpx.Client(timeout=10.0) as c:  # > the slow-fault delay so a slow SUCCESS is timed, not dropped
+            t0 = time.monotonic()
             r = c.get(uri.rstrip("/") + path)
-        return {"ok": r.status_code == 200, "path": path, "status": r.status_code}
+            elapsed_ms = (time.monotonic() - t0) * 1000.0
+        return {"ok": r.status_code == 200, "path": path, "status": r.status_code,
+                "elapsed_ms": round(elapsed_ms, 1)}
     except Exception as e:  # noqa: BLE001
         return {"ok": False, "path": path, "status": 0, "error": str(e)}
 

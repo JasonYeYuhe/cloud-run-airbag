@@ -147,13 +147,18 @@ def _heal_body(incident_id: str, service: str) -> dict:
 
     # L2 / L3 — auto-rollback now (stop the bleeding; reversible). L2 then gates the forward fix-PR.
     return _mitigate(service, incident_id, decision, _decision_summary, before, target,
-                     emit, run_events, gate_fix_pr=(level == "L2"), level=level)
+                     emit, run_events, gate_fix_pr=(level == "L2"), level=level,
+                     primary_signal=_primary_signal(stat))
 
 
 def _mitigate(service: str, incident_id: str, decision: dict, decision_summary: dict, before: dict,
-              target: str, emit, run_events: list, *, gate_fix_pr: bool, level: str) -> dict:
+              target: str, emit, run_events: list, *, gate_fix_pr: bool, level: str,
+              primary_signal: str = "5xx") -> dict:
     """Apply the rollback, prove recovery, then either open the fix-PR (L3 / approved L1) or gate it
-    for approval (L2). Shared by run_self_heal and apply_approval so the L1 resume replays it."""
+    for approval (L2). Shared by run_self_heal and apply_approval so the L1 resume replays it.
+    `primary_signal` is the detector that drove the incident — a latency regression's remedy is the
+    rollback itself, so we don't open a code-fix PR (that path targets 5xx/code-bug incidents)."""
+    causal_verdict: dict | None = None
     # CAUSAL PRE-CHECK (v3 Phase 2a): before spending the reversible action, probe the rollback
     # TARGET's health. If the last-good revision is ALSO confidently degraded, the cause is external
     # (a dependency/quota outage), not this revision — a rollback is futile. Only a CONFIDENT-unhealthy
@@ -162,6 +167,7 @@ def _mitigate(service: str, incident_id: str, decision: dict, decision_summary: 
     # once a rollback is actually imminent (never before the L0/L1 gate). Default off (demo unchanged).
     if config.CAUSAL_CHECK_ENABLED:
         c = causal.precheck(service, config.GCP_REGION, target)
+        causal_verdict = c
         emit("CAUSAL", f"{c['verdict']} — {c['reason']}", **{k: c[k] for k in ("verdict", "target") if k in c})
         if c["verdict"] == "COINCIDENT":
             memory.record_incident(service, _incident_signature(), "escalated", target)
@@ -174,7 +180,7 @@ def _mitigate(service: str, incident_id: str, decision: dict, decision_summary: 
     rollback_at = time.time()
     emit("ROLLBACK_APPLIED", f"100% traffic -> {target}", result=result)
 
-    if not _verify(service, emit, since_epoch=rollback_at):
+    if not _verify(service, emit, since_epoch=rollback_at, primary_signal=primary_signal):
         autonomy.record_outcome(service, success=False)  # fail-safe: a bad heal demotes autonomy
         # the rollback DID shift traffic; track it so a later fix can still complete (or undo) it
         # instead of stranding the routing (complete_rollback re-verifies health before acting).
@@ -185,7 +191,9 @@ def _mitigate(service: str, incident_id: str, decision: dict, decision_summary: 
         memory.record_incident(service, _incident_signature(), "escalated", target)
         incidents.record(incident_id, {"service": service, "status": "escalated", "autonomy": level,
                                        "decision": decision_summary, "rolled_back_to": target,
-                                       "error_before": before.get("error_rate"), "events": run_events})
+                                       "error_before": before.get("error_rate"),
+                                       **({"causal": causal_verdict} if causal_verdict else {}),
+                                       "events": run_events})
         return {"status": "escalated", "incident_id": incident_id, "events": run_events}
 
     after = tools.query_error_rate(service, config.GCP_REGION, window_minutes=2, since_epoch=rollback_at)
@@ -193,6 +201,29 @@ def _mitigate(service: str, incident_id: str, decision: dict, decision_summary: 
     emit("MITIGATED", note or "error rate back to zero — recovery proven",
          before=before.get("error_rate"), after=after.get("error_rate"))
     autonomy.record_outcome(service, success=True)  # trust ramp: a verified heal builds the streak
+
+    # shared record fields (causal verdict included when the pre-check ran, so the proof bundle is complete)
+    rec = {"service": service, "autonomy": level, "decision": decision_summary,
+           "rolled_back_to": target, "error_before": before.get("error_rate"),
+           "error_after": after.get("error_rate"), "events": run_events}
+    if causal_verdict is not None:
+        rec["causal"] = causal_verdict
+
+    # A LATENCY regression's remedy IS the rollback to the healthy revision — there's no HTTP 500 / code
+    # bug for a forward fix-PR to repair, so we don't fabricate one (that path targets 5xx/code-bug
+    # incidents like the KeyError). We STILL arm the pending-revert: the rollback pinned traffic to an
+    # explicit revision, so the pin must be tracked (a later healthy deploy would otherwise get 0%
+    # traffic until complete_rollback / the dashboard's Verify & Undo restores it).
+    if primary_signal != "5xx":
+        emit("FIX_PR", f"no forward code-fix PR — a {primary_signal} regression is remedied by the "
+                       f"rollback to the healthy revision (the fix-PR path targets 5xx/code-bug incidents)")
+        _arm_pending(service, incident_id, decision, target, rollback_at, None, emit,
+                     note="traffic pinned to the healthy revision; restored to a newer healthy "
+                          "revision when one deploys + verifies (or via Verify & Undo)")
+        memory.record_incident(service, _incident_signature(), "mitigated", target)
+        incidents.record(incident_id, {**rec, "status": "mitigated", "pr_url": None})
+        return {"status": "mitigated", "incident_id": incident_id, "rolled_back_to": target,
+                "events": run_events}
 
     ctx = (f"bad revision {decision.get('bad_revision')} on {service} returned HTTP 500 on the "
            f"business path {config.PROBE_PATH} (unhandled exception, not an explicit error "
@@ -204,21 +235,14 @@ def _mitigate(service: str, incident_id: str, decision: dict, decision_summary: 
         _arm_pending(service, incident_id, decision, target, rollback_at, None, emit)
         emit("AWAITING_APPROVAL", "autonomy L2 — fix PR needs approval before it's opened", kind="fix_pr")
         memory.record_incident(service, _incident_signature(), "awaiting_fix_approval", target)
-        incidents.record(incident_id, {
-            "service": service, "status": "awaiting_fix_approval", "autonomy": level,
-            "decision": decision_summary, "rolled_back_to": target,
-            "error_before": before.get("error_rate"), "error_after": after.get("error_rate"),
-            "events": run_events})
+        incidents.record(incident_id, {**rec, "status": "awaiting_fix_approval"})
         return {"status": "awaiting_fix_approval", "incident_id": incident_id,
                 "rolled_back_to": target, "events": run_events}
 
     pr_url = _open_fix_pr(service, incident_id, ctx, emit)
     _arm_pending(service, incident_id, decision, target, rollback_at, pr_url, emit)
     memory.record_incident(service, _incident_signature(), "mitigated", target)
-    incidents.record(incident_id, {
-        "service": service, "status": "mitigated", "autonomy": level, "decision": decision_summary,
-        "rolled_back_to": target, "error_before": before.get("error_rate"),
-        "error_after": after.get("error_rate"), "pr_url": pr_url, "events": run_events})
+    incidents.record(incident_id, {**rec, "status": "mitigated", "pr_url": pr_url})
     return {"status": "mitigated", "incident_id": incident_id, "rolled_back_to": target,
             "events": run_events}
 
@@ -251,13 +275,15 @@ def _open_fix_pr(service: str, incident_id: str, ctx: str, emit) -> str | None:
 
 
 def _arm_pending(service: str, incident_id: str, decision: dict, target: str,
-                 rollback_at: float, pr_url: str | None, emit) -> None:
+                 rollback_at: float, pr_url: str | None, emit, note: str | None = None) -> None:
     """Remember the temporary rollback so it can be UNDONE once the fix deploys + verifies
-    (the fix-PR's CI calls /internal/complete-rollback; or the dashboard's Verify & Undo)."""
+    (the fix-PR's CI calls /internal/complete-rollback; or the dashboard's Verify & Undo). Tracking
+    the pin is REQUIRED even without a fix-PR: rollback pins traffic to an explicit revision, so a
+    later healthy deploy would get 0% traffic until complete_rollback restores it."""
     pending.set_pending(service, {
         "incident_id": incident_id, "bad_revision": decision.get("bad_revision"),
         "rolled_back_to": target, "rollback_at_epoch": rollback_at, "pr_url": pr_url})
-    emit("PENDING_REVERT", "rollback held until the fix deploys + is verified",
+    emit("PENDING_REVERT", note or "rollback held until the fix deploys + is verified",
          rolled_back_to=target, pr_url=pr_url)
 
 
@@ -294,6 +320,7 @@ def apply_approval(incident_id: str, approve: bool) -> dict:
             emit("ESCALATED", f"approval stale — rollback target {target} is no longer ready; not acting")
             incidents.record(incident_id, {"service": service, "status": "escalated", "events": run_events})
             return {"status": "escalated", "incident_id": incident_id, "events": run_events}
+        primary_signal = "5xx"  # v2 default when the stat gate is off
         if config.STAT_GATE_ENABLED:  # don't roll back a service that already self-recovered
             # re-check through the SAME multi-signal engine as triage (not 5xx-only) so a latency/
             # etc. rollback isn't abandoned on a 5xx-blind PASS. PASS = all enabled detectors healthy.
@@ -305,8 +332,11 @@ def apply_approval(incident_id: str, approve: bool) -> dict:
                     memory.observe_healthy(service, v["rate"])
                 incidents.record(incident_id, {"service": service, "status": "noop", "events": run_events})
                 return {"status": "noop", "incident_id": incident_id, "events": run_events}
+            # carry the triggering signal into _mitigate so the L1 resume verifies + remediates the
+            # RIGHT signal (a latency incident shouldn't verify 5xx-only or open a bogus HTTP-500 PR).
+            primary_signal = _primary_signal(v)
         return _mitigate(service, incident_id, decision, decision, before, target,
-                         emit, run_events, gate_fix_pr=False, level="L1")
+                         emit, run_events, gate_fix_pr=False, level="L1", primary_signal=primary_signal)
     if kind == "fix_pr":  # L2: rollback already applied + held; now open the approved fix-PR
         pr_url = _open_fix_pr(service, incident_id, appr.get("ctx", ""), emit)
         pend = pending.get_pending(service)
@@ -465,6 +495,24 @@ def _rollback_pair(revs: dict) -> tuple[str | None, str | None]:
     return serving_name, (target["name"] if target else None)
 
 
+def _primary_signal(stat: dict | None) -> str:
+    """Which detector drove the FAIL — '5xx', 'latency', or another key. In single-detector (5xx) mode
+    `stat` has no per-signal breakdown, so it's a 5xx incident. Used to describe the incident HONESTLY:
+    the forward fix-PR path targets code-bug/5xx incidents (a real KeyError -> 500 the PR repairs); a
+    latency regression's remedy is the rollback itself, so we don't fabricate an 'HTTP 500' fix ctx."""
+    if not stat:
+        return "5xx"                           # no stat gate -> preserve v2 (fix-PR opens)
+    sig = stat.get("signals")
+    if isinstance(sig, dict):                  # multi-detector mode: trust the per-signal breakdown
+        fails = [k for k, v in sig.items() if isinstance(v, dict) and v.get("verdict") == "FAIL"]
+        if "5xx" in fails:
+            return "5xx"                       # a real 5xx failure -> the code-fix PR path applies
+        if fails:
+            return fails[0]                    # e.g. 'latency' -> rollback is the remedy, no fix-PR
+        return "unknown"                       # FAIL with no single culprit -> don't fabricate a 5xx fix
+    return "5xx"                               # single-detector (5xx) mode -> a 5xx incident
+
+
 def _validate(decision: dict, revs: dict, stat: dict | None = None) -> dict:
     """Safety gate + deterministic promotion. The statistical verdict is a DETERMINISTIC signal (the
     detectors, not the LLM), so it can BOTH constrain a ROLLBACK the LLM proposed AND promote a
@@ -514,18 +562,32 @@ def _validate(decision: dict, revs: dict, stat: dict | None = None) -> dict:
     return decision
 
 
-def _verify(service: str, emit, since_epoch: float | None = None) -> bool:
+def _verify(service: str, emit, since_epoch: float | None = None, primary_signal: str = "5xx") -> bool:
     """Poll until error-rate is zero AND a synthetic probe succeeds (guards the
     zero-traffic trap: error_rate can read 0 simply because nothing is hitting it).
-    `since_epoch` anchors the error window at rollback time (gcp backend)."""
+    `since_epoch` anchors the error window at rollback time (gcp backend).
+
+    SIGNAL-AWARE (v3): we detect on multiple signals, so recovery must be proven on the SAME signal
+    that triggered the incident. For a LATENCY incident a slow SUCCESS (200 but past the SLO) does NOT
+    count as recovered — otherwise a rollback onto a still-slow revision would read healthy on 5xx while
+    the latency regression persists. We gate this on `primary_signal == "latency"` (NOT on "is latency
+    enabled") so a 5xx incident is never falsely escalated because its last-good revision is a little
+    slow. The retry loop absorbs a one-off cold-start spike on the freshly-served revision (it warms up
+    and the next probe is fast); a genuinely-slow target keeps failing every attempt -> escalate."""
+    latency_gated = primary_signal == "latency"
+    slo_ms = config.LATENCY_SLO_ABS_MS
     for i in range(config.VERIFY_ATTEMPTS):
         err = tools.query_error_rate(service, config.GCP_REGION, window_minutes=2,
                                      since_epoch=since_epoch)
         probe = tools.synthetic_probe(service, path=config.PROBE_PATH)
+        elapsed_ms = probe.get("elapsed_ms")
+        # a slow-but-200 probe is NOT recovered when latency was the triggering signal
+        too_slow = latency_gated and elapsed_ms is not None and elapsed_ms > slo_ms
+        probe_ok = bool(probe.get("ok")) and not too_slow
         emit("VERIFYING", f"attempt {i + 1}/{config.VERIFY_ATTEMPTS}",
              error_rate=err.get("error_rate"), total_requests=err.get("total_requests"),
-             probe_ok=probe.get("ok"))
-        if probe.get("ok") and err.get("error_rate", 1) == 0:
+             probe_ok=probe_ok, latency_ms=elapsed_ms)
+        if probe_ok and err.get("error_rate", 1) == 0:
             return True
         time.sleep(config.VERIFY_INTERVAL_S)
     return False

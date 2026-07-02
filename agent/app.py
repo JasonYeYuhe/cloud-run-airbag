@@ -249,6 +249,42 @@ def demo_run(background_tasks: BackgroundTasks):
             "broke_to": res.get("active_revision")}
 
 
+@app.post("/demo/run-latency", dependencies=[Depends(require_demo_token)])
+def demo_run_latency(background_tasks: BackgroundTasks):
+    """One-click v3 LATENCY demo: route to the `slow` revision (200s past the SLO, ~0 5xx), then heal.
+    No 5xx burst — the latency detector actively samples the serving revision; the multi-signal engine
+    (not a 5xx monitor) is what catches it, and the rollback to the healthy revision IS the remedy."""
+    res = tools.break_target(config.TARGET_SERVICE, config.GCP_REGION, "slow")
+    if res.get("status") != "success":
+        events.publish({"stage": "ESCALATED", "msg": f"break failed: {res.get('error')}",
+                        "service": config.TARGET_SERVICE})
+        return res
+    events.publish({"stage": "FAULT_INJECTED",
+                    "msg": f"bad revision {res.get('active_revision')} serving 100% — LATENCY regression: "
+                           f"{config.PROBE_PATH} returns 200 but slowly (> SLO), ~0 5xx",
+                    "service": config.TARGET_SERVICE})
+    incident_id = f"inc-{uuid.uuid4().hex[:8]}"
+
+    def break_then_heal():
+        # mirror /demo/run's safety net: always reach a terminal state + leave the target healthy
+        try:
+            time.sleep(2.0)  # brief settle; the latency detector samples the serving revision live
+            run_self_heal(incident_id, config.TARGET_SERVICE)
+        except Exception as e:  # noqa: BLE001 — never let the one-click demo strand the target
+            log.exception("demo/run-latency break_then_heal failed for %s", incident_id)
+            events.publish({"stage": "ESCALATED", "incident_id": incident_id,
+                            "service": config.TARGET_SERVICE,
+                            "msg": f"one-click latency demo failed ({e}) — restoring the target to healthy"})
+            try:
+                tools.reset_target(config.TARGET_SERVICE, config.GCP_REGION)
+            except Exception:  # noqa: BLE001 — best effort; a background task must never raise
+                log.exception("demo/run-latency reset_target failed for %s", incident_id)
+
+    background_tasks.add_task(break_then_heal)
+    return {"status": "accepted", "incident_id": incident_id,
+            "broke_to": res.get("active_revision"), "scenario": "latency"}
+
+
 @app.post("/demo/complete-rollback", dependencies=[Depends(require_demo_token)])
 def demo_complete_rollback(background_tasks: BackgroundTasks):
     """Dashboard 'Verify & Undo Rollback' button: verify the deployed fix, restore traffic

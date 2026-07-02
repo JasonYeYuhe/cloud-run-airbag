@@ -68,10 +68,14 @@ def sample_business_path(service: str, region: str, n: int = 20) -> dict:
 
 
 def synthetic_probe(service: str, path: str = "/healthz") -> dict:
+    import time
     try:
-        with httpx.Client(timeout=3.0) as c:
+        with httpx.Client(timeout=5.0) as c:  # > the slow-fault delay so a slow SUCCESS is timed, not dropped
+            t0 = time.monotonic()
             r = c.get(_url(path))
-        return {"ok": r.status_code == 200, "path": path, "status": r.status_code}
+            elapsed_ms = (time.monotonic() - t0) * 1000.0
+        return {"ok": r.status_code == 200, "path": path, "status": r.status_code,
+                "elapsed_ms": round(elapsed_ms, 1)}
     except Exception as e:
         return {"ok": False, "path": path, "status": 0, "error": str(e)}
 

@@ -85,8 +85,10 @@ def probe_revision_health(service: str, region: str, revision: str, n: int = 8) 
 
 
 def synthetic_probe(service: str, path: str | None = None) -> dict:
-    """Actively hit the service to confirm it is really serving the business path
-    (zero-traffic guard + proves the failing endpoint recovered).
+    """Actively hit the service to confirm it is really serving the business path (zero-traffic guard +
+    proves the failing endpoint recovered). Returns {ok, path, status, elapsed_ms} — elapsed_ms lets the
+    latency-aware verify confirm a rollback recovered the LATENCY signal (a slow-but-200 response is not
+    "recovered" when the latency detector is enabled).
 
     Args:
         service (str): Cloud Run service name.
