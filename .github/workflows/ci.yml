@@ -32,6 +32,47 @@ jobs:
           AIRBAG_BACKEND: "mock"
         run: python -m pytest -q
 
+  # v4 Phase 4.1 — the Phase-1 acceptance gate. Prod runs AIRBAG_STATE=firestore, but the main
+  # suite pins the memory mimic; this job re-runs the state-critical suite (store contract +
+  # ordered reads + the serving-history ledger + cross-incident memory + autonomy approvals)
+  # against REAL google-cloud-firestore transactions on the official emulator. conftest refuses
+  # this mode without FIRESTORE_EMULATOR_HOST, so it can never touch real Firestore.
+  # firestore.indexes.json (repo root) is deliberately EMPTY: every Airbag query is a single-field
+  # order_by+limit (auto-indexed), and the v4 ledger is a by-id document read — no composite
+  # indexes exist to declare. The real hazard (order_by silently omits docs missing the order
+  # field) is pinned by test_every_writer_stamps_its_order_field in this job instead.
+  firestore-emulator:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: agent
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install deps
+        run: pip install -r requirements.txt
+      - name: Start Firestore emulator
+        run: |
+          docker run -d --name firestore -p 8080:8080 \
+            gcr.io/google.com/cloudsdktool/google-cloud-cli:emulators \
+            gcloud emulators firestore start --host-port=0.0.0.0:8080
+          for i in $(seq 1 60); do
+            curl -sf http://localhost:8080 >/dev/null && echo "emulator up" && exit 0
+            sleep 1
+          done
+          echo "emulator failed to start"; docker logs firestore; exit 1
+      - name: State-critical suite on the real backend
+        env:
+          AIRBAG_TEST_FIRESTORE: "1"
+          FIRESTORE_EMULATOR_HOST: "localhost:8080"
+          GOOGLE_CLOUD_PROJECT: "airbag-test"
+          AIRBAG_BACKEND: "mock"
+        run: >
+          python -m pytest -q
+          tests/test_state_store.py tests/test_ledger.py tests/test_memory.py tests/test_autonomy.py
+
   lint:
     runs-on: ubuntu-latest
     steps:

@@ -1,12 +1,19 @@
 """Durable state store contract — the concurrency + lease-recovery + dedup invariants Gemini 3.1
 Pro + 3.5 Flash required before trusting the store under the safety-critical compensation logic.
-Run against the memory backend (its lock mimics Firestore transaction atomicity); the same suite
-should run against the Firestore emulator in CI (follow-up). conftest pins STATE_BACKEND=memory +
-resets the store per test."""
+Runs against the memory backend by default (its lock mimics Firestore transaction atomicity) AND
+against the REAL google-cloud-firestore transactions in CI's firestore-emulator job
+(AIRBAG_TEST_FIRESTORE=1 — see conftest). conftest isolates the store per test in both modes."""
+import os
 import threading
 import time
 
 from autosre import config, pending, state_store
+
+# Firestore transactions are optimistic (retry-on-contention, bounded attempts), so the emulator
+# run scales the all-writers-on-one-doc contention down to what bounded retries absorb; the memory
+# backend keeps the original 100 (its lock serializes). The CONTRACT under test — no lost updates,
+# exactly-one lease winner — is identical in both modes.
+_N_CONTENTION = 12 if os.environ.get("AIRBAG_TEST_FIRESTORE") else 100
 
 
 def test_acquire_lease_exactly_one_winner():
@@ -30,12 +37,14 @@ def test_acquire_lease_exactly_one_winner():
 
 
 def test_lease_recovers_after_expiry(monkeypatch):
-    """A crashed holder's lease expires -> the pending becomes re-acquirable (no permanent lock)."""
-    monkeypatch.setattr(config, "COMPLETE_LEASE_S", 0.05)
+    """A crashed holder's lease expires -> the pending becomes re-acquirable (no permanent lock).
+    (Window sized for the emulator run: a real-backend round-trip takes ms, so a 50ms lease could
+    expire between the acquire and the still-leased check and flake.)"""
+    monkeypatch.setattr(config, "COMPLETE_LEASE_S", 0.4)
     pending.set_pending("svc", {"incident_id": "i1"})
     assert pending.try_begin_complete("svc") is not None   # first acquires
     assert pending.try_begin_complete("svc") is None        # still leased
-    time.sleep(0.08)
+    time.sleep(0.5)
     assert pending.try_begin_complete("svc") is not None     # lease expired -> recoverable
 
 
@@ -58,14 +67,14 @@ def test_dedup_marks_then_detects_duplicate():
 
 
 def test_dedup_expires_by_expires_at(monkeypatch):
-    assert state_store.seen_and_mark("dedup", "id1", 0.05) is False
-    time.sleep(0.08)
-    assert state_store.seen_and_mark("dedup", "id1", 0.05) is False  # expired -> treated as unseen
+    assert state_store.seen_and_mark("dedup", "id1", 0.3) is False
+    time.sleep(0.4)
+    assert state_store.seen_and_mark("dedup", "id1", 0.3) is False  # expired -> treated as unseen
 
 
 def test_transact_is_atomic_under_contention():
-    """100 concurrent increments through transact() -> no lost updates."""
-    barrier = threading.Barrier(100)
+    """N concurrent increments through transact() -> no lost updates."""
+    barrier = threading.Barrier(_N_CONTENTION)
 
     def inc():
         def _m(cur):
@@ -75,12 +84,12 @@ def test_transact_is_atomic_under_contention():
         barrier.wait()
         state_store.transact("counters", "x", _m)
 
-    threads = [threading.Thread(target=inc) for _ in range(100)]
+    threads = [threading.Thread(target=inc) for _ in range(_N_CONTENTION)]
     for t in threads:
         t.start()
     for t in threads:
         t.join()
-    assert state_store.get("counters", "x")["n"] == 100
+    assert state_store.get("counters", "x")["n"] == _N_CONTENTION
 
 
 def test_bump_attempts_increments():
@@ -120,3 +129,42 @@ def test_set_pending_preserves_inflight_completion_lease():
     pending.set_pending("svc", {"incident_id": "i2"})           # a concurrent re-arm must not stomp it
     after = pending.get_pending("svc")
     assert after["completing_lease_until"] > time.time() and after["attempts"] == 1
+
+
+# --- ordered reads (v4 Phase 4.1 — the confirmed Firestore gap) -----------------------------------
+def test_list_recent_orders_newest_first():
+    """The ordered read the incident dashboard + pending/approval sweeps depend on — proven on the
+    REAL backend in CI's firestore-emulator job, not just the memory mimic."""
+    for doc_id, ts in (("a", 100.0), ("b", 300.0), ("c", 200.0)):
+        state_store.put("lr", doc_id, {"updated_at": ts})
+    got = state_store.list_recent("lr", 2)
+    assert [d["updated_at"] for d in got] == [300.0, 200.0]
+
+
+def test_list_recent_missing_order_field_divergence():
+    """PINNED backend divergence (the hazard behind the always-write-the-order-field rule):
+    Firestore's order_by SILENTLY OMITS documents missing the order field; the memory backend
+    sorts them as 0 and includes them. Every writer therefore always stamps its order field
+    (test below) — this test keeps the divergence itself visible instead of folklore."""
+    state_store.put("lr2", "with", {"updated_at": 100.0})
+    state_store.put("lr2", "without", {"other": 1})
+    got = state_store.list_recent("lr2", 10)
+    if config.STATE_BACKEND == "firestore":
+        assert [d.get("updated_at") for d in got] == [100.0]     # the unstamped doc vanished
+    else:
+        assert len(got) == 2                                     # memory includes it (sorted as 0)
+
+
+def test_every_writer_stamps_its_order_field():
+    """The invariant that makes the divergence moot: every collection consumed via list_recent is
+    ALWAYS written with its order field present — a new write path that forgets would make docs
+    silently vanish from Firestore reads (dashboard incidents, pending sweeps, approvals)."""
+    from autosre import autonomy, incidents, memory
+    incidents.record("i-ord", {"service": "svc"})               # incidents ordered by updated_at
+    assert "updated_at" in state_store.get("incidents", "i-ord")
+    autonomy.save_approval("i-appr", {"service": "svc"})        # approvals ordered by created_at
+    assert "created_at" in state_store.get("approvals", "i-appr")
+    pending.set_pending("svc-ord", {"incident_id": "i1"})       # pending ordered by rollback_at_epoch
+    assert "rollback_at_epoch" in state_store.get("pending", "svc-ord")
+    memory.witness_serving("svc-ord", "rev-1")                  # service_memory carries updated_at
+    assert "updated_at" in state_store.get("service_memory", "svc-ord")
