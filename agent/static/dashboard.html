@@ -102,7 +102,9 @@
   <div class="panel">
     <div class="controls">
       <button class="primary" onclick="api('/demo/run')">▶ Run demo</button>
+      <button class="primary" onclick="api('/demo/run-latency')" title="v3: a bad revision that returns 200 but slowly (~0 5xx) — a 5xx monitor is blind; the multi-signal latency detector catches + heals it">🐢 Latency demo</button>
       <button class="danger" onclick="api('/demo/break')">💣 Break</button>
+      <button class="danger" onclick="api('/demo/break-latency')" title="v3: route 100% to the slow revision (200s past the SLO, ~0 5xx), then click Heal">🐢 Break latency</button>
       <button onclick="api('/demo/heal')">🚑 Heal</button>
       <button onclick="api('/demo/complete-rollback')" title="Verify the deployed fix, then undo the temporary rollback">✅ Verify &amp; Undo</button>
       <button onclick="api('/demo/reset')">↺ Reset</button>
