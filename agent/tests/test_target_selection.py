@@ -82,6 +82,65 @@ def test_validate_promotion_uses_ledger():
     assert cold["rollback_revision"] == LANDMINE and cold["_target_source"] == "recency"
 
 
+# --- v4 RE-AIM: the FSM corrects an LLM aim that has no witnessed history ----------------
+# (Observed LIVE on Cloud Run: Gemini hallucinated '100% 5xx' during a latency incident and aimed
+# the rollback at the KeyError landmine; the causal probe vetoed safely — but a witnessed-good
+# revision existed, so the correct outcome is a re-aimed autonomous heal, not a page.)
+def test_llm_wrong_aim_is_reaimed_to_witnessed(monkeypatch):
+    monkeypatch.setattr(config, "CAUSAL_CHECK_ENABLED", True)   # the re-aim is licensed by the probe
+    stat = {"verdict": "FAIL", "reason": "latency 4/4 windows", "rate": 0.0}
+    llm = {"action": "ROLLBACK", "confidence": 1.0, "rollback_revision": LANDMINE,
+           "bad_revision": SERVING, "reasoning": "llm aim", "_source": "gemini-adk"}
+    d = _validate(llm, _revs(), stat, {GOOD: {"count": 2}})
+    assert d["rollback_revision"] == GOOD
+    assert d["_target_source"] == "ledger" and d["_target_overridden"] == LANDMINE
+    assert "re-aim" in d["reasoning"]
+
+
+def test_reaim_requires_the_live_probe(monkeypatch):
+    """The override is only licensed when the act-time causal probe exists to gate the substituted
+    target (review F1: with the probe off, an unprobed stale witness could be WORSE than the LLM's
+    aim, and the recorded probe claim would be false) — probe off => the LLM's aim stands."""
+    monkeypatch.setattr(config, "CAUSAL_CHECK_ENABLED", False)
+    stat = {"verdict": "FAIL", "reason": "x", "rate": 0.9}
+    llm = {"action": "ROLLBACK", "confidence": 1.0, "rollback_revision": LANDMINE,
+           "bad_revision": SERVING, "reasoning": "llm aim"}
+    d = _validate(llm, _revs(), stat, {GOOD: {}})
+    assert d["rollback_revision"] == LANDMINE and "_target_overridden" not in d
+
+
+def test_llm_aim_at_any_witnessed_target_stands_even_if_not_newest(monkeypatch):
+    """Kills the mutant the review found surviving (F4): dropping the `target not in witnessed`
+    guard would re-aim a witnessed-but-older LLM aim onto the NEWEST witnessed candidate — here
+    the landmine. An aim at ANY witnessed target must stand."""
+    monkeypatch.setattr(config, "CAUSAL_CHECK_ENABLED", True)
+    stat = {"verdict": "FAIL", "reason": "x", "rate": 0.9}
+    llm = {"action": "ROLLBACK", "confidence": 1.0, "rollback_revision": GOOD,
+           "bad_revision": SERVING, "reasoning": "llm aim"}
+    d = _validate(llm, _revs(), stat, {GOOD: {}, LANDMINE: {}})   # newest witnessed = LANDMINE
+    assert d["rollback_revision"] == GOOD and "_target_overridden" not in d
+
+
+def test_llm_aim_at_a_witnessed_target_stands(monkeypatch):
+    monkeypatch.setattr(config, "CAUSAL_CHECK_ENABLED", True)
+    stat = {"verdict": "FAIL", "reason": "x", "rate": 0.9}
+    llm = {"action": "ROLLBACK", "confidence": 1.0, "rollback_revision": GOOD,
+           "bad_revision": SERVING, "reasoning": "llm aim"}
+    d = _validate(llm, _revs(), stat, {GOOD: {}})
+    assert d["rollback_revision"] == GOOD and "_target_overridden" not in d
+
+
+def test_llm_aim_stands_on_cold_ledger_and_without_stat(monkeypatch):
+    monkeypatch.setattr(config, "CAUSAL_CHECK_ENABLED", True)
+    llm = {"action": "ROLLBACK", "confidence": 1.0, "rollback_revision": LANDMINE,
+           "bad_revision": SERVING, "reasoning": "llm aim"}
+    stat = {"verdict": "FAIL", "reason": "x", "rate": 0.9}
+    assert _validate(dict(llm), _revs(), stat, {})["rollback_revision"] == LANDMINE   # cold: v3
+    assert _validate(dict(llm), _revs(), None, {GOOD: {}})["rollback_revision"] == LANDMINE  # no verdict
+    # witnessed exists but contains NO eligible candidate (only the serving revision) -> unchanged
+    assert _validate(dict(llm), _revs(), stat, {SERVING: {}})["rollback_revision"] == LANDMINE
+
+
 # --- integration: the marquee story over a per-revision world ---------------------------
 class BadBadWorld:
     """Two consecutive bad deploys: the serving revision AND the newest-ready (recency's pick) are
@@ -170,6 +229,26 @@ def test_bad_bad_with_ledger_heals_autonomously(monkeypatch):
     assert LANDMINE not in world.routed_to
     decision = next(e for e in res["events"] if e.get("stage") == "DECISION")
     assert decision.get("_target_source") == "ledger"  # the selection is attributable in the events
+
+
+def test_llm_wrong_aim_heals_end_to_end_via_reaim(monkeypatch):
+    """The live-incident replay: the LLM proposes the landmine during a confident FAIL; the FSM
+    re-aims at the witnessed-good revision; the live probe agrees; the heal completes — the page
+    that happened live becomes an autonomous heal."""
+    from autosre import gemini, state_machine
+    memory.witness_serving(SERVICE, GOOD)
+    world = BadBadWorld()
+    monkeypatch.setattr(state_machine.adk_brain, "decide", lambda *a, **k: None)
+    monkeypatch.setattr(gemini, "decide", lambda *a, **k: {
+        "action": "ROLLBACK", "confidence": 1.0, "rollback_revision": LANDMINE,
+        "bad_revision": SERVING, "reasoning": "hallucinated aim at the landmine",
+        "_source": "gemini-test"})
+    res = _run(monkeypatch, world, causal=True)
+    assert res["status"] == "mitigated"
+    assert res["rolled_back_to"] == GOOD
+    assert LANDMINE not in world.routed_to
+    decision = next(e for e in res["events"] if e.get("stage") == "DECISION")
+    assert decision.get("_target_overridden") == LANDMINE
 
 
 def test_stale_ledger_entry_cannot_bypass_the_live_probe(monkeypatch):

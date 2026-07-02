@@ -101,7 +101,7 @@ def _heal_body(incident_id: str, service: str) -> dict:
     emit("DECISION", decision["action"], **decision)
     _decision_summary = {k: decision.get(k) for k in (
         "action", "confidence", "reasoning", "evidence", "_source", "_adk_tools",
-        "bad_revision", "rollback_revision", "_target_source")}
+        "bad_revision", "rollback_revision", "_target_source", "_target_overridden")}
     if decision["action"] != "ROLLBACK":
         # ESCALATE (from the safety gate or Gemini) must surface to a human — not look like a no-op.
         if decision["action"] == "ESCALATE":
@@ -653,6 +653,28 @@ def _validate(decision: dict, revs: dict, stat: dict | None = None,
     if decision.get("confidence", 0) < config.CONFIDENCE_THRESHOLD or target not in known:
         return {**decision, "action": "ESCALATE",
                 "reasoning": f"gate failed (confidence/target). {decision.get('reasoning', '')}"}
+    # v4 RE-AIM (observed live: Gemini aimed a latency rollback at the KeyError landmine; the causal
+    # probe vetoed safely, but a WITNESSED-good target existed — the exact ESCALATE the ledger is
+    # built to convert into a heal): under a confident FAIL, if the LLM's proposed target has no
+    # witnessed-healthy history but a witnessed candidate exists, the FSM re-aims the rollback at
+    # it — deterministic knowledge the LLM lacks, a single substitution (no candidate-walk).
+    # GATED ON THE CAUSAL CHECK (adversarial review): overriding an explicit LLM aim is only
+    # licensed when the act-time live probe exists to gate the substituted target — with the probe
+    # off, the LLM's aim stands (v3 behavior). Documented trade: a STALE witness (healthy once, bad
+    # now) makes the probe veto→escalate where the LLM's aim might have healed — the safe direction;
+    # and the probe cannot see stateful/migration badness (enable AIRBAG_REVERSIBILITY_GUARD when
+    # irreversibility markers are in use — the re-aim prefers OLDER targets). Cold ledger /
+    # witnessed proposal / no stat verdict → unchanged.
+    if (config.CAUSAL_CHECK_ENABLED and stat is not None and stat.get("verdict") == "FAIL"
+            and witnessed and target not in witnessed):
+        _, led_target, from_ledger = _rollback_pair(revs, witnessed)
+        if from_ledger and led_target and led_target != target:
+            return {**decision, "rollback_revision": led_target,
+                    "_target_source": "ledger", "_target_overridden": target,
+                    "reasoning": f"{decision.get('reasoning', '')} [FSM re-aim: proposed target "
+                                 f"{target} has no witnessed-healthy serving history; {led_target} "
+                                 f"was WITNESSED serving healthily (serving-history ledger) — the "
+                                 f"live causal probe gates it before any traffic shifts.]"}
     return decision
 
 

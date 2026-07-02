@@ -78,6 +78,25 @@ workflow) and verified on live Cloud Run:
 The deterministic-core / LLM-advisory rule still holds throughout: Gemini decides, the state machine
 (now with a statistical gate **and** an autonomy gate) validates and acts.
 
+## v3 — causal certainty across signals (live, on by default)
+| Upgrade | What it does | Where |
+|---|---|---|
+| **Multi-signal detection** | A deterministic detector+fusion engine (`AIRBAG_SIGNALS`): the **latency detector** catches a 200-but-slow regression (Wilson-gated per-window slow proportion + an N-window debounce) and feeds the same FAIL/PASS/INCONCLUSIVE contract; a confident FAIL **promotes** a rollback even when the LLM hedges. Recovery is then proven **on the signal that triggered** (a slow-but-200 probe is not "recovered" for a latency incident). | [`signals/`](agent/autosre/signals/) |
+| **Causal pre-check** | Before spending the rollback, **probe the rollback target directly**: if it is ALSO confidently degraded, the cause is external → **escalate without the futile traffic shift**. | [`causal.py`](agent/autosre/causal.py) |
+| **Airbag-Bench** | A committed, labeled incident-replay bench + scorecards with a CI ratchet — every decision-quality claim above is a reproducible number, honestly framed as the deterministic floor. | [`docs/AIRBAG_BENCH.md`](docs/AIRBAG_BENCH.md) |
+
+## v4 — the action is provably CORRECT and provably SAFE (live)
+v3 made detection trustworthy; v4 makes the one reversible **action** trustworthy. The rollback
+target used to be "the newest ready 0-traffic revision" — **recency is only a proxy** for
+last-good, and a bad→bad deploy sequence defeats it.
+
+| Upgrade | What it does | Where |
+|---|---|---|
+| **Serving-history ledger** (the marquee) | Airbag **witnesses** revisions it has *observed serving healthily* (confident no-op runs; `_verify`-proven mitigation targets) into a bounded per-service Firestore map, and target selection **prefers witnessed-good over merely-newest** (cold start = today's behavior). The FSM even **re-aims** an LLM-proposed target that has no witnessed history (caught live: Gemini aimed a latency rollback at the 5xx landmine). The ledger only **proposes** — the live causal probe still gates every selection. Scored: the bench's **target-correctness** dimension, with bad→bad fixtures where recency aims at the landmine and the ledger heals. | [`memory.py`](agent/autosre/memory.py) · [`state_machine.py`](agent/autosre/state_machine.py) |
+| **Latency-aware target-probe** | The causal probe now matches the **incident's axis**: for a latency incident, a 200-but-confidently-slow target is vetoed (`{errs,total,slow}` + a second Wilson gate; cold-start rinse so a scaled-to-zero target's boot never counts). Causal-mode false rollbacks: **0 on both external-cause axes**. | [`causal.py`](agent/autosre/causal.py) |
+| **Irreversible-deploy guard** | A deploy that performed a forward-only change (schema migration) **declares** it (`airbag.dev/irreversible=<id>` revision annotation); Airbag refuses to roll back **across** the declared marker (that "reversible" action would corrupt every write) and escalates instead. Honors a declared contract — does **not** detect migrations. Fail-open, **default OFF**. | [`reversibility.py`](agent/autosre/reversibility.py) |
+| **Firestore-emulator CI gate** | The durable-state contract (transactions, leases, ordered reads, the ledger) is proven against **real** Firestore transactions in CI, not just the in-memory mimic. | [`.github/workflows/ci.yml`](.github/workflows/ci.yml) |
+
 It also runs fully **locally with no GCP** (see below). See [docs/PLAN.md](docs/PLAN.md) and [docs/DEMO.md](docs/DEMO.md).
 
 ## Run the live demo (no GCP, ~1 min)

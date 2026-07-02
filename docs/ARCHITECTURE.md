@@ -2,10 +2,12 @@
 
 ## State machine (the transaction)
 ```
-RECEIVED → TRIAGED → ADK(triage→decide) → DECISION
-   ├─ OBSERVE → DONE
-   └─ ROLLBACK → ROLLBACK_APPLIED → VERIFYING ──(error→0 & probe ok)──→ MITIGATED → FIX_PR → PENDING_REVERT
-                                       └─(budget exceeded)→ ESCALATED
+RECEIVED → TRIAGED → ANALYZED(multi-signal Wilson verdict) → ADK(triage→decide) → DECISION
+   ├─ OBSERVE → DONE (witness the serving revision into the ledger on confident health)
+   └─ ROLLBACK (target: WITNESSED-healthy preferred, recency fallback; FSM re-aims an unwitnessed LLM aim)
+        → [REVERSIBILITY guard (v4, flag)] → [CAUSAL target-probe (live, signal-keyed)]
+        → ROLLBACK_APPLIED → VERIFYING ──(signal recovered & probe ok)──→ MITIGATED (witness the target) → FIX_PR → PENDING_REVERT
+             └─(guard BLOCK / probe COINCIDENT / budget exceeded)→ ESCALATED (zero or reverted shift)
 
    # close the transaction (complete_rollback, triggered by the fix-PR CI or the dashboard):
    COMPLETE_ROLLBACK → FIX_DEPLOYED → CANARY(10/50/100, direct fix-probe gate) ──(healthy)──→ ROLLBACK_UNDONE → CLOSED
@@ -25,6 +27,54 @@ RECEIVED → TRIAGED → ADK(triage→decide) → DECISION
 - **Durable state + multi-instance** (`state_store.py`, `events.py`) — pending reverts / incidents / webhook-dedup behind one atomic `transact`; Firestore transaction for the exactly-once completion **lease** (self-healing if a heal crashes). With a **Pub/Sub event-bus fan-out** (`AIRBAG_EVENTS=pubsub`) every instance mirrors every instance's events, so the dashboard stream is instance-agnostic and the agent runs `--max-instances 3`.
 - **Graduated autonomy** (`autonomy.py`) — per-service `L0` observe / `L1` approve-before-rollback / `L2` auto-rollback + approve-fix / `L3` full, enforced in the deterministic state machine; durable approval gate (`/internal/approve`); advisory promotion + automatic demotion.
 - **Cross-incident memory** (`memory.py`) — incident history + **recurrence** detection (advisory "the fix isn't holding" signal).
+
+## v4 — provably-correct, provably-safe ACTION (live)
+v3 made detection + diagnosis trustworthy; v4 makes the ONE reversible action — the rollback —
+provably aimed at the right revision and provably safe to take. No new detectors (the bottleneck
+was action-target correctness, not detection breadth). All deterministic + LLM-free (AST-guarded).
+
+- **Serving-history ledger** (`memory.witness_serving`/`witnessed_healthy` — the marquee). The
+  rollback target was the *newest ready 0-traffic revision*: recency as a **proxy** for last-good,
+  which a bad→bad deploy sequence defeats. Airbag now **witnesses** revisions it has *observed
+  serving healthily* (a PASS / zero-5xx no-op run, the L1-approval PASS re-check, or a
+  `_verify`-proven mitigation target — never an unverified shift, never a flaky window) into a
+  bounded per-service map on the same Firestore doc as the learned baseline. Target selection
+  (`_preferred_target`, wired into the heuristic + `_validate`'s promotion) **prefers the newest
+  witnessed candidate**; cold start falls back to recency byte-identical. The FSM also **re-aims**
+  an LLM-proposed target that has no witnessed history when a witnessed candidate exists (observed
+  live: Gemini aimed a latency rollback at the 5xx landmine; a single deterministic substitution —
+  not a candidate-walk). HONEST LIMITS: the ledger only **PROPOSES** — the live causal probe still
+  gates whatever is selected (a stale witness can never bypass it), and "witnessed-healthy" is a
+  fact about *witness time*, not now. Scored on the bench's v4 **target-correctness** dimension:
+  the bad→bad fixtures show cold-start recency aiming at the landmine (wasted rollback, or a
+  causal veto that pages a human) vs the ledger healing autonomously onto witnessed-good.
+- **Latency-aware causal target-probe** (`causal.py` + `probe_revision_health` → `{errs,total,slow}`).
+  The v3 probe counted only 5xx, so a 200-but-slow target passed the pre-check for a *latency*
+  incident. The probe now times each request; for a latency-triggered incident a second Wilson gate
+  (the latency detector's own knobs) vetoes a confidently-slow target → COINCIDENT → escalate with
+  zero shift. The gcp probe **rinses the cold start** (one untimed request) so a scaled-to-zero
+  target's boot latency is never counted as veto evidence, and drops unreachable samples (the veto
+  honestly covers the SLO→10s band; beyond it `_verify` remains the backstop). 5xx-incident
+  behavior unchanged; VETO-only; ships ON in prod (rides `AIRBAG_CAUSAL_CHECK`). Causal-mode false
+  rollbacks: **0 across both external-cause axes** on the bench.
+- **Forward-only / irreversible-deploy guard** (`reversibility.py`, `AIRBAG_REVERSIBILITY_GUARD`,
+  **default OFF**, fail-OPEN). The one gap every other gate greenlights: a rollback across a deploy
+  that performed a forward-only change (schema migration) puts pre-migration code in front of the
+  migrated datastore — the target boots, probes 200, `_verify` can pass, and every write corrupts.
+  A deploy **declares** the change with the revision annotation `airbag.dev/irreversible=<id>`
+  (revision-template annotations via service YAML / Terraform; the value is ideally a migration id).
+  The guard blocks only a rollback that **crosses** a declared marker on the traffic path
+  (`epoch(target) < epoch(marker) ≤ epoch(serving)`) declaring a change the target doesn't itself
+  carry — so a staged `--no-traffic` marker doesn't block, and Cloud Run's **sticky** template
+  annotations (inherited by every later revision) read as ONE declaration, never freezing all
+  future rollbacks. HONEST LIMITS: it **honors a declared contract**; it does NOT detect
+  migrations; undeclared forward-only deploys are invisible to it.
+- **Firestore-emulator CI gate** (+ `firestore.indexes.json`). Prod runs `AIRBAG_STATE=firestore`
+  but the suite pinned the memory mimic — now the state-critical suite (store contract, ordered
+  reads, the ledger, approvals) runs against real google-cloud-firestore transactions in CI, with
+  the backend divergence pinned (Firestore `order_by` silently omits docs missing the order field;
+  every writer always stamps it). The indexes file is deliberately empty: every query is a
+  single-field `order_by` (auto-indexed) and the ledger is a by-id doc read.
 
 ## Components
 | Concern | Tech | Notes |

@@ -85,7 +85,9 @@ never freely touches prod. Judges see a governed control loop, not a chatbot wit
 - **Verifiable incident-report Artifact:** every run is persisted and rendered at
   `/incidents/{id}/report` (decision + signals + before/after + full timeline) — *AI isn't guessing*.
 - Three execution backends (mock / local / gcp) behind one agent codebase; `/demo/*` is
-  token-gated so the public dashboard is watch-only. **175 tests (167 agent + 8 mcp-server), CI green.**
+  token-gated so the public dashboard is watch-only. **249 tests (241 agent + 8 mcp-server), CI
+  green — including a firestore-emulator job that proves the durable-state contract on real
+  Firestore transactions.**
 
 **v2 — production-grade autonomy (real, verified on live Cloud Run):**
 - **Statistical decision gate** — the rollback trigger is a **Wilson confidence-interval** verdict
@@ -131,7 +133,7 @@ causal are now ON by default in the live demo** (`AIRBAG_SIGNALS=all`, `AIRBAG_C
 verified end-to-end on a live latency-regression scenario (below).
 - **Airbag-Bench** ([`docs/AIRBAG_BENCH.md`](docs/AIRBAG_BENCH.md)) — a labeled incident-replay harness
   that scores rollback precision/recall, false-rollback rate, and Alert-to-Verified-Recovery over a
-  17-case corpus; committed scorecards + a golden-ratchet CI gate make it a real TDD loop.
+  17-case corpus (22 in v4, adding target-correctness); committed scorecards + a golden-ratchet CI gate make it a real TDD loop.
 - **Multi-signal detection** (`signals/`) — a latency-regression detector (Wilson-gated slow-request
   proportion, N-window debounce) fused into the same FAIL/PASS/INCONCLUSIVE verdict the gate consumes,
   + a deterministic **promotion** so a confident statistical FAIL drives a rollback even when the LLM
@@ -164,10 +166,62 @@ verified end-to-end on a live latency-regression scenario (below).
   ready 0-traffic revision, so the demo baseline keeps the healthy revision newest; deriving the true
   last-good from sustained-traffic history is a roadmap item.
 
+**v4 — the ACTION is provably correct and provably safe (real, LIVE on Cloud Run, agent rev 00034):**
+v3 closed with a limitation stated plainly: *"the rollback target is the newest ready 0-traffic
+revision… deriving the true last-good is a roadmap item."* v4 ships exactly that — no new
+detectors (the bottleneck was action-target correctness, not detection breadth). Everything below
+is deterministic + LLM-free (AST-guarded), adversarially reviewed before commit, and honest about
+its limits.
+- **Serving-history ledger — the rollback target is now witnessed-good, not merely newest**
+  ([`memory.py`](agent/autosre/memory.py)). Airbag *witnesses* revisions it has **observed serving
+  healthily** (confident no-op runs; `_verify`-proven mitigation targets — never an unverified
+  shift, never a flaky window) into a bounded per-service Firestore map, and target selection
+  prefers the newest **witnessed** candidate (cold start = the old recency behavior, byte-identical).
+  A bad→bad deploy sequence — ship broken, panic-ship broken again — defeats recency (it aims at
+  the second landmine); the ledger aims at the proven-good older revision and the heal stays
+  autonomous. **The ledger only PROPOSES: the live causal probe still gates every selection**
+  (a stale witness can never bypass it — pinned by test). Scored by a new bench
+  **target-correctness** dimension (decided-keyed: it scores the *selector*, so a wrong aim counts
+  even when the veto stops it pre-shift) over committed bad→bad fixtures: the cold-start control
+  aims at the landmine in every mode; the warm ledger heals onto witnessed-good.
+- **The FSM re-aims a bad LLM aim — caught live, then closed** ([`state_machine.py`](agent/autosre/state_machine.py)).
+  During v4's live verification, Gemini hallucinated "100% 5xx" on a *latency* incident and aimed
+  the rollback at the 5xx-landmine revision; the causal probe vetoed it safely (escalated, zero
+  traffic shifted) while a witnessed-good target existed. Now, under a confident statistical FAIL,
+  an LLM aim with **no witnessed history** is re-aimed at the witnessed candidate — a single
+  deterministic substitution (not a candidate-walk), licensed **only when the live causal probe is
+  on** to gate the substituted target, with the override recorded in the incident audit trail
+  (`_target_overridden`).
+- **The causal probe now matches the incident's axis** ([`causal.py`](agent/autosre/causal.py)).
+  The v3 probe counted only 5xx, so a 200-but-confidently-SLOW target passed the pre-check for a
+  *latency* incident. The probe returns `{errs,total,slow}` (per-request timing, all three
+  backends); for a latency incident a second Wilson gate (the latency detector's own knobs) vetoes
+  a confidently-slow target — with a **cold-start rinse** (one untimed request) so a
+  scaled-to-zero target's boot latency is never counted as veto evidence. Veto-only; 5xx behavior
+  unchanged; ON in prod. Bench: causal-mode false rollbacks **0 across both external-cause axes**;
+  a 2/8 warmup blip still rolls back.
+- **Forward-only / irreversible-deploy guard** ([`reversibility.py`](agent/autosre/reversibility.py)).
+  The one gap every other gate greenlights: rolling back **across** a schema migration puts
+  pre-migration code in front of a migrated datastore (boots fine, probes 200, corrupts every
+  write). A deploy **declares** the change (revision annotation `airbag.dev/irreversible=<id>`);
+  the guard escalates instead of crossing a declared marker on the traffic path. Honest contract:
+  it **honors declarations, it does not detect migrations**; fail-open on every ambiguity;
+  **default OFF** (demo unchanged). Sticky-annotation inheritance and staged `--no-traffic`
+  markers are handled (identical values = one declaration; only target→serving crossings count).
+- **Firestore-emulator CI gate** — prod runs `AIRBAG_STATE=firestore`, but the suite pinned the
+  memory mimic; the state-critical suite now also runs against **real** google-cloud-firestore
+  transactions in CI, with the real divergence pinned (Firestore `order_by` silently omits
+  documents missing the order field — every writer always stamps it).
+- **Live-verified (rev 00034):** 💣 5xx Break→Heal — detect (FAIL 20/20) → causal probe on the
+  target (clean) → rollback → `MITIGATED`, and the mitigation target **witnessed into the live
+  Firestore ledger**; 🐢 latency Break→Heal — the latency detector FAILs (4/4 windows), the ledger
+  aims the rollback, recovery proven on the latency signal. Both leave the demo baseline healthy.
+
 **Roadmap (P2, honestly not done):**
 - ChatOps (Slack approvals on top of the autonomy gate); Cloud Assist composition.
-- Saturation / SLO-burn detectors; true-last-good rollback-target selection (from sustained-traffic
-  history, not revision recency); a WIF/KMS-signed (not just digest) proof bundle; MCP action tools for A2A.
+- Saturation / SLO-burn detectors; a WIF/KMS-signed (not just digest) proof bundle; MCP action
+  tools for A2A; a witness-freshness horizon on the ledger (today a stale witness is only caught
+  by the live probe at act time).
 
 ## 6. The demo
 - **Live:** open the agent URL (operator link pre-fills the demo token), click **Break → Heal →

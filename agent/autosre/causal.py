@@ -59,11 +59,12 @@ def precheck(service: str, region: str, target: str | None, primary_signal: str 
                 "target": target, "probe": probe}
     v = analyzer.analyze(errs, total, config.CAUSAL_TOLERANCE,
                          z=config.STAT_Z, min_fail_errors=config.CAUSAL_MIN_ERRORS)
-    if v["verdict"] == "FAIL":   # the last-good target is CONFIDENTLY also failing → external cause
+    if v["verdict"] == "FAIL":   # the target is CONFIDENTLY also failing → landing on it is futile
         return {"verdict": "COINCIDENT", "target": target, "probe": seen,
-                "reason": (f"rollback target {target} is ALSO degraded ({errs}/{total} probe failures, "
-                           f"CI lower > {config.CAUSAL_TOLERANCE:.0%}) — the cause is external "
-                           f"(dependency/quota), not this revision; a rollback is futile")}
+                "reason": (f"rollback target {target} is ALSO confidently degraded ({errs}/{total} "
+                           f"probe failures, CI lower > {config.CAUSAL_TOLERANCE:.0%}) — landing on "
+                           f"it is futile (an external cause breaking every revision, or a broken "
+                           f"target); escalating instead of shifting traffic onto it")}
     if primary_signal == "latency":
         # v4: the probe axis must match the incident's axis — a 200-but-slow target passes the 5xx
         # gate yet cannot remedy a LATENCY incident (post-rollback _verify would fail on the SLO).
