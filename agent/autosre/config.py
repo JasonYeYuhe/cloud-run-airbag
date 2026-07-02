@@ -104,6 +104,17 @@ PROBE_HEADERS = {"User-Agent": PROBE_UA, "X-Airbag-Probe": "1"}
 # keys on trace COUNTS, and the built-in request_count metric can't filter on a header at all).
 SELF_TRAFFIC_EXCLUDE = _bool("AIRBAG_SELF_TRAFFIC_EXCLUDE", "false")
 
+# Approval coalescing + settlement (v5 Phase 1.3). One outage that repeatedly needs a human (the
+# storm's step 3: a verify-failure demotes L3->L1, then every subsequent gated heal filed its OWN
+# approval card, piling up + expiring silently) collapses to ONE operator card. Gated heals with the
+# SAME sha256(service|kind|proposed_target|primary_signal) ATTACH to the open card + bump a count; one
+# approve/deny settles ALL attached; a heal that self-resolves sweeps its now-stale card. The signal
+# term is a Gemini BLOCKER fix: a 5xx card carries a fix-PR consequence, a latency card must not — so
+# different incident CLASSES never merge even when they propose the same target. Also fixes the
+# demotion breadcrumb: `demoted_from` + the CAUSING incident are preserved across later L1 failures
+# (v2 erased them every record_outcome), cleared only by an explicit re-grant. Default OFF -> v2.
+APPROVAL_COALESCE = _bool("AIRBAG_APPROVAL_COALESCE", "false")
+
 # local backend: where the target-app is reachable
 TARGET_BASE_URL = os.getenv("TARGET_BASE_URL", "http://localhost:8081")
 # demo harness (gcp): after 'break' shifts traffic to the bad revision, generate this many

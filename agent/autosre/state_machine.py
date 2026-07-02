@@ -275,7 +275,7 @@ def _mitigate(service: str, incident_id: str, decision: dict, decision_summary: 
     emit("ROLLBACK_APPLIED", f"100% traffic -> {target}", result=result)
 
     if not _verify(service, emit, since_epoch=rollback_at, primary_signal=primary_signal):
-        autonomy.record_outcome(service, success=False)  # fail-safe: a bad heal demotes autonomy
+        autonomy.record_outcome(service, success=False, incident_id=incident_id)  # fail-safe: a bad heal demotes autonomy
         # the rollback DID shift traffic; track it so a later fix can still complete (or undo) it
         # instead of stranding the routing (complete_rollback re-verifies health before acting).
         pending.set_pending(service, {
@@ -294,7 +294,7 @@ def _mitigate(service: str, incident_id: str, decision: dict, decision_summary: 
     note = gemini.explain_recovery(service, before, after)
     emit("MITIGATED", note or "error rate back to zero — recovery proven",
          before=before.get("error_rate"), after=after.get("error_rate"))
-    autonomy.record_outcome(service, success=True)  # trust ramp: a verified heal builds the streak
+    autonomy.record_outcome(service, success=True, incident_id=incident_id)  # trust ramp: a verified heal builds the streak
     # v4 serving-history ledger: _verify PROVED the target recovered the triggering signal at 100%
     # traffic — the strongest witness Airbag collects. (An unverified shift — the escalate branch
     # above — must never stamp: traffic moving is not evidence, recovery proof is.) Defense in
@@ -551,7 +551,7 @@ def complete_rollback(service: str, fix_revision: str | None = None,
             if not (cand.get("ok") and _verify(service, emit, since_epoch=stage_at)):
                 tools.set_traffic_split(service, config.GCP_REGION, {safe: 100})  # compensate
                 attempts = pending.bump_attempts(service)
-                autonomy.record_outcome(service, success=False)  # a bad fix caught at canary demotes trust
+                autonomy.record_outcome(service, success=False, incident_id=incident_id)  # a bad fix caught at canary demotes trust
                 emit("MANUAL_INTERVENTION",
                      f"fix {candidate} failed the {pct}% canary gate (attempt {attempts}/"
                      f"{config.MAX_UNDO_ATTEMPTS}) — compensated: 100% traffic back on {safe}")

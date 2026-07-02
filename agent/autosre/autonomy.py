@@ -36,17 +36,26 @@ def set_level(service: str, level: str) -> dict:
         cur = cur or {"service": service, "streak": 0}
         cur["level"] = level
         cur["advise_promote"] = False  # an explicit set clears any standing suggestion
+        cur.pop("demoted_from", None)          # a human re-grant clears the demotion breadcrumb (v5 1.3)
+        cur.pop("demoted_by_incident", None)   # (harmless when flag off — demoted_from was ephemeral there)
         return cur, dict(cur)
     return state_store.transact(_COLL, service, _m)
 
 
-def record_outcome(service: str, success: bool) -> dict:
+def record_outcome(service: str, success: bool, incident_id: str | None = None) -> dict:
     """Update the per-service trust ramp after a heal. On success bump the streak (and SUGGEST a
     promotion at the threshold — advisory only). On failure reset the streak and AUTO-DEMOTE an
-    autonomous level back to L1 (fail-safe). Returns the new autonomy record."""
+    autonomous level back to L1 (fail-safe). Returns the new autonomy record.
+
+    v5 Phase 1.3 (AIRBAG_APPROVAL_COALESCE): the demotion breadcrumb — `demoted_from` and the CAUSING
+    `demoted_by_incident` — is preserved across subsequent L1 failures (v2 erased it on EVERY call,
+    losing 'why am I at L1' the moment a second storm heal failed), and cleared only by an explicit
+    re-grant (set_level). Flag OFF -> byte-identical v2 (breadcrumb erased every call)."""
+    coalesce = config.APPROVAL_COALESCE
     def _m(cur):
         cur = cur or {"service": service, "level": config.AUTONOMY_LEVEL, "streak": 0}
-        cur.pop("demoted_from", None)
+        if not coalesce:
+            cur.pop("demoted_from", None)   # v2: erased every call (the ergonomics bug 1.3 fixes)
         current_lvl = cur.get("level", config.AUTONOMY_LEVEL)  # may be absent -> read cleanly
         if success:
             cur["streak"] = cur.get("streak", 0) + 1
@@ -55,9 +64,11 @@ def record_outcome(service: str, success: bool) -> dict:
         else:
             cur["streak"] = 0
             cur["advise_promote"] = False
-            if current_lvl in ("L2", "L3"):
+            if current_lvl in ("L2", "L3"):   # a REAL demotion (a repeat failure already at L1 is not)
                 cur["demoted_from"] = current_lvl
                 cur["level"] = "L1"  # a bad heal revokes autonomy until a human re-grants it
+                if coalesce and incident_id:
+                    cur["demoted_by_incident"] = incident_id  # the CAUSING incident, recorded once
         return cur, dict(cur)
     return state_store.transact(_COLL, service, _m)
 
@@ -66,7 +77,9 @@ def status(service: str) -> dict:
     doc = state_store.get(_COLL, service) or {}
     return {"service": service, "level": level_for(service),
             "streak": doc.get("streak", 0), "advise_promote": bool(doc.get("advise_promote")),
-            "demoted_from": doc.get("demoted_from"), "promote_after": config.AUTONOMY_PROMOTE_AFTER}
+            "demoted_from": doc.get("demoted_from"),
+            "demoted_by_incident": doc.get("demoted_by_incident"),  # v5 1.3: the causing incident
+            "promote_after": config.AUTONOMY_PROMOTE_AFTER}
 
 
 # --- durable approval queue (L1 rollback / L2 fix-PR gates) -----------------------------

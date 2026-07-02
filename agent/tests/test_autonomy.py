@@ -39,6 +39,37 @@ def test_failure_auto_demotes_autonomous_level():
     assert rec["level"] == "L1" and rec["demoted_from"] == "L3" and rec["streak"] == 0
 
 
+# --- v5 Phase 1.3: demotion breadcrumb bookkeeping (AIRBAG_APPROVAL_COALESCE) ---------
+def test_demotion_breadcrumb_erased_when_flag_off():
+    """Flag OFF -> byte-identical v2: demoted_from is ephemeral (erased on the next record_outcome)."""
+    autonomy.set_level("svc", "L3")
+    assert autonomy.record_outcome("svc", success=False)["demoted_from"] == "L3"  # the demotion
+    rec = autonomy.record_outcome("svc", success=False)  # a later L1 failure
+    assert rec.get("demoted_from") is None  # v2 erased the breadcrumb (the ergonomics bug)
+
+
+def test_demotion_breadcrumb_preserved_when_flag_on(monkeypatch):
+    """Flag ON -> the breadcrumb + CAUSING incident survive later L1 failures (the storm's step 3:
+    'why am I at L1' must not vanish the moment a second storm heal fails)."""
+    monkeypatch.setattr(config, "APPROVAL_COALESCE", True)
+    autonomy.set_level("svc", "L3")
+    rec = autonomy.record_outcome("svc", success=False, incident_id="inc-cause")
+    assert rec["level"] == "L1" and rec["demoted_from"] == "L3" and rec["demoted_by_incident"] == "inc-cause"
+    rec2 = autonomy.record_outcome("svc", success=False, incident_id="inc-later")  # already L1
+    assert rec2["demoted_from"] == "L3" and rec2["demoted_by_incident"] == "inc-cause"  # not erased/overwritten
+    rec3 = autonomy.record_outcome("svc", success=True, incident_id="inc-ok")  # a success at L1
+    assert rec3["demoted_from"] == "L3" and rec3["demoted_by_incident"] == "inc-cause"  # still demoted until re-granted
+    assert autonomy.status("svc")["demoted_by_incident"] == "inc-cause"  # surfaced to the operator
+
+
+def test_re_grant_clears_demotion_breadcrumb(monkeypatch):
+    monkeypatch.setattr(config, "APPROVAL_COALESCE", True)
+    autonomy.set_level("svc", "L3")
+    autonomy.record_outcome("svc", success=False, incident_id="inc-cause")  # demote L3 -> L1
+    rec = autonomy.set_level("svc", "L3")  # a human explicitly re-grants
+    assert rec.get("demoted_from") is None and rec.get("demoted_by_incident") is None
+
+
 def test_approval_save_get_expire(monkeypatch):
     autonomy.save_approval("inc1", {"service": "svc", "kind": "rollback"})
     assert autonomy.get_approval("inc1")["kind"] == "rollback"
