@@ -50,3 +50,53 @@ def test_report_escapes_event_content():
                "verdict": "<b>x</b>", "reason": "<i>y</i>"}]
     h = report.render(_rec(events))
     assert "<script>alert(1)</script>" not in h and "&lt;script&gt;" in h
+
+
+# --- v4 legibility: target selection, the FSM re-aim, and the irreversibility guard ---------------
+def test_report_surfaces_ledger_target_selection():
+    h = report.render(_rec([], decision={"action": "ROLLBACK", "confidence": 0.9,
+                                         "rollback_revision": "svc-00009-good",
+                                         "_target_source": "ledger"}))
+    assert "svc-00009-good" in h
+    assert "witnessed-good" in h and "serving-history ledger" in h
+
+
+def test_report_surfaces_fsm_reaim():
+    h = report.render(_rec([], decision={"action": "ROLLBACK", "confidence": 1.0,
+                                         "rollback_revision": "svc-00009-good",
+                                         "_target_source": "ledger",
+                                         "_target_overridden": "svc-00011-landmine"}))
+    assert "FSM re-aim" in h and "svc-00011-landmine" in h and "no witnessed history" in h
+
+
+def test_report_recency_and_llm_labels():
+    h = report.render(_rec([], decision={"action": "ROLLBACK", "confidence": 0.9,
+                                         "rollback_revision": "r1", "_target_source": "recency"}))
+    assert "recency fallback" in h
+    h = report.render(_rec([], decision={"action": "ROLLBACK", "confidence": 0.9,
+                                         "rollback_revision": "r1"}))          # LLM's own aim
+    assert "proposed by the LLM" in h
+    h = report.render(_rec([], decision={"action": "OBSERVE", "confidence": 0.4}))
+    assert "target selected via" not in h                       # no rollback -> no target line
+
+
+def test_report_surfaces_reversibility_guard():
+    events = [
+        {"stage": "RECEIVED", "ts": 100.0, "msg": "incident"},
+        {"stage": "REVERSIBILITY", "ts": 101.0, "verdict": "BLOCK",
+         "msg": "BLOCK — target predates declared marker",
+         "marker_revision": "svc-00012-migration", "marker_value": "orders-v2"},
+        {"stage": "ESCALATED", "ts": 102.0, "msg": "escalated"},
+    ]
+    h = report.render(_rec(events, status="escalated"))
+    assert "Irreversible-deploy guard" in h and "BLOCK" in h
+    assert "svc-00012-migration" in h and "orders-v2" in h
+    # and the card is absent when the guard never ran
+    assert "Irreversible-deploy guard" not in report.render(_rec([]))
+
+
+def test_report_surfaces_causal_probe_counts():
+    events = [{"stage": "CAUSAL", "ts": 1.0, "verdict": "INCONCLUSIVE", "msg": "proceeding"}]
+    h = report.render(_rec(events, causal={"verdict": "INCONCLUSIVE",
+                                           "probe": {"errs": 0, "total": 8, "slow": 0}}))
+    assert "0/8 5xx" in h and "0/8 slow" in h

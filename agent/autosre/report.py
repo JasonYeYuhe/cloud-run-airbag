@@ -18,6 +18,7 @@ _STAGE_COLOR = {
     "CI_GREEN": "#3fb950", "CI_ESCALATED": "#f85149",
     "OBSERVE_ONLY": "#6b7a8d", "AWAITING_APPROVAL": "#e3b341", "APPROVED": "#3fb950",
     "DENIED": "#f85149", "AUTONOMY": "#bc8cff", "RECURRING": "#e3b341",
+    "REVERSIBILITY": "#bc8cff",
 }
 _STATUS_COLOR = {"mitigated": "#3fb950", "closed": "#3fb950", "noop": "#6b7a8d",
                  "escalated": "#e3b341", "compensated": "#e3b341", "manual_intervention": "#f85149",
@@ -41,6 +42,30 @@ def _esc(s) -> str:
 
 def _find(events, stage):
     return next((e for e in events if e.get("stage") == stage), None)
+
+
+_TARGET_SOURCE_LABEL = {
+    "ledger": ("🎯 witnessed-good — serving-history ledger", "#3fb950"),
+    "recency": ("newest ready (recency fallback — no witnessed history yet)", "#e3b341"),
+}
+
+
+def _target_html(d: dict) -> str:
+    """v4 legibility: WHICH revision the rollback was aimed at, and WHY — the target-correctness
+    story (ledger vs recency vs the LLM's own aim, plus the FSM re-aim when it fired)."""
+    target = d.get("rollback_revision")
+    if not target:
+        return ""
+    label, color = _TARGET_SOURCE_LABEL.get(
+        d.get("_target_source"), ("proposed by the LLM (validated by the FSM gate)", "#bc8cff"))
+    out = (f'<div class="kv"><span>rollback target</span><span class="mono">{_esc(target)}</span></div>'
+           f'<div class="kv"><span>target selected via</span>'
+           f'<span class="mono" style="color:{color}">{_esc(label)}</span></div>')
+    if d.get("_target_overridden"):
+        out += (f'<div class="kv"><span>FSM re-aim</span><span class="mono" style="color:#e3b341">'
+                f'LLM aimed at {_esc(d.get("_target_overridden"))} (no witnessed history) — '
+                f're-aimed to the witnessed-good revision</span></div>')
+    return out
 
 
 def _recovery_seconds(events) -> float | None:
@@ -101,14 +126,38 @@ def render(rec: dict) -> str:
             f'<div style="margin:8px 0">{_esc(an.get("reason"))}</div>{det}</div>')
     causal_html = ""
     if cz:
+        # probe counts ride the persisted record's causal verdict (the event carries verdict/target)
+        probe = (rec.get("causal") or {}).get("probe") or {}
+        probe_line = ""
+        if probe:
+            probe_line = (f'<div class="kv"><span>target probe</span><span class="mono">'
+                          f'{_esc(probe.get("errs"))}/{_esc(probe.get("total"))} 5xx'
+                          + (f' · {_esc(probe.get("slow"))}/{_esc(probe.get("total"))} slow'
+                             if probe.get("slow") is not None else "") + "</span></div>")
         causal_html = (
             '<div class="card"><h2>Causal pre-check</h2>'
             f'<div class="act" style="color:#bc8cff">{_esc(cz.get("verdict"))}</div>'
-            f'<div style="margin:8px 0">{_esc(cz.get("msg"))}</div>'
-            '<div style="color:#6b7a8d;font-size:12px">probed the rollback target before committing — '
-            'a rollback is spent only when it will actually help</div></div>')
-    v3_grid = (f'<div class="grid">{detect_html}{causal_html}</div>'
-               if (detect_html or causal_html) else "")
+            f'<div style="margin:8px 0">{_esc(cz.get("msg"))}</div>{probe_line}'
+            '<div style="color:#6b7a8d;font-size:12px">probed the rollback target live before '
+            'committing — on the axis that triggered the incident (a 200-but-slow target cannot '
+            'remedy a latency regression)</div></div>')
+    # --- v4 legibility: the irreversibility guard's verdict (only present when the guard ran) ---
+    rv = _find(events, "REVERSIBILITY")
+    reversibility_html = ""
+    if rv:
+        rv_color = "#f85149" if rv.get("verdict") == "BLOCK" else "#3fb950"
+        marker = rv.get("marker_revision")
+        marker_line = (f'<div class="kv"><span>declared marker</span><span class="mono">'
+                       f'{_esc(marker)} ({_esc(rv.get("marker_value"))})</span></div>' if marker else "")
+        reversibility_html = (
+            '<div class="card"><h2>Irreversible-deploy guard</h2>'
+            f'<div class="act" style="color:{rv_color}">{_esc(rv.get("verdict"))}</div>'
+            f'<div style="margin:8px 0">{_esc(rv.get("msg"))}</div>{marker_line}'
+            '<div style="color:#6b7a8d;font-size:12px">a rollback across a DECLARED forward-only '
+            'change (schema migration) would corrupt writes — the guard honors the declared '
+            'contract and escalates instead</div></div>')
+    v3_grid = (f'<div class="grid">{detect_html}{causal_html}{reversibility_html}</div>'
+               if (detect_html or causal_html or reversibility_html) else "")
     recovery_s = _recovery_seconds(events)
     recovery_html = (f'<div class="kv"><span>alert → verified recovery</span>'
                      f'<span class="mono" style="color:#3fb950">{recovery_s:.0f}s</span></div>'
@@ -144,6 +193,7 @@ def render(rec: dict) -> str:
   <div class="card"><h2>Decision (Gemini via ADK)</h2>
    <div class="act">{_esc(d.get("action") or "—")} <span class="chip">conf {_esc(d.get("confidence"))} · {_esc(d.get("_source") or "—")}</span></div>
    <div style="margin:8px 0">{_esc(d.get("reasoning"))}</div>
+   {_target_html(d)}
    <div class="kv"><span>tools called</span><span class="mono">{_esc(tools) if tools else "—"}</span></div>
    <div style="color:#6b7a8d;margin-top:8px">evidence</div><ul>{evidence_html}</ul>
   </div>

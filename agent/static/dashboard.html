@@ -44,6 +44,7 @@
   .s-ADK .stg{color:var(--violet)}
   .s-DECISION .stg{color:var(--violet)}
   .s-CAUSAL .stg{color:var(--violet)}
+  .s-REVERSIBILITY .stg{color:var(--violet)}
   .s-ROLLBACK_APPLIED .stg{color:var(--cyan)}
   .s-VERIFYING .stg{color:var(--amber)}
   .s-MITIGATED .stg{color:var(--green)}
@@ -314,9 +315,20 @@ function shiftTraffic(){
 function renderDecision(ev){
   const src = (ev._source||'').startsWith('gemini') ? `<span class="chip gemini">${ev._source}</span>` : `<span class="chip">${ev._source||'heuristic'}</span>`;
   const conf = ev.confidence!=null ? Math.round(ev.confidence*100)+'%' : '—';
+  // v4: WHICH revision the rollback is aimed at, and WHY (the target-correctness story)
+  let tgt = '';
+  if(ev.action==='ROLLBACK' && ev.rollback_revision){
+    const lbl = ev._target_source==='ledger' ? ['🎯 witnessed-good (serving-history ledger)','var(--green)']
+              : ev._target_source==='recency' ? ['newest ready (recency fallback)','var(--amber)']
+              : ['LLM-proposed (FSM-validated)','var(--violet)'];
+    tgt = `<div style="margin-top:6px" class="mono muted">target ${esc(ev.rollback_revision)} · <span style="color:${lbl[1]}">${lbl[0]}</span></div>`;
+    if(ev._target_overridden){
+      tgt += `<div class="mono" style="margin-top:2px;color:var(--amber)">FSM re-aim: LLM aimed at ${esc(ev._target_overridden)} (no witnessed history)</div>`;
+    }
+  }
   $('#decision').innerHTML =
     `<div class="act" style="color:${ev.action==='ROLLBACK'?'var(--cyan)':'var(--amber)'}">${ev.action} · <span class="muted">conf ${conf}</span> ${src}</div>
-     <div style="margin-top:6px">${esc(ev.reasoning||'')}</div>`;
+     <div style="margin-top:6px">${esc(ev.reasoning||'')}</div>${tgt}`;
 }
 
 // ---- live SSE (when the agent is running) ----
