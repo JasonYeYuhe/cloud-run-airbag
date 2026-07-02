@@ -155,19 +155,27 @@ def _burst(path: str, n: int) -> None:
                 pass
 
 
-def _break(background_tasks: BackgroundTasks) -> dict:
-    """Route the target to the bad revision (gcp) / toggle the KeyError (local), then make
-    the 5xx visible to monitoring."""
-    res = tools.break_target(config.TARGET_SERVICE, config.GCP_REGION)
+def _break(background_tasks: BackgroundTasks, prefer: str = "bug") -> dict:
+    """Route the target to a bad revision. prefer='bug' (KeyError → 5xx, default) or 'slow' (the v3
+    LATENCY regression: 200s past the SLO, ~0 5xx — a 5xx-only monitor misses it)."""
+    res = tools.break_target(config.TARGET_SERVICE, config.GCP_REGION, prefer)
     if res.get("status") != "success":
         events.publish({"stage": "ESCALATED", "msg": f"break failed: {res.get('error')}",
                         "service": config.TARGET_SERVICE})
         return res
-    events.publish({"stage": "FAULT_INJECTED",
-                    "msg": f"bad revision {res.get('active_revision')} serving 100% — "
-                           f"KeyError on {config.PROBE_PATH} → HTTP 500",
+    fault = res.get("fault", prefer)
+    if fault == "slow":
+        msg = (f"bad revision {res.get('active_revision')} serving 100% — LATENCY regression: "
+               f"{config.PROBE_PATH} returns 200 but slowly (> SLO), ~0 5xx")
+    else:
+        msg = (f"bad revision {res.get('active_revision')} serving 100% — "
+               f"KeyError on {config.PROBE_PATH} → HTTP 500")
+    events.publish({"stage": "FAULT_INJECTED", "msg": msg,
                     "service": config.TARGET_SERVICE})
-    if config.BACKEND == "gcp":
+    # 5xx needs real failing traffic to be visible; the latency detector actively samples the
+    # serving revision itself (sample_latency_windows), so a slow-request burst is unnecessary
+    # (and would serialize at SLOW_DELAY_S each).
+    if config.BACKEND == "gcp" and fault != "slow":
         background_tasks.add_task(_burst, config.PROBE_PATH, config.DEMO_BURST_N)
     return res
 
@@ -175,6 +183,13 @@ def _break(background_tasks: BackgroundTasks) -> dict:
 @app.post("/demo/break", dependencies=[Depends(require_demo_token)])
 def demo_break(background_tasks: BackgroundTasks):
     return _break(background_tasks)
+
+
+@app.post("/demo/break-latency", dependencies=[Depends(require_demo_token)])
+def demo_break_latency(background_tasks: BackgroundTasks):
+    """v3 latency-regression demo: route to the `slow` revision (200s past the SLO, ~0 5xx) so the
+    multi-signal latency detector — not a 5xx monitor — is what catches and heals it."""
+    return _break(background_tasks, prefer="slow")
 
 
 @app.post("/demo/heal", dependencies=[Depends(require_demo_token)])

@@ -5,13 +5,16 @@ shipped and starts erroring" — including the 'delay bomb' (errors begin only N
 seconds after start, i.e. outside the deploy/canary window).
 
 Fault sources:
-  - env FAULT_MODE = off | bug | http500 | delay_bomb  (a 'bad revision' ships with this)
-  - runtime POST /__fault/{mode}                        (demo harness: flip faults live)
+  - env FAULT_MODE = off | bug | http500 | slow | delay_bomb  (a 'bad revision' ships with this)
+  - runtime POST /__fault/{mode}                              (demo harness: flip faults live)
 The canonical demo fault is `bug`: a real KeyError in total_revenue() (reads "amount"
 instead of "price") -> unhandled exception -> HTTP 500. This is the SAME root-cause bug
 the Gemini fix-PR repairs, so the story is coherent: we roll back the bad revision AND
 open a PR that fixes the exact cause. `http500` is a blunt alternative (explicit 500).
-/healthz stays 200 so Cloud Run readiness and the agent's synthetic probe work.
+`slow` is the v3 LATENCY regression: /api/orders still returns 200, just slowly (> the
+latency SLO) with ~0 5xx — the canonical out-of-window regression a 5xx-only monitor
+MISSES but Airbag's multi-signal latency detector catches.
+/healthz stays fast+200 so Cloud Run readiness and the agent's synthetic probe work.
 """
 from __future__ import annotations
 
@@ -28,7 +31,10 @@ FAULT_MODE = os.getenv("FAULT_MODE", "off")
 # griefed. Empty -> open (local dev). The gcp demo breaks via revision routing, not /__fault.
 FAULT_TOKEN = os.getenv("FAULT_TOKEN", "")
 DELAY_BOMB_AFTER_S = float(os.getenv("DELAY_BOMB_AFTER_S", "90"))
-_FAULTS = ("bug", "http500")
+# `slow` fault: delay /api/orders past the latency SLO (agent default AIRBAG_LATENCY_SLO_ABS_MS=800),
+# so it's a confident latency regression with ~0 5xx. /healthz stays fast (Cloud Run readiness).
+SLOW_DELAY_S = float(os.getenv("SLOW_DELAY_S", "2.0"))
+_FAULTS = ("bug", "http500", "slow")
 _runtime: dict[str, str | None] = {"fault": None}
 
 
@@ -62,13 +68,16 @@ def orders():
     if fault == "http500":
         return Response(status_code=500, content='{"error":"simulated outage"}',
                         media_type="application/json")
+    if fault == "slow":                 # v3 latency regression: still 200, just past the SLO
+        time.sleep(SLOW_DELAY_S)
     return {"orders": ORDERS, "revenue": total_revenue(ORDERS, buggy=(fault == "bug"))}
 
 
 @app.post("/__fault/{mode}")
 def set_fault(mode: str, request: Request):
-    """Demo harness: mode in {off, bug, http500}. `bug` triggers the KeyError that the
-    Gemini fix-PR repairs; `off` clears the fault (= healthy revision). Token-gated when
+    """Demo harness: mode in {off, bug, http500, slow}. `bug` triggers the KeyError that the
+    Gemini fix-PR repairs; `slow` is the v3 latency regression; `off` clears the fault
+    (= healthy revision). Token-gated when
     FAULT_TOKEN is set so the public target can't be toggled by anyone."""
     if FAULT_TOKEN:
         supplied = request.headers.get("x-fault-token") or request.query_params.get("token", "")

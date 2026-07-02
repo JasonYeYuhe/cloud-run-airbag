@@ -133,10 +133,11 @@ def probe_candidate(service: str, region: str, revision: str) -> dict:
 
 
 # --- demo harness (not part of the heal; drives the repeatable break/heal/reset demo) ---
-def break_target(service: str, region: str) -> dict:
-    """Put the target into the faulty state (gcp: route 100% to the bad revision carrying
-    FAULT_MODE=bug; local: toggle the runtime KeyError fault)."""
-    return get_backend().break_target(service, region)
+def break_target(service: str, region: str, prefer: str = "bug") -> dict:
+    """Put the target into the faulty state. `prefer` picks the fault: 'bug' (the KeyError the fix-PR
+    repairs, default) or 'slow' (the v3 latency regression — 200s past the SLO, ~0 5xx). gcp routes
+    100% to the matching bad revision; local toggles the runtime fault."""
+    return get_backend().break_target(service, region, prefer)
 
 
 def reset_target(service: str, region: str) -> dict:

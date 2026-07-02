@@ -84,11 +84,11 @@ def rollback_traffic_to_revision(service: str, region: str, revision: str) -> di
 
 
 # --- demo harness: toggle the runtime KeyError fault on the local target-app ---------
-def break_target(service: str, region: str) -> dict:
+def break_target(service: str, region: str, prefer: str = "bug") -> dict:
     with httpx.Client(timeout=3.0) as c:
-        c.post(_url("/__fault/bug"))
+        c.post(_url(f"/__fault/{prefer}"))   # 'bug' (KeyError) or 'slow' (latency regression)
     return {"status": "success", "service": service,
-            "active_revision": f"{service}-00002-bad", "fault": "bug"}
+            "active_revision": f"{service}-00002-bad", "fault": prefer}
 
 
 def reset_target(service: str, region: str) -> dict:
