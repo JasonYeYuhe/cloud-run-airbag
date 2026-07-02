@@ -60,10 +60,13 @@ def _action_files() -> list[pathlib.Path]:
         it must stay statistical, not a Gemini call, or a hallucinated verdict could drive prod.
       - memory.py (v4): its learned baseline feeds the detectors AND its serving-history ledger
         PROPOSES the rollback target — both must stay deterministic facts, never an LLM output.
+      - reversibility.py (v4): its BLOCK verdict converts a rollback into an ESCALATE — a
+        hallucinated block/pass would directly drive prod, so it must stay a declared-marker read.
     (adk_brain.py / gemini.py / agent.py are the LLM-advisory tier — they ARE allowed to import it.)"""
     return (sorted((_AUTOSRE / "backends").glob("*.py"))
             + sorted((_AUTOSRE / "signals").glob("*.py"))
-            + [_AUTOSRE / "tools.py", _AUTOSRE / "causal.py", _AUTOSRE / "memory.py"])
+            + [_AUTOSRE / "tools.py", _AUTOSRE / "causal.py", _AUTOSRE / "memory.py",
+               _AUTOSRE / "reversibility.py"])
 
 
 def test_action_layer_never_imports_the_llm():

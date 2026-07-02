@@ -52,7 +52,14 @@ def list_cloud_run_revisions(service: str, region: str) -> dict:
                     for c in r.conditions)
         revs.append({"name": name, "ready": ready,
                      "traffic_percent": explicit.get(name, 0),
-                     "create_time": r.create_time.isoformat() if r.create_time else None})
+                     "create_time": r.create_time.isoformat() if r.create_time else None,
+                     # v4: the DECLARED forward-only marker VALUE (reversibility.py refuses to
+                     # roll back across it when the guard is enabled; default-off, fail-open).
+                     # The VALUE (ideally a migration id) is surfaced — not a bool — because
+                     # revision-template annotations are STICKY: identical inherited values on
+                     # consecutive revisions must read as ONE declaration, not one per revision.
+                     "irreversible": str(dict(getattr(r, "annotations", None) or {}).get(
+                         config.IRREVERSIBLE_ANNOTATION, "")).strip().lower() or False})
     revs.sort(key=lambda x: x.get("create_time") or "", reverse=True)
     if latest_percent and revs:
         revs[0]["traffic_percent"] += latest_percent  # LATEST == newest revision

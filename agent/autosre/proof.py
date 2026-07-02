@@ -33,6 +33,8 @@ def build(rec: dict) -> dict:
         "decision": {k: d.get(k) for k in ("action", "confidence", "reasoning", "_source")},
         "detection": _stage(events, "ANALYZED", ("verdict", "reason", "signals", "rate")),
         "causal": _stage(events, "CAUSAL", ("verdict", "msg")),
+        "reversibility": _stage(events, "REVERSIBILITY",
+                                ("verdict", "marker_revision", "target", "marker_value", "msg")),
         "recovery": {
             "error_before": rec.get("error_before"), "error_after": rec.get("error_after"),
             "rolled_back_to": rec.get("rolled_back_to"), "restored_to": rec.get("restored_to"),

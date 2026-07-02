@@ -360,8 +360,44 @@ CASES: list[BenchCase] = [
 ]
 
 
+# --- v4 Phase 3: irreversible-deploy guard fixtures — OUTSIDE the scored corpus -------------------
+# The guard ships default-OFF (the four committed scorecards run without it), so these two worlds
+# are exercised by test_bench's dedicated tests via run_case(reversibility=True/False) instead of
+# adding a fifth scorecard mode. One world, one difference: whether the serving revision DECLARED
+# the forward-only marker.
+def _irreversible_world(marked: bool) -> dict:
+    revs = _bad_and_good()
+    revs[0] = {**revs[0], "irreversible": marked}   # the serving bad deploy (may) declare a migration
+    return {"revisions": revs, "error_rate": 0.9, "sample": {"errs": 18, "total": 20},
+            "rollback_clears": True, "logs": [_KEYERROR_TRACE]}
+
+
+REVERSIBILITY_CASES: list[BenchCase] = [
+    BenchCase(
+        name="irreversible_marker_blocks_rollback", category="irreversible",
+        description="The serving bad deploy DECLARED a forward-only change (schema migration, "
+                    "airbag.dev/irreversible=true). Rolling back would put pre-migration code in "
+                    "front of the migrated datastore — strictly worse than the outage.",
+        world=_irreversible_world(marked=True),
+        expected_action="ESCALATE", is_bad_deploy=True,
+        rationale="THE GAP EVERY OTHER GATE GREENLIGHTS: the target boots fine, GET probes return "
+                  "200 (a synthetic probe can't exercise a mutation), the causal check passes, "
+                  "_verify can pass — and every write corrupts. Only the DECLARED contract knows. "
+                  "With the guard on: ESCALATE with zero traffic shifted."),
+    BenchCase(
+        name="irreversible_marker_absent_rolls_back", category="irreversible",
+        description="The SAME bad deploy without a declared marker — the guard must be invisible "
+                    "(fail-open) and the normal rollback heals.",
+        world=_irreversible_world(marked=False),
+        expected_action="ROLLBACK", is_bad_deploy=True, expected_target=_GOOD,
+        rationale="FAIL-OPEN anti-regression: no declaration → the guard changes nothing; the heal "
+                  "is byte-identical to today. (It HONORS a contract; it does NOT detect "
+                  "migrations — an undeclared forward-only deploy is invisible to it.)"),
+]
+
+
 def case_by_name(name: str) -> BenchCase:
-    for c in CASES:
+    for c in CASES + REVERSIBILITY_CASES:
         if c.name == name:
             return c
     raise KeyError(name)

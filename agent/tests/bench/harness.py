@@ -164,6 +164,8 @@ _PINNED = {
     "SIGNALS": "5xx",            # PINNED so the baseline is deterministic + env-independent; run_bench
                                  # overrides it to exercise the multi-signal path explicitly.
     "CAUSAL_CHECK_ENABLED": False,  # PINNED off for the baseline; run_bench(causal=True) exercises it.
+    "REVERSIBILITY_GUARD_ENABLED": False,  # PINNED off (default posture); run_case(reversibility=True)
+                                           # exercises the guard on the dedicated fixtures.
     "VERIFY_ATTEMPTS": 2,        # keep the verify loop short
     "VERIFY_INTERVAL_S": 0.0,    # no wall-clock sleeps
     "CI_SELF_CORRECT": False,    # no background CI-watch thread
@@ -179,11 +181,13 @@ def _decision_event(events: list[dict]) -> dict:
     return next((ev for ev in events if ev.get("stage") == "DECISION"), {})
 
 
-def run_case(case, signals: str | None = None, causal: bool = False) -> CaseResult:
+def run_case(case, signals: str | None = None, causal: bool = False,
+             reversibility: bool = False) -> CaseResult:
     """Replay one fixture through the real run_self_heal. Self-contained: snapshots + restores the
     pinned config and the patched backend resolver, so it's safe under pytest and the CLI alike.
     `signals` overrides AIRBAG_SIGNALS (default the pinned '5xx'); `causal` enables the causal
-    pre-check (AIRBAG_CAUSAL_CHECK, default off) to exercise the precision path."""
+    pre-check (AIRBAG_CAUSAL_CHECK, default off) to exercise the precision path; `reversibility`
+    enables the v4 irreversible-deploy guard for its dedicated fixtures."""
     saved_cfg = {k: getattr(config, k) for k in _PINNED}
     saved_get_backend = tools.get_backend
     fb = FixtureBackend(case.world)
@@ -194,6 +198,8 @@ def run_case(case, signals: str | None = None, causal: bool = False) -> CaseResu
             config.SIGNALS = signals
         if causal:
             config.CAUSAL_CHECK_ENABLED = True
+        if reversibility:
+            config.REVERSIBILITY_GUARD_ENABLED = True
         tools.get_backend = lambda: fb            # tools binds the NAME at import -> patch on tools
         state_store.reset_memory()                # isolate durable state per case
         # sanity: per-case isolation is load-bearing (memory.observe_healthy folds samples keyed on

@@ -139,6 +139,15 @@ CAUSAL_PROBE_N = int(os.getenv("AIRBAG_CAUSAL_PROBE_N", "8"))               # ta
 CAUSAL_TOLERANCE = float(os.getenv("AIRBAG_CAUSAL_TOLERANCE", "0.05"))      # target error-proportion baseline
 CAUSAL_MIN_ERRORS = int(os.getenv("AIRBAG_CAUSAL_MIN_ERRORS", "3"))         # min errors to call it unhealthy
 
+# Forward-only / irreversible-deploy guard (v4 Phase 3). A deploy that performed a forward-only
+# change (e.g. a schema migration) DECLARES it with the Cloud Run revision annotation
+# `airbag.dev/irreversible=true`; rolling traffic back ACROSS a declared marker would put code that
+# can't read the migrated datastore in front of it — strictly worse than the outage. The guard
+# HONORS the declared contract (it does NOT detect migrations), fails OPEN (no marker → rollback
+# proceeds unchanged), and ships default-OFF so the demo is unchanged. See reversibility.py.
+REVERSIBILITY_GUARD_ENABLED = _bool("AIRBAG_REVERSIBILITY_GUARD", "false")
+IRREVERSIBLE_ANNOTATION = os.getenv("AIRBAG_IRREVERSIBLE_ANNOTATION", "airbag.dev/irreversible")
+
 # Cross-incident memory + learned per-service baseline (v2). See memory.py.
 BASELINE_ALPHA = float(os.getenv("AIRBAG_BASELINE_ALPHA", "0.2"))          # EMA weight for new healthy samples
 STAT_BASELINE_FLOOR = float(os.getenv("AIRBAG_STAT_BASELINE_FLOOR", "0.01"))  # learned baseline never below this

@@ -35,13 +35,13 @@ def list_cloud_run_revisions(service: str, region: str) -> dict:
     errs, _ = _sample(3)
     faulted = errs > 0
     return {"service": service, "revisions": [
-        {"name": f"{service}-00002-bad", "ready": True,
+        {"name": f"{service}-00002-bad", "ready": True, "irreversible": False,
          "traffic_percent": 100 if faulted else 0, "create_time": "2026-06-28T00:00:00Z"},
-        {"name": f"{service}-00001-good", "ready": True,
+        {"name": f"{service}-00001-good", "ready": True, "irreversible": False,
          "traffic_percent": 0 if faulted else 100, "create_time": "2026-06-27T22:00:00Z"},
         # the "deployed fix" so the dashboard's Verify & Undo can CLOSE end-to-end locally
         # (far-future create_time -> always counts as "deployed after the rollback")
-        {"name": f"{service}-00003-fix", "ready": True,
+        {"name": f"{service}-00003-fix", "ready": True, "irreversible": False,
          "traffic_percent": 0, "create_time": "2099-01-01T00:00:00Z"},
     ]}
 

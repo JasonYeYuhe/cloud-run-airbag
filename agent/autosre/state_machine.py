@@ -13,7 +13,7 @@ import logging
 import time
 
 from . import (adk_brain, autonomy, causal, config, events, gemini, incidents, memory,
-               pending, signals, state_store, tools)
+               pending, reversibility, signals, state_store, tools)
 
 log = logging.getLogger("airbag.sm")
 
@@ -169,6 +169,27 @@ def _mitigate(service: str, incident_id: str, decision: dict, decision_summary: 
     `primary_signal` is the detector that drove the incident — a latency regression's remedy is the
     rollback itself, so we don't open a code-fix PR (that path targets 5xx/code-bug incidents)."""
     causal_verdict: dict | None = None
+    # REVERSIBILITY GUARD (v4 Phase 3, default-OFF, fail-open): if the rollback would CROSS a
+    # revision that DECLARED a forward-only change (schema migration → annotation
+    # airbag.dev/irreversible=true), the "reversible" action isn't — old code in front of a
+    # migrated datastore makes the outage strictly worse. HONORS the declared contract only (does
+    # not detect migrations); LLM-free + deterministic; runs before the causal probe (no point
+    # probing a target we must refuse). Covers L2/L3 auto AND the L1-approved resume.
+    if config.REVERSIBILITY_GUARD_ENABLED:
+        rev_check = reversibility.check(tools.list_cloud_run_revisions(service, config.GCP_REGION),
+                                        target)
+        emit("REVERSIBILITY", f"{rev_check['verdict']} — {rev_check['reason']}",
+             **{k: rev_check[k] for k in ("verdict", "marker_revision", "target", "marker_value")
+                if k in rev_check})
+        if rev_check["verdict"] == "BLOCK":
+            memory.record_incident(service, _incident_signature(), "escalated", target)
+            emit("ESCALATED", rev_check["reason"])
+            incidents.record(incident_id, {"service": service, "status": "escalated",
+                                           "autonomy": level, "decision": decision_summary,
+                                           "reversibility": rev_check,
+                                           "error_before": before.get("error_rate"),
+                                           "events": run_events})
+            return {"status": "escalated", "incident_id": incident_id, "events": run_events}
     # CAUSAL PRE-CHECK (v3 Phase 2a): before spending the reversible action, probe the rollback
     # TARGET's health. If the last-good revision is ALSO confidently degraded, the cause is external
     # (a dependency/quota outage), not this revision — a rollback is futile. Only a CONFIDENT-unhealthy

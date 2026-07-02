@@ -2,12 +2,19 @@
 (for the P1 transaction) a later fix revision deployed after the rollback."""
 from __future__ import annotations
 
-_STATE = {"rolled_back": False, "fix_deployed": False}
+_STATE = {"rolled_back": False, "fix_deployed": False, "irreversible_serving": False}
 
 
 def reset() -> None:
     _STATE["rolled_back"] = False
     _STATE["fix_deployed"] = False
+    _STATE["irreversible_serving"] = False
+
+
+def declare_irreversible() -> None:
+    """Test hook: the SERVING (bad) revision declares a forward-only change — the v4
+    reversibility guard must refuse to roll back across it (when enabled)."""
+    _STATE["irreversible_serving"] = True
 
 
 def deploy_fix() -> None:
@@ -19,14 +26,17 @@ def list_cloud_run_revisions(service: str, region: str) -> dict:
     rb = _STATE["rolled_back"]
     revs = [
         {"name": f"{service}-00002-bad", "ready": True,
-         "traffic_percent": 0 if rb else 100, "create_time": "2026-06-28T00:00:00Z"},
+         "traffic_percent": 0 if rb else 100, "create_time": "2026-06-28T00:00:00Z",
+         "irreversible": _STATE["irreversible_serving"]},
         {"name": f"{service}-00001-good", "ready": True,
-         "traffic_percent": 100 if rb else 0, "create_time": "2026-06-27T22:00:00Z"},
+         "traffic_percent": 100 if rb else 0, "create_time": "2026-06-27T22:00:00Z",
+         "irreversible": False},
     ]
     if _STATE["fix_deployed"]:
         # far-future create_time so it sorts as "created after the rollback"
         revs.insert(0, {"name": f"{service}-00003-fix", "ready": True,
-                        "traffic_percent": 0, "create_time": "2099-01-01T00:00:00Z"})
+                        "traffic_percent": 0, "create_time": "2099-01-01T00:00:00Z",
+                        "irreversible": False})
     return {"service": service, "revisions": revs}
 
 
