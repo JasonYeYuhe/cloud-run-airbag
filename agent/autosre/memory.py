@@ -12,6 +12,12 @@ Two jobs, both per-service (collection "service_memory", doc id = service):
 2. Incident memory — count + a bounded recent history of failures per service, with recurrence
    detection ("this is the 3rd 5xx on /api/orders this hour — the fix isn't holding"). Surfaced as
    an advisory RECURRING signal (it does not, by itself, change the action).
+
+3. Serving-history ledger (v4 Phase 1) — a bounded map of revisions Airbag has WITNESSED serving
+   healthily (a PASS/clean-OBSERVE no-op run, or a verified mitigation target). The rollback
+   selector PREFERS a witnessed-healthy target over the bare "newest ready" recency proxy, which a
+   bad→bad deploy sequence defeats. The ledger only PROPOSES: whatever it picks still flows through
+   the live causal pre-check before any traffic shifts, so a stale entry can never bypass the probe.
 """
 from __future__ import annotations
 
@@ -56,6 +62,46 @@ def observe_healthy(service: str, rate: float) -> float:
         cur["updated_at"] = time.time()
         return cur, cur["baseline_rate"]
     return state_store.transact(_COLL, service, _m)
+
+
+# --- serving-history ledger (v4): witnessed-healthy revisions -------------------------
+def witness_serving(service: str, revision: str) -> dict | None:
+    """Stamp `revision` as WITNESSED serving healthily (name + timestamp + a witness count), on the
+    same per-service doc as the learned baseline (one durable doc, one transact pattern).
+
+    Callers stamp only on CONFIDENT evidence: a PASS verdict / a zero-error OBSERVE no-op run, or a
+    verified mitigation target (after `_verify` proves recovery on the triggering signal). A flaky
+    sub-threshold window or an unverified post-rollback shift must NOT certify a revision — the
+    rollback selector will later trust this map to PROPOSE a target (the live causal pre-check
+    still re-probes whatever it proposes).
+
+    Bounded at WITNESS_MAX revisions per service, evicting the least-recently-witnessed. The
+    mutator is pure (a Firestore transaction retry re-reads and re-runs it side-effect-free)."""
+    if not revision:
+        return None
+
+    def _m(cur):
+        now = time.time()   # inside the mutator: a transaction retry restamps with fresh time
+        cur = cur or {"service": service}
+        w = dict(cur.get("witnessed") or {})
+        ent = dict(w.get(revision) or {})
+        ent["last_witnessed_at"] = now
+        ent["count"] = ent.get("count", 0) + 1
+        w[revision] = ent
+        while len(w) > config.WITNESS_MAX:   # bounded: drop the least-recently-witnessed
+            del w[min(w, key=lambda k: w[k].get("last_witnessed_at", 0))]
+        cur["witnessed"] = w
+        cur["updated_at"] = now
+        return cur, dict(w.get(revision) or {})
+    return state_store.transact(_COLL, service, _m)
+
+
+def witnessed_healthy(service: str) -> dict:
+    """The witnessed-healthy map {revision: {last_witnessed_at, count}} for this service — read by
+    the rollback target selector. Empty on cold start (the selector then falls back to recency)."""
+    m = state_store.get(_COLL, service) or {}
+    w = m.get("witnessed")
+    return dict(w) if isinstance(w, dict) else {}
 
 
 # --- incident memory + recurrence ----------------------------------------------------

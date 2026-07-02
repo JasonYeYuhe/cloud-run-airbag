@@ -81,13 +81,17 @@ def _heal_body(incident_id: str, service: str) -> dict:
         # double-counting the same heal's sample)
 
     # --- DECISION: ADK SequentialAgent (Gemini calls the tools) -> direct Gemini -> heuristic --
+    # v4: the serving-history ledger (witnessed-healthy revisions) informs the DETERMINISTIC target
+    # selectors — the heuristic and _validate's promotion. It only PROPOSES: whatever target is
+    # chosen still flows through the live causal pre-check in _mitigate before any traffic shifts.
+    witnessed = memory.witnessed_healthy(service)
     decision = adk_brain.decide(service)
     if decision:
         emit("ADK", f"ADK SequentialAgent (triage→decide) ran; "
                     f"tools called: {decision.get('_adk_tools') or '—'}")
     else:
-        decision = gemini.decide(service, revs, err) or _heuristic(revs, err)
-    decision = _validate(decision, revs, stat)
+        decision = gemini.decide(service, revs, err) or _heuristic(revs, err, witnessed)
+    decision = _validate(decision, revs, stat, witnessed)
     if decision.get("action") == "ROLLBACK" and not decision.get("bad_revision"):
         # backfill the bad (currently-serving) revision when the LLM left it null, so a later
         # complete_rollback can never auto-pick the known-bad revision as the "fix" (mirrors _heuristic).
@@ -97,7 +101,7 @@ def _heal_body(incident_id: str, service: str) -> dict:
     emit("DECISION", decision["action"], **decision)
     _decision_summary = {k: decision.get(k) for k in (
         "action", "confidence", "reasoning", "evidence", "_source", "_adk_tools",
-        "bad_revision", "rollback_revision")}
+        "bad_revision", "rollback_revision", "_target_source")}
     if decision["action"] != "ROLLBACK":
         # ESCALATE (from the safety gate or Gemini) must surface to a human — not look like a no-op.
         if decision["action"] == "ESCALATE":
@@ -112,6 +116,12 @@ def _heal_body(incident_id: str, service: str) -> dict:
         _rate = stat.get("rate") if stat else (before.get("error_rate") or 0.0)
         if _rate is not None:
             memory.observe_healthy(service, _rate)
+        # v4 serving-history ledger: a CONFIDENTLY-healthy no-op run witnesses the revision that was
+        # serving the traffic (PASS, or zero observed 5xx) — the fact the rollback selector prefers.
+        if _healthy_witness(stat, before):
+            witnessed = _serving_revision(revs)
+            if witnessed:
+                memory.witness_serving(service, witnessed)
         incidents.record(incident_id, {"service": service, "status": "noop",
                                        "decision": _decision_summary, "events": run_events})
         return {"status": "noop", "incident_id": incident_id, "events": run_events}
@@ -201,6 +211,13 @@ def _mitigate(service: str, incident_id: str, decision: dict, decision_summary: 
     emit("MITIGATED", note or "error rate back to zero — recovery proven",
          before=before.get("error_rate"), after=after.get("error_rate"))
     autonomy.record_outcome(service, success=True)  # trust ramp: a verified heal builds the streak
+    # v4 serving-history ledger: _verify PROVED the target recovered the triggering signal at 100%
+    # traffic — the strongest witness Airbag collects. (An unverified shift — the escalate branch
+    # above — must never stamp: traffic moving is not evidence, recovery proof is.) Defense in
+    # depth (Gemini review): also require the post-rollback 5xx window to read clean — a lagged
+    # log window plus a flaky-but-lucky probe must not certify a still-erring target.
+    if after.get("error_rate", 0.0) == 0.0:
+        memory.witness_serving(service, target)
 
     # shared record fields (causal verdict included when the pre-check ran, so the proof bundle is complete)
     rec = {"service": service, "autonomy": level, "decision": decision_summary,
@@ -330,6 +347,9 @@ def apply_approval(incident_id: str, approve: bool) -> dict:
                 emit("DONE", "service already healthy at approval time — rollback no longer needed")
                 if "rate" in v:  # observe_healthy is a 5xx statistic — only fold when 5xx ran
                     memory.observe_healthy(service, v["rate"])
+                witnessed = _serving_revision(revs)   # v4 ledger: a PASS at real traffic witnesses
+                if witnessed:                         # the revision that was serving it
+                    memory.witness_serving(service, witnessed)
                 incidents.record(incident_id, {"service": service, "status": "noop", "events": run_events})
                 return {"status": "noop", "incident_id": incident_id, "events": run_events}
             # carry the triggering signal into _mitigate so the L1 resume verifies + remediates the
@@ -469,30 +489,75 @@ def _epoch(iso: str | None) -> float:
         return 0.0
 
 
-def _heuristic(revs: dict, err: dict) -> dict:
+def _preferred_target(candidates: list[dict], witnessed: dict | None) -> tuple[dict | None, bool]:
+    """Target SELECTION (v4 Phase 1): among the eligible rollback candidates (list order = newest
+    first, matching every backend), prefer the newest revision the serving-history ledger has
+    WITNESSED serving healthily; when the ledger knows none of them (cold start), fall back to the
+    newest ready — the v3 recency behavior, byte-identical. Recency is only a PROXY for last-good
+    that a bad→bad deploy sequence defeats; a witnessed revision was literally OBSERVED serving
+    healthily (at witness time — it can still go stale, which is why selection only PROPOSES: the
+    causal pre-check live-probes whatever is chosen before any traffic shifts).
+    Returns (revision, from_ledger)."""
+    if witnessed:
+        for r in candidates:
+            if r["name"] in witnessed:
+                return r, True
+    return (candidates[0] if candidates else None), False
+
+
+def _heuristic(revs: dict, err: dict, witnessed: dict | None = None) -> dict:
     rs = revs.get("revisions", [])
     serving = next((r for r in rs if r.get("traffic_percent", 0) > 0), None)
-    healthy = next((r for r in rs if r.get("traffic_percent", 0) == 0 and r.get("ready")), None)
+    candidates = [r for r in rs if r.get("traffic_percent", 0) == 0 and r.get("ready")]
+    healthy, from_ledger = _preferred_target(candidates, witnessed)
     if err.get("error_rate", 0) >= config.ERROR_RATE_THRESHOLD and serving and healthy:
         return {"action": "ROLLBACK", "bad_revision": serving["name"],
                 "rollback_revision": healthy["name"], "confidence": 0.9,
                 "reasoning": f"5xx rate {err.get('error_rate')} on {serving['name']}; "
-                             f"{healthy['name']} is a healthy prior revision.",
-                "evidence": [f"error_rate={err.get('error_rate')}"], "_source": "heuristic"}
+                             f"{healthy['name']} is a "
+                             + ("WITNESSED-healthy revision (serving-history ledger)."
+                                if from_ledger else "healthy prior revision."),
+                "evidence": [f"error_rate={err.get('error_rate')}"], "_source": "heuristic",
+                "_target_source": "ledger" if from_ledger else "recency"}
     return {"action": "OBSERVE", "confidence": 0.4,
             "reasoning": "no clear bad-revision/healthy-revision pair", "_source": "heuristic"}
 
 
-def _rollback_pair(revs: dict) -> tuple[str | None, str | None]:
-    """Deterministically pick (serving revision, a known-good rollback target) from the revision
-    list — the serving = highest-traffic revision; the target = a ready 0-traffic revision that
-    isn't the serving one. Mirrors _heuristic's selection; used by _validate's promotion."""
+def _rollback_pair(revs: dict, witnessed: dict | None = None) -> tuple[str | None, str | None, bool]:
+    """Deterministically pick (serving revision, rollback target, target-from-ledger) from the
+    revision list — the serving = highest-traffic revision; the target = a ready 0-traffic revision
+    that isn't the serving one: WITNESSED-healthy when the ledger knows one, else the newest ready
+    (a recency proxy, NOT proven good — see _preferred_target). Mirrors _heuristic's selection;
+    used by _validate's promotion."""
     rs = (revs or {}).get("revisions", [])
     serving = max(rs, key=lambda r: r.get("traffic_percent", 0), default=None)
     serving_name = serving["name"] if serving else None
-    target = next((r for r in rs if r.get("traffic_percent", 0) == 0 and r.get("ready")
-                   and r["name"] != serving_name), None)
-    return serving_name, (target["name"] if target else None)
+    candidates = [r for r in rs if r.get("traffic_percent", 0) == 0 and r.get("ready")
+                  and r["name"] != serving_name]
+    target, from_ledger = _preferred_target(candidates, witnessed)
+    return serving_name, (target["name"] if target else None), from_ledger
+
+
+def _serving_revision(revs: dict) -> str | None:
+    """The revision actually carrying traffic (highest percent, > 0) — the one a healthy no-op run
+    is evidence about. None when nothing serves (nothing to witness)."""
+    rs = (revs or {}).get("revisions", [])
+    serving = max(rs, key=lambda r: r.get("traffic_percent", 0), default=None)
+    return serving["name"] if serving and serving.get("traffic_percent", 0) > 0 else None
+
+
+def _healthy_witness(stat: dict | None, before: dict) -> bool:
+    """Should this no-op run certify the SERVING revision into the witnessed-healthy ledger (v4)?
+    Confident evidence only: a PASS verdict, or an OBSERVE with a ZERO observed 5xx rate (at the
+    default baseline+sample size a clean 0/N sample is INCONCLUSIVE, not PASS — so zero-rate is the
+    live config's witness path). A flaky sub-threshold window (INCONCLUSIVE with errors) must NOT
+    certify: the ledger later PROPOSES rollback targets, and a revision that erred while serving
+    must never be preferred as "witnessed good" (the live causal pre-check still gates whatever is
+    proposed, so a residually-wrong witness cannot bypass the act-time probe)."""
+    if stat is not None:
+        v = stat.get("verdict")
+        return v == "PASS" or (v == "INCONCLUSIVE" and stat.get("rate") == 0.0)
+    return (before.get("error_rate") or 0.0) == 0.0
 
 
 def _primary_signal(stat: dict | None) -> str:
@@ -513,7 +578,8 @@ def _primary_signal(stat: dict | None) -> str:
     return "5xx"                               # single-detector (5xx) mode -> a 5xx incident
 
 
-def _validate(decision: dict, revs: dict, stat: dict | None = None) -> dict:
+def _validate(decision: dict, revs: dict, stat: dict | None = None,
+              witnessed: dict | None = None) -> dict:
     """Safety gate + deterministic promotion. The statistical verdict is a DETERMINISTIC signal (the
     detectors, not the LLM), so it can BOTH constrain a ROLLBACK the LLM proposed AND promote a
     rollback the LLM/heuristic missed — without the LLM ever touching prod (FSM acts, LLM advises).
@@ -521,21 +587,26 @@ def _validate(decision: dict, revs: dict, stat: dict | None = None) -> dict:
         known-good-target gate.
       * non-ROLLBACK proposed + stat FAIL: PROMOTE to a deterministic rollback if a known-good target
         exists, else ESCALATE (degraded but nowhere safe to go). Only on FAIL, never INCONCLUSIVE, so
-        a healthy service (INCONCLUSIVE 5xx + OBSERVE) stays a quiet OBSERVE — no alert fatigue."""
+        a healthy service (INCONCLUSIVE 5xx + OBSERVE) stays a quiet OBSERVE — no alert fatigue.
+    `witnessed` (v4) is the serving-history ledger map: the promotion's target selection prefers a
+    witnessed-healthy revision over bare recency (cold-start fallback unchanged)."""
     # PROMOTION: a confident (FAIL) statistical verdict drives a rollback even if the LLM hedged.
     if (stat is not None and stat.get("verdict") == "FAIL"
             and decision.get("action") != "ROLLBACK"):
-        serving, target = _rollback_pair(revs)
+        serving, target, from_ledger = _rollback_pair(revs, witnessed)
         if target:
             return {**decision, "action": "ROLLBACK", "bad_revision": serving,
                     "rollback_revision": target,
                     "confidence": max(decision.get("confidence", 0.0), config.CONFIDENCE_THRESHOLD),
                     "reasoning": f"statistical gate FAIL — {stat.get('reason')}; promoted a rollback "
-                                 f"(deterministic multi-signal verdict, not the LLM). "
-                                 f"{decision.get('reasoning', '')}",
-                    "_promoted": True}
+                                 f"(deterministic multi-signal verdict, not the LLM)"
+                                 + (f"; target {target} is WITNESSED-healthy (serving-history ledger)"
+                                    if from_ledger else "")
+                                 + f". {decision.get('reasoning', '')}",
+                    "_promoted": True,
+                    "_target_source": "ledger" if from_ledger else "recency"}
         return {**decision, "action": "ESCALATE",
-                "reasoning": f"statistical gate FAIL — {stat.get('reason')} — but no known-good "
+                "reasoning": f"statistical gate FAIL — {stat.get('reason')} — but no eligible "
                              f"rollback target; needs a human. {decision.get('reasoning', '')}"}
     if decision.get("action") != "ROLLBACK":
         return decision

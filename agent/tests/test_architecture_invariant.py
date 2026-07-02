@@ -58,10 +58,12 @@ def _action_files() -> list[pathlib.Path]:
       - the prod-mutating action layer: every backend (shifts real Cloud Run traffic) + the tools façade;
       - the DETERMINISTIC detection tier (signals/): its verdict can promote a rollback in _validate, so
         it must stay statistical, not a Gemini call, or a hallucinated verdict could drive prod.
+      - memory.py (v4): its learned baseline feeds the detectors AND its serving-history ledger
+        PROPOSES the rollback target — both must stay deterministic facts, never an LLM output.
     (adk_brain.py / gemini.py / agent.py are the LLM-advisory tier — they ARE allowed to import it.)"""
     return (sorted((_AUTOSRE / "backends").glob("*.py"))
             + sorted((_AUTOSRE / "signals").glob("*.py"))
-            + [_AUTOSRE / "tools.py", _AUTOSRE / "causal.py"])
+            + [_AUTOSRE / "tools.py", _AUTOSRE / "causal.py", _AUTOSRE / "memory.py"])
 
 
 def test_action_layer_never_imports_the_llm():

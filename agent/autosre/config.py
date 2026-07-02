@@ -145,6 +145,9 @@ STAT_BASELINE_FLOOR = float(os.getenv("AIRBAG_STAT_BASELINE_FLOOR", "0.01"))  # 
 RECUR_WINDOW_S = float(os.getenv("AIRBAG_RECUR_WINDOW_S", "3600"))          # recurrence look-back window
 RECUR_THRESHOLD = int(os.getenv("AIRBAG_RECUR_THRESHOLD", "5"))             # N incidents in window -> RECURRING
 MEMORY_RECENT_MAX = int(os.getenv("AIRBAG_MEMORY_RECENT_MAX", "20"))        # bounded recent-incident history
+# Serving-history ledger (v4 Phase 1): max witnessed-healthy revisions kept per service. The
+# rollback selector PREFERS a witnessed revision over bare recency; see memory.witness_serving.
+WITNESS_MAX = int(os.getenv("AIRBAG_WITNESS_MAX", "10"))
 
 # verify loop
 VERIFY_ATTEMPTS = int(os.getenv("AIRBAG_VERIFY_ATTEMPTS", "6"))

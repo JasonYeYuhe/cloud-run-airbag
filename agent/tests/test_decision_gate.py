@@ -120,7 +120,7 @@ def test_stat_gate_is_constraint_only_leaves_observe_alone():
 def test_run_self_heal_surfaces_escalation(monkeypatch):
     """A gate failure must surface as ESCALATED + status=escalated, not a silent no-op."""
     mock.reset()
-    monkeypatch.setattr(state_machine, "_heuristic", lambda revs, err: {
+    monkeypatch.setattr(state_machine, "_heuristic", lambda revs, err, witnessed=None: {
         "action": "ROLLBACK", "rollback_revision": "ghost-rev", "confidence": 0.99,
         "bad_revision": "svc-00002-bad", "_source": "test"})
     res = run_self_heal("inc-esc", "airbag-target")

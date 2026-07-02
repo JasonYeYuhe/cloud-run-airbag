@@ -31,3 +31,6 @@ build/
 .vscode/
 *.log
 venv-test/
+
+# Claude Code local session config
+.claude/

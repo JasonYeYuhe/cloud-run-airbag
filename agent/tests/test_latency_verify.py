@@ -19,7 +19,7 @@ def _force_latency_only(monkeypatch):
         "verdict": "FAIL", "reason": "latency: 4/4 windows over SLO", "rate": None,
         "signals": {"5xx": {"verdict": "INCONCLUSIVE", "reason": "0/20"},
                     "latency": {"verdict": "FAIL", "reason": "4/4 windows over SLO"}}})
-    monkeypatch.setattr(state_machine, "_heuristic", lambda revs, err: {
+    monkeypatch.setattr(state_machine, "_heuristic", lambda revs, err, witnessed=None: {
         "action": "OBSERVE", "confidence": 0.4, "_source": "test"})
     monkeypatch.setattr(state_machine.adk_brain, "decide", lambda *a, **k: None)
     monkeypatch.setattr(state_machine.gemini, "decide", lambda *a, **k: None)
