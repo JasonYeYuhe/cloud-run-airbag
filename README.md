@@ -4,6 +4,8 @@
 
 Built for the **DevOps × AI Agent Hackathon 2026** (Google Cloud Japan / Findy). Stack: **Gemini + ADK + Cloud Run** (required), FastAPI, Cloud Monitoring/Logging, GitHub App + Actions.
 
+**Live demo:** [dashboard](https://airbag-agent-946577240607.asia-northeast1.run.app) · [target service](https://airbag-target-946577240607.asia-northeast1.run.app) · reproduce: `gcloud auth login` then `PROJECT=<id> ./deploy.sh`
+
 ## Why this exists
 Monitoring tools only *alert*. Coding agents (Jules/Devin) only *write code* offline. Auto-rollback tools (Argo/Harness/LaunchDarkly) only work **inside the deploy/canary window**. **Google's own Gemini Cloud Assist is officially advisory** ("don't modify… human-in-the-loop required"). Nobody closes this exact loop:
 
@@ -16,7 +18,12 @@ independent prod alert (even out-of-window)
 ```
 All four steps run on live Cloud Run. The close-the-transaction step verifies the deployed revision **is** the fix (matches the CI-reported revision/sha, or a post-rollback healthy candidate) before restoring traffic, and **compensates** back to the safe revision if the fix fails — triggered by the fix-PR's CI (`/internal/complete-rollback`) or the dashboard's **Verify & Undo** button. *(The CI path is **fully unattended** — GitHub Actions authenticates to GCP keylessly via Workload Identity Federation, deploys the fix, and calls Airbag to verify + restore, no human; verified live. Setup: [`infra/wif-setup.sh`](infra/wif-setup.sh).)*
 
-**Design rule:** a deterministic state machine executes production actions; **Gemini only diagnoses and emits a structured decision** — the LLM never freely touches prod.
+**Design rule — the autonomy boundary:** a deterministic state machine executes every production
+action; **Gemini only diagnoses and emits a structured decision** (an AST test in CI enforces that
+the action tier cannot even *import* the LLM). Autonomy is **graduated per service** (L0
+observe → L1 approve-first → L2/L3 auto with durable approval gates), the only automated action is
+a **reversible traffic shift to a witnessed-healthy revision**, and a deploy that *isn't*
+reversible can declare it (`airbag.dev/irreversible`) — Airbag escalates instead of crossing it.
 
 ## Architecture (target)
 ```
