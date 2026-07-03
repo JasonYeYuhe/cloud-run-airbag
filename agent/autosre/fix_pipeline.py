@@ -45,20 +45,23 @@ def build_fix(service: str, error_context: str, get_file) -> dict | None:
             return None
 
         sandbox_out = ""
+        best_fix = best_v = None
         for attempt in range(MAX_FIX_ITERS + 1):
             fix = _patch_and_test(service, path, source, rca, logs, prior_failure=sandbox_out)
             if not fix or fix.fixed_content.strip() == source.strip():
-                if attempt == 0:
-                    return None
-                break
+                break                                     # no (further) real change to try
             v = sandbox.verify(path, source, fix.fixed_content, fix.test_path, fix.test_content)
             sandbox_out = v.get("output", "")
+            best_fix, best_v = fix, v                      # remember the last CHANGED fix + ITS verdict
             if v.get("ok"):
                 log.info("fix_pipeline: sandbox-verified on attempt %d", attempt + 1)
                 return _result(rca, path, fix, v)
             log.warning("fix_pipeline: sandbox attempt %d not verified (%s)", attempt + 1, v.get("why"))
-        # exhausted iterations — still ship the last fix, flagged unverified (CI is the backstop)
-        return _result(rca, path, fix, v)
+        if best_fix is None:                              # never produced a real change -> fall back
+            return None
+        # exhausted without a green sandbox — ship the last CHANGED fix, HONESTLY flagged with ITS OWN
+        # (failing) verdict, never a stale one (loop-exit truthfulness); CI + the canary are the backstop.
+        return _result(rca, path, best_fix, best_v)
     except Exception as e:  # noqa: BLE001
         log.warning("fix_pipeline.build_fix failed, caller will fall back: %s", e)
         return None
@@ -102,13 +105,16 @@ def _rca(service: str, error_context: str, logs: list[str]) -> RootCause | None:
 
 def _discover_file(rca: RootCause, get_file) -> str:
     """Use the file the stack trace implicates (validated by trying to read it); else fall back to
-    the configured FIX_FILE. Kills the v1 hardcoded-single-file assumption."""
+    the configured FIX_FILE. Kills the v1 hardcoded-single-file assumption. v5 4.1: an LLM-chosen
+    suspected_file OUTSIDE the fix allowlist is rejected here too (defense in depth — the authoritative
+    gate is open_fix_pr), so a prompt-injected `.github/...` path degrades to FIX_FILE, not an abort."""
     cand = (rca.suspected_file or "").strip().lstrip("/")
-    if cand and get_file(cand):
+    if cand and config.fix_path_allowed(cand) and get_file(cand):
         return cand
     base = cand.split("/")[-1] if cand else ""
-    if base and base != cand and get_file(f"target-app/{base}"):
-        return f"target-app/{base}"
+    guess = f"target-app/{base}" if base and base != cand else ""
+    if guess and config.fix_path_allowed(guess) and get_file(guess):
+        return guess
     return config.FIX_FILE
 
 

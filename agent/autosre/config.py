@@ -229,3 +229,33 @@ GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "")
 GITHUB_REPO = os.getenv("GITHUB_REPO", "")          # "owner/repo"
 FIX_FILE = os.getenv("AIRBAG_FIX_FILE", "target-app/main.py")
 FIX_BASE = os.getenv("AIRBAG_FIX_BASE", "main")
+
+# Fix-path write allowlist (v5 Phase 4.1 — a HARD GATE, not a flag: it mitigates an ACTIVE
+# prompt-injection -> workflow-write vulnerability). The fix-PR pipeline commits LLM-CHOSEN file
+# paths (the RCA's suspected_file + the regression test_path). A prompt-injected stack trace could
+# make Gemini target `.github/workflows/*.yml`, which EXECUTES with repo secrets on push to the very
+# airbag/fix* branch being written. Any committed path MUST be inside this allowlist (comma-separated
+# directory prefixes; default = the directory of AIRBAG_FIX_FILE). Configurable so a real repo can
+# point it at `src/`; hard-enforced (normalized, no `..`, `.github/` rejected UNCONDITIONALLY).
+FIX_ALLOWLIST = [d.strip() for d in os.getenv(
+    "AIRBAG_FIX_ALLOWLIST", os.path.dirname(FIX_FILE) or ".").split(",") if d.strip()]
+
+
+def fix_path_allowed(path: str | None) -> bool:
+    """HARD GATE (v5 Phase 4.1): may the fix-PR pipeline commit this LLM-chosen path? Rejects absolute
+    paths, parent traversal, `.github/` (workflow files execute with repo secrets on push), and
+    anything outside FIX_ALLOWLIST. Normalized FIRST so `target-app/../.github/x` can't slip past a
+    naive prefix check. Fails CLOSED (unset/non-str/NUL -> rejected)."""
+    if not path or not isinstance(path, str) or "\x00" in path or os.path.isabs(path):
+        return False
+    norm = os.path.normpath(path)
+    parts = norm.split(os.sep)
+    if norm == ".." or parts[0] == ".." or ".." in parts or ".github" in parts:
+        return False
+    for allowed in FIX_ALLOWLIST:
+        a = os.path.normpath(allowed)
+        if a in (".", ""):                                   # allowlist = repo root -> any safe path
+            return True
+        if norm == a or norm.startswith(a + os.sep):
+            return True
+    return False

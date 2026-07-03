@@ -33,22 +33,32 @@ def _headers() -> dict:
             "Accept": "application/vnd.github+json"}
 
 
-def open_fix_pr(service: str, error_context: str) -> dict | None:
+def _fix_signature(service: str, error_context: str, signature: str | None) -> str:
+    """A STABLE hash of the incident CLASS (the RCA error signature, or service+context as a
+    fallback) so an open fix PR is reused ONLY for the same class — v5 4.1 replaces the old
+    'reuse ANY airbag/fix* branch', which spammed cross-incident PR reuse regardless of the bug."""
+    import hashlib
+    return hashlib.sha256((signature or f"{service}:{error_context}").encode()).hexdigest()[:10]
+
+
+def open_fix_pr(service: str, error_context: str, signature: str | None = None) -> dict | None:
     if not available():
         return None
     repo, path, base = config.GITHUB_REPO, config.FIX_FILE, config.FIX_BASE
+    branch_prefix = f"airbag/fix-{_fix_signature(service, error_context, signature)}"
     try:
         with httpx.Client(timeout=30.0, headers=_headers()) as c:
-            # Idempotency: if Airbag already has an open fix PR, reuse it instead of opening
-            # a new one. Without this, every heal (incl. repeated demo runs) spams duplicate PRs.
+            # Idempotency: if Airbag already has an open fix PR FOR THIS INCIDENT CLASS, reuse it
+            # instead of opening a new one (v5 4.1: keyed on the RCA signature, not any airbag/fix*
+            # branch — so a KeyError PR is never reused for an unrelated latency/other incident).
             opens = c.get(f"{_API}/repos/{repo}/pulls", params={"state": "open", "per_page": 100})
             if opens.status_code == 200:
                 for pr in opens.json():
-                    if (pr.get("head", {}).get("ref", "") or "").startswith("airbag/fix"):
-                        log.info("fix PR already open, reusing: %s", pr["html_url"])
+                    if (pr.get("head", {}).get("ref", "") or "").startswith(branch_prefix):
+                        log.info("fix PR already open for this incident class, reusing: %s", pr["html_url"])
                         return {"pr_url": pr["html_url"], "branch": pr["head"]["ref"],
-                                "number": pr["number"],
-                                "summary": "existing open fix PR (reused — not re-opened)"}
+                                "number": pr["number"], "path": config.FIX_FILE,
+                                "summary": "existing open fix PR (reused — same incident class)"}
 
             def get_file(p: str) -> str | None:
                 r = c.get(f"{_API}/repos/{repo}/contents/{p}", params={"ref": base})
@@ -73,10 +83,20 @@ def open_fix_pr(service: str, error_context: str) -> dict | None:
                 title, summary = fix["pr_title"], fix["summary"]
                 body = fix["pr_body"] + "\n\n— opened autonomously by **Airbag** 🛟 after rolling back the bad revision."
 
+            # v5 4.1 HARD GATE: reject any LLM-chosen path outside the allowlist BEFORE creating the
+            # branch or writing anything — a `.github/workflows/*.yml` write would EXECUTE with repo
+            # secrets on push to the very airbag/fix* branch. Degrades gracefully (no PR, heal unblocked).
+            fix_path = files[0][0] if files else path
+            disallowed = [p for p, _ in files if not config.fix_path_allowed(p)]
+            if disallowed:
+                log.error("fix-PR REFUSED disallowed path(s) %s (allowlist=%s) — not committing",
+                          disallowed, config.FIX_ALLOWLIST)
+                return None
+
             ref = c.get(f"{_API}/repos/{repo}/git/ref/heads/{base}")
             ref.raise_for_status()
             base_sha = ref.json()["object"]["sha"]
-            branch = f"airbag/fix-{int(time.time())}"
+            branch = f"{branch_prefix}-{int(time.time())}"
             c.post(f"{_API}/repos/{repo}/git/refs",
                    json={"ref": f"refs/heads/{branch}", "sha": base_sha}).raise_for_status()
             for fpath, fcontent in files:  # commit the fix + the agent-authored test
@@ -91,7 +111,8 @@ def open_fix_pr(service: str, error_context: str) -> dict | None:
             pr.raise_for_status()
             url = pr.json()["html_url"]
             log.info("opened fix PR: %s", url)
-            return {"pr_url": url, "branch": branch, "number": pr.json()["number"], "summary": summary}
+            return {"pr_url": url, "branch": branch, "number": pr.json()["number"],
+                    "path": fix_path, "summary": summary}
     except Exception as e:  # noqa: BLE001
         log.warning("open_fix_pr failed: %s", e)
         return None
@@ -132,17 +153,25 @@ def _poll_ci(c: httpx.Client, repo: str, ref: str) -> tuple[str, str]:
         time.sleep(config.CI_POLL_INTERVAL_S)
 
 
-def self_correct_ci(branch: str, pr_number: int, service: str, error_context: str, emit) -> None:
+def self_correct_ci(branch: str, pr_number: int, service: str, error_context: str, emit,
+                    path: str | None = None) -> None:
     """Watch the fix PR's CI; on red, feed the failure back to Gemini, commit a correction to
     the branch, retry up to MAX_CI_RETRIES, then escalate (PR comment). Runs in a background
-    thread — emits CI_GREEN / CI_RED / CI_CORRECTED / CI_ESCALATED to the thought-chain."""
+    thread — emits CI_GREEN / CI_RED / CI_CORRECTED / CI_ESCALATED to the thought-chain.
+
+    v5 4.1: `path` is the file the pipeline actually fixed (threaded from open_fix_pr); corrections
+    used to hardcode config.FIX_FILE and so could never repair a fix the pipeline wrote elsewhere."""
     if not (available() and config.CI_SELF_CORRECT):
+        return
+    path = path or config.FIX_FILE
+    if not config.fix_path_allowed(path):   # v5 4.1: never self-correct-commit outside the allowlist
+        emit("CI_ESCALATED", f"refusing to self-correct a disallowed path {path!r}")
         return
     with _watch_lock:  # one watcher per branch (repeated heals reuse the same fix PR)
         if branch in _watching:
             return
         _watching.add(branch)
-    repo, path = config.GITHUB_REPO, config.FIX_FILE
+    repo = config.GITHUB_REPO
     try:
         with httpx.Client(timeout=30.0, headers=_headers()) as c:
             for attempt in range(config.MAX_CI_RETRIES + 1):

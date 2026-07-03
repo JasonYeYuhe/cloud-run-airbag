@@ -354,7 +354,8 @@ def _open_fix_pr(service: str, incident_id: str, ctx: str, emit) -> str | None:
     if not github_pr.available():
         emit("FIX_PR", "fix-PR slow path not configured (set GITHUB_TOKEN/GITHUB_REPO)")
         return None
-    pr = github_pr.open_fix_pr(service, ctx)
+    # v5 4.1: pass the incident signature so PR reuse is keyed on the incident CLASS (not any fix branch)
+    pr = github_pr.open_fix_pr(service, ctx, signature=_incident_signature())
     if not pr:
         emit("FIX_PR", "no fix PR opened (no change or error)")
         return None
@@ -368,9 +369,11 @@ def _open_fix_pr(service: str, incident_id: str, ctx: str, emit) -> str | None:
                                  "stage": stage, "msg": msg, **data})
             incidents.record(incident_id, {"events": [ev]})
 
+        # v5 4.1: thread the DISCOVERED fix path so CI self-correction repairs the file the pipeline
+        # actually wrote (corrections used to hardcode config.FIX_FILE and could never fix it elsewhere).
         threading.Thread(target=github_pr.self_correct_ci,
                          args=(pr["branch"], pr["number"], service, ctx, _watch_emit),
-                         daemon=True).start()
+                         kwargs={"path": pr.get("path")}, daemon=True).start()
         emit("CI_WATCH", "watching the fix PR's CI — will self-correct on red")
     return pr_url
 
