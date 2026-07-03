@@ -97,6 +97,10 @@ def incident_proof(incident_id: str):
     rec = incidents.get(incident_id)
     if not rec:
         raise HTTPException(status_code=404, detail="unknown incident")
+    # v5 4.2: serve the SIGNED snapshot persisted at MITIGATED/CLOSED (signed once at the decision
+    # moment; the record mutates later). Falls back to a live digest-only build for pre-4.2 incidents.
+    if rec.get("proof"):
+        return rec["proof"]
     return proof.build(rec)
 
 

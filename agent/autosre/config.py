@@ -245,6 +245,16 @@ SANDBOX_JOB_NAME = os.getenv("AIRBAG_SANDBOX_JOB", "airbag-sandbox")
 SANDBOX_JOB_REGION = os.getenv("AIRBAG_SANDBOX_REGION", GCP_REGION)
 SANDBOX_JOB_TIMEOUT_S = float(os.getenv("AIRBAG_SANDBOX_TIMEOUT_S", "180"))
 
+# KMS-signed proof bundle (v5 Phase 4.2, behind AIRBAG_PROOF_SIGN, default OFF, FAIL-OPEN: a signing
+# failure degrades to today's digest-only bundle, never blocks a heal). At MITIGATED/CLOSED the
+# canonical bundle SNAPSHOT is signed via Cloud KMS asymmetricSign (EC_SIGN_P256_SHA256) over
+# httpx+ADC (zero new deps — the PyGithub-to-REST precedent). HONESTY: the signature proves
+# PROVENANCE (the bundle was produced by the holder of Airbag's KMS identity), NOT the correctness of
+# the decisions inside. Offline verifier: scripts/verify-proof.py; infra: infra/kms-setup.sh.
+PROOF_SIGN = _bool("AIRBAG_PROOF_SIGN", "false")
+# the full KMS key-VERSION resource name to sign with (.../cryptoKeyVersions/N). Empty -> can't sign.
+KMS_KEY = os.getenv("AIRBAG_KMS_KEY", "")
+
 # fix-PR slow path (optional). Empty token -> the FIX_PR stage is a no-op note.
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "")
 GITHUB_REPO = os.getenv("GITHUB_REPO", "")          # "owner/repo"

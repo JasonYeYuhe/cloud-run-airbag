@@ -11,10 +11,18 @@ So this is "tamper-evident (content digest)", not "cryptographically signed". De
 """
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
+import logging
+import time
 
+import httpx
+
+from . import config
 from .report import _recovery_seconds
+
+log = logging.getLogger("airbag.proof")
 
 
 def _stage(events, stage, keys):
@@ -48,3 +56,43 @@ def build(rec: dict) -> dict:
     return {"bundle": bundle, "digest": digest,
             "note": "content digest — tamper-evident (recompute sha256 over the canonical bundle to "
                     "verify integrity); NOT a cryptographic signature / authorship claim"}
+
+
+def sign_digest(digest: str) -> dict | None:
+    """Sign the bundle's sha256 via Cloud KMS asymmetricSign (EC_SIGN_P256_SHA256) over httpx+ADC.
+    Returns a signature envelope, or None on ANY failure (FAIL-OPEN — the caller degrades to the
+    digest-only bundle; signing must never block a heal). KMS signs the DIGEST (the raw 32 sha256
+    bytes, base64), not the hex string; the offline verifier re-hashes the canonical bundle."""
+    if not (config.PROOF_SIGN and config.KMS_KEY):
+        return None
+    try:
+        from google.auth import default as _adc
+        from google.auth.transport.requests import Request as _Req
+        raw = bytes.fromhex(digest.split(":", 1)[-1])   # sha256 bytes KMS will sign
+        creds, _ = _adc(scopes=["https://www.googleapis.com/auth/cloud-platform"])
+        creds.refresh(_Req())
+        r = httpx.post(f"https://cloudkms.googleapis.com/v1/{config.KMS_KEY}:asymmetricSign",
+                       json={"digest": {"sha256": base64.b64encode(raw).decode()}},
+                       headers={"Authorization": f"Bearer {creds.token}"}, timeout=15.0)
+        r.raise_for_status()
+        sig = r.json().get("signature")   # base64 DER ECDSA signature
+        if not sig:
+            return None
+        return {"algorithm": "EC_SIGN_P256_SHA256", "key": config.KMS_KEY, "signature": sig,
+                "signed_at": time.time(),
+                "note": "PROVENANCE only — signed by the holder of Airbag's KMS identity; NOT a claim "
+                        "the decisions inside are correct. Verify offline: scripts/verify-proof.py"}
+    except Exception as e:  # noqa: BLE001 — FAIL-OPEN: a signing failure must never block a heal
+        log.warning("proof KMS signing failed (%s); degrading to digest-only", e)
+        return None
+
+
+def build_signed(rec: dict) -> dict:
+    """build() PLUS (when AIRBAG_PROOF_SIGN is on) a KMS signature over the canonical bundle's digest.
+    Fail-open: a signing failure returns the digest-only bundle unchanged (never blocks a heal)."""
+    out = build(rec)
+    env = sign_digest(out["digest"])
+    if env:
+        out["signature"] = env
+        out["note"] = "cryptographically SIGNED (Cloud KMS EC_SIGN_P256_SHA256, provenance) + " + out["note"]
+    return out

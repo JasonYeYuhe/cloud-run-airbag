@@ -344,6 +344,7 @@ def _mitigate(service: str, incident_id: str, decision: dict, decision_summary: 
                           "revision when one deploys + verifies (or via Verify & Undo)")
         memory.record_incident(service, _incident_signature(), "mitigated", target)
         incidents.record(incident_id, {**rec, "status": "mitigated", "pr_url": None})
+        _persist_proof(incident_id)
         return {"status": "mitigated", "incident_id": incident_id, "rolled_back_to": target,
                 "events": run_events}
 
@@ -365,6 +366,7 @@ def _mitigate(service: str, incident_id: str, decision: dict, decision_summary: 
     _arm_pending(service, incident_id, decision, target, rollback_at, pr_url, emit)
     memory.record_incident(service, _incident_signature(), "mitigated", target)
     incidents.record(incident_id, {**rec, "status": "mitigated", "pr_url": pr_url})
+    _persist_proof(incident_id)
     return {"status": "mitigated", "incident_id": incident_id, "rolled_back_to": target,
             "events": run_events}
 
@@ -494,6 +496,7 @@ def _apply_approval_body(incident_id: str, approve: bool) -> dict:
             pending.set_pending(service, {**pend, "pr_url": pr_url})
         incidents.record(incident_id, {"service": service, "status": "mitigated",
                                        "pr_url": pr_url, "events": run_events})
+        _persist_proof(incident_id)
         return {"status": "mitigated", "kind": "fix_pr", "pr_url": pr_url,
                 "incident_id": incident_id, "events": run_events}
     return {"status": "noop", "reason": f"unknown approval kind {kind}", "incident_id": incident_id}
@@ -604,6 +607,7 @@ def complete_rollback(service: str, fix_revision: str | None = None,
                      f"(recovery from an unverified mitigate)")
         _save("closed", restored_to=candidate, fix_git_sha=git_sha)
         _release_service_lease("closed")
+        _persist_proof(incident_id)
         return {"status": "closed", "restored_to": candidate,
                 "incident_id": incident_id, "events": run_events}
     finally:
@@ -696,6 +700,22 @@ def _serving_revision(revs: dict) -> str | None:
     rs = (revs or {}).get("revisions", [])
     serving = max(rs, key=lambda r: r.get("traffic_percent", 0), default=None)
     return serving["name"] if serving and serving.get("traffic_percent", 0) > 0 else None
+
+
+def _persist_proof(incident_id: str) -> None:
+    """v5 4.2: snapshot the canonical proof bundle + (if AIRBAG_PROOF_SIGN) a Cloud KMS signature onto
+    the record at a terminal MITIGATED/CLOSED — signed ONCE at the decision moment (the record mutates
+    later), so /incidents/{id}/proof serves a stable, verifiable snapshot. Flag-gated (a no-op when
+    PROOF_SIGN is off -> byte-identical) + fail-open (a signing failure degrades to digest-only)."""
+    if not config.PROOF_SIGN:
+        return
+    try:
+        from . import proof
+        rec = incidents.get(incident_id)
+        if rec:
+            incidents.record(incident_id, {"proof": proof.build_signed(rec)})
+    except Exception as e:  # noqa: BLE001 — proof persistence must never break a completed heal
+        log.warning("proof persistence failed for %s: %s", incident_id, e)
 
 
 def _witnessed_for_selection(service: str) -> dict:
