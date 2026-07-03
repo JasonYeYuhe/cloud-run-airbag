@@ -57,7 +57,11 @@ def observe_healthy(service: str, rate: float) -> float:
     def _m(cur):
         cur = cur or {"service": service}
         prev = cur.get("baseline_rate", config.STAT_BASELINE_RATE)  # seed from the global default
-        cur["baseline_rate"] = a * rate + (1 - a) * prev   # unclamped running EMA
+        new = a * rate + (1 - a) * prev                    # running EMA
+        if config.BASELINE_GUARD:   # v5 5.2: clamp per-fold drift so one anomalous sample can't jerk it
+            drift = config.BASELINE_MAX_FOLD_DRIFT
+            new = max(prev - drift, min(prev + drift, new))
+        cur["baseline_rate"] = new
         cur["baseline_samples"] = cur.get("baseline_samples", 0) + 1
         cur["updated_at"] = time.time()
         return cur, cur["baseline_rate"]

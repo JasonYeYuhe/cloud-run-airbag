@@ -99,9 +99,9 @@ def test_fuse_all_pass_is_pass():
     assert fused["verdict"] == "PASS"
 
 
-def test_all_enables_5xx_and_latency(monkeypatch):
+def test_all_enables_every_detector(monkeypatch):
     monkeypatch.setattr(config, "SIGNALS", "all")
-    assert set(signals.enabled_detectors()) == {"5xx", "latency"}
+    assert set(signals.enabled_detectors()) == {"5xx", "latency", "burn"}   # v5 5.1 added burn
 
 
 def test_latency_detector_boundary_at_debounce(monkeypatch):

@@ -67,6 +67,24 @@ def sample_business_path(service: str, region: str, n: int = 20) -> dict:
     return {"errs": errs, "total": total}
 
 
+def sample_error_windows(service: str, region: str, windows: int = 6, per_window: int = 50) -> list[dict]:
+    """v5 5.1 burn-rate pooling: per-window 5xx counts over `windows` bursts against the business path
+    (marked probe traffic). Defensive: benign (no data) on error, which reads as INCONCLUSIVE."""
+    out: list[dict] = []
+    with httpx.Client(timeout=5.0, headers=config.PROBE_HEADERS) as c:  # v5 1.2: mark Airbag's own traffic
+        for _ in range(windows):
+            errs = total = 0
+            for _ in range(per_window):
+                total += 1
+                try:
+                    if c.get(_url("/api/orders")).status_code >= 500:
+                        errs += 1
+                except Exception:  # noqa: BLE001
+                    errs += 1
+            out.append({"errs": errs, "total": total})
+    return out
+
+
 def synthetic_probe(service: str, path: str = "/healthz") -> dict:
     import time
     try:

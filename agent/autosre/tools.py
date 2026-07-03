@@ -69,6 +69,21 @@ def sample_latency_windows(service: str, region: str, windows: int = 4) -> list[
     return get_backend().sample_latency_windows(service, region, windows)
 
 
+def sample_error_windows(service: str, region: str, windows: int = 6, per_window: int = 50) -> list[dict]:
+    """Per-window 5xx counts over `windows` bursts of the business path, newest last — the pooled-Wilson
+    burn-rate detector (signals/, v5 5.1) pools these to catch a slow error-budget burn that is
+    sub-threshold in any single window. Returns [{errs, total}, …]. Only called when the burn detector
+    is enabled (AIRBAG_SIGNALS includes 'burn').
+
+    Args:
+        service (str): Cloud Run service name.
+        region (str): GCP region.
+        windows (int): number of recent time-bucketed windows to pool.
+        per_window (int): samples per window.
+    """
+    return get_backend().sample_error_windows(service, region, windows, per_window)
+
+
 def probe_revision_health(service: str, region: str, revision: str, n: int = 8) -> dict:
     """Probe a specific NON-serving revision's health directly (per-revision URL), returning
     {errs, total, slow} over n samples — the causal pre-check (causal.py) Wilson-gates errs (and,

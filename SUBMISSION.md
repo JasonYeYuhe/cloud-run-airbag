@@ -85,7 +85,7 @@ never freely touches prod. Judges see a governed control loop, not a chatbot wit
 - **Verifiable incident-report Artifact:** every run is persisted and rendered at
   `/incidents/{id}/report` (decision + signals + before/after + full timeline) — *AI isn't guessing*.
 - Three execution backends (mock / local / gcp) behind one agent codebase; `/demo/*` is
-  token-gated so the public dashboard is watch-only. **315 tests (307 agent + 8 mcp-server), CI
+  token-gated so the public dashboard is watch-only. **330 tests (322 agent + 8 mcp-server), CI
   green — including a firestore-emulator job that proves the durable-state contract on real
   Firestore transactions.**
 

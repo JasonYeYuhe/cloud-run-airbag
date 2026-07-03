@@ -23,6 +23,7 @@ class SignalContext:
     baseline_rate: float
     err_sample: dict | None = None          # {errs, total} — the 5xx business-path sample
     latency_windows: list | None = None     # [{slow, total}, …] per-window count of over-SLO requests
+    error_windows: list | None = None       # [{errs, total}, …] per-window 5xx counts (burn-rate pooling)
 
 
 def enabled_detectors() -> list[str]:
@@ -43,6 +44,9 @@ def _collect(service: str, region: str, baseline_rate: float, keys: list[str]) -
         ctx.err_sample = tools.sample_business_path(service, region, config.STAT_SAMPLE_N)
     if "latency" in keys:
         ctx.latency_windows = tools.sample_latency_windows(service, region, config.SIGNAL_WINDOWS)
+    if "burn" in keys:
+        ctx.error_windows = tools.sample_error_windows(service, region, config.BURN_WINDOWS,
+                                                       config.BURN_PER_WINDOW)
     return ctx
 
 
@@ -80,8 +84,51 @@ def _detect_latency(ctx: SignalContext) -> dict:
             "detail": {"fail_windows": fail_windows, "windows": n}}
 
 
-_DETECTORS = {"5xx": _detect_5xx, "latency": _detect_latency}
-_CI_BACKED = {"5xx", "latency"}   # detectors with a statistical confidence bound -> may drive a rollback
+def _detect_burn(ctx: SignalContext) -> dict:
+    """Pooled-Wilson SLO burn-rate detector (v5 5.1). A slow error-budget burn is sub-threshold in any
+    SINGLE window but POOLED over the windows the Wilson lower bound tightens and clears the baseline —
+    the exact miss the single-window 5xx detector can't catch. Anti-flap: only a SUSTAINED burn (errors
+    present in ≥ SIGNAL_DEBOUNCE_WINDOWS windows) FAILs; an all-in-one-window SPIKE (pooled-elevated but
+    concentrated) collapses to PASS — that spike is the 5xx detector's job, not a burn. INCONCLUSIVE
+    only for no data. Reuses analyzer.analyze (the same Wilson rigor + the LEARNED baseline).
+
+    HONEST LIMIT (v5 adversarial review): the pooled LB is compared to the LEARNED baseline. A benign
+    service whose normal rate is AT or below the baseline is protected (the pooled LB doesn't clear it
+    — healthy_noisy at 3% vs a 2% baseline stays PASS). But on a FRESH/unlearned service whose TRUE
+    normal EXCEEDS the configured STAT_BASELINE_RATE, a confident elevation above that placeholder
+    baseline reads as a burn until the baseline converges — the exact reason 5.2 (AIRBAG_BASELINE_GUARD)
+    ships with it and burn is OPT-IN (default AIRBAG_SIGNALS=5xx). Set STAT_BASELINE_RATE to the
+    service's real SLO, or let observe_healthy learn it, before enabling burn on a noisy service."""
+    windows = [w for w in (ctx.error_windows or []) if int(w.get("total", 0)) > 0]
+    if not windows:
+        return {"verdict": "INCONCLUSIVE", "reason": "no burn-rate samples", "detail": {"windows": 0}}
+    pooled_errs = sum(int(w.get("errs", 0)) for w in windows)
+    pooled_total = sum(int(w.get("total", 0)) for w in windows)
+    windows_with_errors = sum(1 for w in windows if int(w.get("errs", 0)) > 0)
+    n = len(windows)
+    v = analyzer.analyze(pooled_errs, pooled_total, ctx.baseline_rate,
+                         z=config.STAT_Z, min_fail_errors=config.BURN_MIN_ERRORS)
+    if v["verdict"] == "FAIL" and windows_with_errors >= config.SIGNAL_DEBOUNCE_WINDOWS:
+        return {"verdict": "FAIL",
+                "reason": (f"burn: pooled {pooled_errs}/{pooled_total} over {n} windows confidently "
+                           f"above baseline (95% CI lower {v['ci_low']:.1%} > {ctx.baseline_rate:.1%}); "
+                           f"sustained across {windows_with_errors} windows"),
+                "detail": {"pooled_errs": pooled_errs, "pooled_total": pooled_total,
+                           "windows": n, "windows_with_errors": windows_with_errors,
+                           "ci_low": v["ci_low"]}}
+    # pooled-FAIL but errors concentrated in < debounce windows = a SPIKE, not a burn -> PASS (the 5xx
+    # detector owns spikes); or pooled not confidently elevated -> PASS. INCONCLUSIVE only for no data.
+    return {"verdict": "PASS",
+            "reason": (f"burn ok: pooled {pooled_errs}/{pooled_total} over {n} windows "
+                       f"({windows_with_errors} with errors) — "
+                       + ("not a sustained burn (< debounce)" if v["verdict"] == "FAIL"
+                          else "not confidently above baseline")),
+            "detail": {"pooled_errs": pooled_errs, "pooled_total": pooled_total,
+                       "windows": n, "windows_with_errors": windows_with_errors}}
+
+
+_DETECTORS = {"5xx": _detect_5xx, "latency": _detect_latency, "burn": _detect_burn}
+_CI_BACKED = {"5xx", "latency", "burn"}   # detectors with a statistical confidence bound -> may drive a rollback
 
 
 # --- fusion ------------------------------------------------------------------------------------

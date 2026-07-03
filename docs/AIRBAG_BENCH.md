@@ -202,6 +202,23 @@ or zero-5xx no-op run, or a `_verify`-proven mitigation target) — not a guaran
 correct): the committed guard is now *never block a rollback aimed at a healthy-modeled target* plus
 a recall ratchet against the committed causal scorecards.
 
+## Burn-rate detector — v5 Phase 5.1 (`AIRBAG_SIGNALS=all`)
+
+The pre-registered `slo_slow_burn` miss: a sustained ~3% error-budget burn that is **sub-threshold in
+any single window** — the single-window Wilson LB of `1/40 ≈ 0.45%` never clears the 2% baseline, so
+the 5xx floor OBSERVEs. v5 5.1's **pooled-Wilson burn-rate detector** pools 5xx counts over
+`AIRBAG_BURN_WINDOWS` windows (`12/300` across 6 windows → LB `2.3% > 2%`), requires errors in ≥
+`AIRBAG_SIGNAL_DEBOUNCE_WINDOWS` windows (an all-in-one-window **spike** collapses to PASS — that's
+the 5xx detector's job), and closes the miss: `slo_slow_burn` → **ROLLBACK** when `burn` is enabled.
+Corpus-wide it flips **only** that case (no false rollbacks); committed as `all_scorecard.json`
+(`AIRBAG_SIGNALS=all` = 5xx + latency + burn), CI-ratcheted. Ships with 5.2 (`AIRBAG_BASELINE_GUARD`):
+the learned baseline folds only a confident-healthy sample, so a slow burn can't raise the baseline it
+is measured against. **Anti-false-fire (pinned):** the benign cases carry realistic `error_windows`
+(`healthy_noisy` = sustained 3%, `low_traffic_blip` = a transient spike) and stay OBSERVE — a benign
+service at/below the baseline, or a one-window spike, does not fire burn. **Honest limit:** burn
+compares to the *learned* baseline, so a fresh/unlearned service whose true normal exceeds
+`STAT_BASELINE_RATE` can fire until the baseline converges (why burn is opt-in and ships with 5.2).
+
 ## Storm scorecard — v5 Phase 2 (`AIRBAG_STORM_COALESCE` + `AIRBAG_SELF_TRAFFIC_EXCLUDE`)
 
 The decision-quality scorecards above score ONE heal per fixture. The **storm scorecard** scores a
@@ -253,6 +270,7 @@ a single flag.
 make bench                                  # print the scorecard
 cd agent && python tests/bench/run_bench.py # same, directly
 cd agent && python tests/bench/run_bench.py --write   # regenerate the committed baseline JSON
+cd agent && python tests/bench/run_bench.py --signals all    # every detector (5xx + latency + burn)
 cd agent && python tests/bench/run_bench.py --storm          # print the storm scorecard (both flags)
 cd agent && python tests/bench/run_bench.py --storm --write  # regenerate the committed storm scorecards
 cd agent && python -m pytest tests/test_bench.py -q   # the regression tests

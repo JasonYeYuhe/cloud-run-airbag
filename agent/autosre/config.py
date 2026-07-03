@@ -167,6 +167,24 @@ LATENCY_SLO_ABS_MS = float(os.getenv("AIRBAG_LATENCY_SLO_ABS_MS", "800"))       
 LATENCY_SLO_TOLERANCE = float(os.getenv("AIRBAG_LATENCY_SLO_TOLERANCE", "0.05"))  # allowed slow-proportion
 LATENCY_MIN_SLOW = int(os.getenv("AIRBAG_LATENCY_MIN_SLOW", "3"))               # min slow reqs/window to FAIL it
 
+# Pooled-Wilson SLO burn-rate detector (v5 Phase 5.1; opt-in via AIRBAG_SIGNALS, e.g. "5xx,burn" or
+# "all"; default 5xx unchanged). A slow error-budget burn is sub-threshold in any SINGLE window (the
+# single-window Wilson LB of 1/40 ≈ 0.45% never clears the baseline) but POOLED over BURN_WINDOWS the
+# Wilson LB tightens and clears it — PROVIDED errors persist in ≥ SIGNAL_DEBOUNCE_WINDOWS windows (an
+# all-in-one-window SPIKE collapses to PASS — that spike is the 5xx detector's job, not a burn). Uses
+# the LEARNED baseline (memory) as the reference rate. Must ship + run WITH the baseline guard (5.2).
+BURN_WINDOWS = int(os.getenv("AIRBAG_BURN_WINDOWS", "6"))          # windows pooled for the burn LB
+BURN_PER_WINDOW = int(os.getenv("AIRBAG_BURN_PER_WINDOW", "50"))   # samples per burn window
+BURN_MIN_ERRORS = int(os.getenv("AIRBAG_BURN_MIN_ERRORS", "5"))    # min POOLED errors to FAIL (anti-blip)
+
+# Baseline integrity guard (v5 Phase 5.2, flag AIRBAG_BASELINE_GUARD, default OFF; enable ALONGSIDE
+# the burn detector). The learned EMA folds ONLY a CONFIDENT-healthy sample (a PASS verdict or a
+# zero-error observation, the _healthy_witness rule) — an INCONCLUSIVE-with-errors OBSERVE (a slow
+# burn straddling the baseline) would RAISE the baseline it is later measured against, HIDING the
+# burn (the poison the burn detector exists to catch). Also clamps per-fold drift. Flag OFF -> v4 fold.
+BASELINE_GUARD = _bool("AIRBAG_BASELINE_GUARD", "false")
+BASELINE_MAX_FOLD_DRIFT = float(os.getenv("AIRBAG_BASELINE_MAX_FOLD_DRIFT", "0.01"))  # max |Δ| per fold
+
 # Causal pre-check (v3 Phase 2a; v4 adds the latency axis). Before committing a rollback, probe the
 # rollback TARGET's health directly: if the target is ALSO confidently degraded (an external
 # dependency/quota outage breaking every revision — or the target itself being broken), landing on

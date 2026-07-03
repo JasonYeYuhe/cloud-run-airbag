@@ -70,6 +70,17 @@ class FixtureBackend:
             return [{"slow": 0, "total": 20} for _ in range(windows)]
         return [dict(x) for x in w]
 
+    def sample_error_windows(self, service: str, region: str, windows: int = 6,
+                             per_window: int = 50) -> list[dict]:
+        # v5 5.1 burn-rate pooling: per-window {errs, total} from the fixture; default benign (no burn)
+        # so non-burn cases are unaffected when the burn detector is enabled. Cleared post-rollback.
+        if self._cleared():
+            return [{"errs": 0, "total": per_window} for _ in range(windows)]
+        w = self.world.get("error_windows")
+        if w is None:
+            return [{"errs": 0, "total": per_window} for _ in range(windows)]
+        return [dict(x) for x in w]
+
     def sample_business_path(self, service: str, region: str, n: int = 20) -> dict:
         # the pinned observed sample (active probe at triage time); post-rollback it would read clean
         if self._cleared():

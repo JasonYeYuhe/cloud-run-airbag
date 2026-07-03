@@ -192,6 +192,30 @@ def sample_latency_windows(service: str, region: str, windows: int = 4, per_wind
     return out
 
 
+def sample_error_windows(service: str, region: str, windows: int = 6, per_window: int = 50) -> list[dict]:
+    """v5 5.1 burn-rate pooling: per-window 5xx counts over `windows` bursts of the business path
+    (marked probe traffic). Actively samples (like sample_latency_windows) rather than querying a Cloud
+    Monitoring distribution. OPT-IN (only when AIRBAG_SIGNALS includes 'burn'). Defensive: benign (no
+    data) on error, which reads as INCONCLUSIVE (never a false trigger)."""
+    try:
+        uri = _get_service(service, region).uri.rstrip("/") + config.PROBE_PATH
+    except Exception:  # noqa: BLE001
+        return [{"errs": 0, "total": 0} for _ in range(windows)]
+    out: list[dict] = []
+    with httpx.Client(timeout=5.0, headers=config.PROBE_HEADERS) as c:  # v5 1.2: mark Airbag's own traffic
+        for _ in range(windows):
+            errs = total = 0
+            for _ in range(per_window):
+                total += 1
+                try:
+                    if c.get(uri).status_code >= 500:
+                        errs += 1
+                except Exception:  # noqa: BLE001 — a connection failure is a degraded request
+                    errs += 1
+            out.append({"errs": errs, "total": total})
+    return out
+
+
 _CAUSAL_TAG = "airbagcausal"
 
 

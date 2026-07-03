@@ -63,6 +63,13 @@ def sample_latency_windows(service: str, region: str, windows: int = 4) -> list[
     return [{"slow": 0, "total": 20} for _ in range(windows)]
 
 
+def sample_error_windows(service: str, region: str, windows: int = 6, per_window: int = 50) -> list[dict]:
+    # v5 5.1 burn-rate pooling. Benign by default (the demo is a single-window 5xx scenario, not a slow
+    # burn); a total outage still reads elevated so an enabled burn detector wouldn't miss the demo.
+    errs = 0 if _STATE["rolled_back"] else per_window
+    return [{"errs": errs, "total": per_window} for _ in range(windows)]
+
+
 def probe_revision_health(service: str, region: str, revision: str, n: int = 8) -> dict:
     # the mock's last-good revision is healthy and fast (the mock scenario is a bad DEPLOY,
     # not a dependency/latency coincidence)

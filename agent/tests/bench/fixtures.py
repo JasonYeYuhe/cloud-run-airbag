@@ -91,6 +91,13 @@ def _lat(slow: int, total: int = 20, n: int = 4) -> list[dict]:
     return [{"slow": slow, "total": total} for _ in range(n)]
 
 
+def _burn(errs: int, total: int = 50, n: int = 6) -> list[dict]:
+    """N identical error windows, each `errs`/`total` 5xx (v5 5.1 burn-rate pooling). Each window is
+    individually sub-threshold for a single-window Wilson gate; POOLED over the windows the LB clears
+    the baseline, and errors present in all N windows makes it a SUSTAINED burn (not a spike)."""
+    return [{"errs": errs, "total": total} for _ in range(n)]
+
+
 CASES: list[BenchCase] = [
     # --- v2 floor gets these RIGHT (rollback) -----------------------------------------------------
     BenchCase(
@@ -124,11 +131,15 @@ CASES: list[BenchCase] = [
         name="healthy_noisy", category="healthy",
         description="Healthy service with sub-threshold background noise (3% windowed, 2 errs/40).",
         world={"revisions": _healthy_pair(), "error_rate": 0.03, "sample": {"errs": 2, "total": 40},
+               # v5 5.1 anti-false-fire: SUSTAINED benign ~3% noise (9/300 pooled) — ABOVE the 2%
+               # baseline yet the pooled Wilson LB (~1.6%) does NOT confidently clear it, so the burn
+               # detector correctly PASSes. A benign-noisy service is not a burn.
+               "error_windows": [{"errs": 2, "total": 50}] * 3 + [{"errs": 1, "total": 50}] * 3,
                "rollback_clears": True},
         expected_action="OBSERVE", is_bad_deploy=False,
         rationale="Background noise below the 5% instant threshold AND below min_fail_errors=3 — a "
-                  "mature agent must NOT page. v2 correctly OBSERVEs. (Contrast low_traffic_blip, "
-                  "where a windowed rate crosses 0.05 and v2 over-escalates.)"),
+                  "mature agent must NOT page. v2 correctly OBSERVEs; the v5 burn detector also PASSes "
+                  "(3% pooled LB doesn't clear the 2% baseline). (Contrast slo_slow_burn's 4% burn.)"),
     BenchCase(
         name="recovered_before_heal", category="healthy",
         description="An alert fired, but by triage the service has self-recovered (residual noise only).",
@@ -194,11 +205,13 @@ CASES: list[BenchCase] = [
         name="slo_slow_burn", category="slo_burn",
         description="Sustained 3% error budget burn — individually sub-threshold, but burning SLO over hours.",
         world={"revisions": _bad_and_good(), "error_rate": 0.03, "sample": {"errs": 1, "total": 40},
+               "error_windows": _burn(2, 50, 6),   # v5 5.1: pooled 12/300 -> Wilson LB clears baseline
                "rollback_clears": True, "logs": [_KEYERROR_TRACE]},
         expected_action="ROLLBACK", is_bad_deploy=True, expected_target=_GOOD,
         rationale="A slow burn below the instant 5% threshold but exhausting the error budget. "
-                  "Pre-registered RECALL GAP: v2's single-window 0.05 check OBSERVEs. Phase 1's "
-                  "multi-window burn-rate detector closes this."),
+                  "Pre-registered RECALL GAP: v2's single-window 0.05 check + single-window Wilson (1/40 "
+                  "≈ 0.45% LB) both OBSERVE. v5 5.1's POOLED-Wilson burn-rate detector (12/300 across 6 "
+                  "windows, LB > baseline, sustained) closes it — a ROLLBACK when 'burn' is enabled."),
 
     # --- CAUSAL gap -> Phase 2a causal pre-check (probe the rollback target before committing) -------
     # target_probe is the per-revision probe MODEL the causal check Wilson-gates in-bench; the coupling
@@ -331,6 +344,10 @@ CASES: list[BenchCase] = [
         name="low_traffic_blip", category="blip",
         description="A single 5xx in a 4-request window (windowed rate 25%, but 1 error total).",
         world={"revisions": _healthy_pair(), "error_rate": 0.25, "sample": {"errs": 1, "total": 4},
+               # v5 5.1 anti-false-fire: a TRANSIENT spike (all errors in ONE window) — pooled it looks
+               # elevated but errors in < debounce windows collapses the burn detector to PASS. A blip
+               # is the 5xx detector's concern, not a sustained burn.
+               "error_windows": [{"errs": 12, "total": 50}] + [{"errs": 0, "total": 50}] * 5,
                "rollback_clears": True},
         expected_action="OBSERVE", is_bad_deploy=False,
         rationale="JUDGMENT CALL / paging policy (pre-registered FALSE-ESCALATION gap): a lone 5xx in a "

@@ -50,6 +50,9 @@ def _arg(flag: str, default=None):
 
 def _scorecard_path(signals: str | None, causal: bool):
     """The committed scorecard file for a (signals, causal) config."""
+    sig = (signals or "").strip().lower()
+    if sig == "all" and not causal:                 # v5 5.1: every detector on (incl. burn-rate)
+        return _HERE.parent / "all_scorecard.json"
     multi = bool(signals) and signals != "5xx"
     name = ({(False, False): "baseline_scorecard.json",
              (True, False): "multisignal_scorecard.json",

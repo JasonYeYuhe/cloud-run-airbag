@@ -174,12 +174,17 @@ def _heal_body(incident_id: str, service: str) -> dict:
         # OBSERVE = the service is healthy at real traffic -> a genuine steady-state baseline sample.
         # observe_healthy is a 5xx statistic: fold the 5xx rate (stat carries it only when the 5xx
         # detector ran); if 5xx isn't in the signal mix, don't fabricate a 0.0 into the 5xx EMA.
+        # v5 5.2 (AIRBAG_BASELINE_GUARD): fold ONLY a CONFIDENT-healthy sample (the _healthy_witness
+        # rule) — an INCONCLUSIVE-with-errors OBSERVE (a slow burn straddling the baseline) would RAISE
+        # the baseline it is later measured against, HIDING the burn (the poison 5.1's detector exists
+        # to catch). Flag OFF -> v4 fold (any non-None rate).
         _rate = stat.get("rate") if stat else (before.get("error_rate") or 0.0)
-        if _rate is not None:
+        _confident_healthy = _healthy_witness(stat, before)
+        if _rate is not None and (_confident_healthy or not config.BASELINE_GUARD):
             memory.observe_healthy(service, _rate)
         # v4 serving-history ledger: a CONFIDENTLY-healthy no-op run witnesses the revision that was
         # serving the traffic (PASS, or zero observed 5xx) — the fact the rollback selector prefers.
-        if _healthy_witness(stat, before):
+        if _confident_healthy:
             witnessed = _serving_revision(revs)
             if witnessed:
                 memory.witness_serving(service, witnessed)
