@@ -1,0 +1,17 @@
+{
+  "label": "flag-off (the honest 2026-07-02 shape)",
+  "flag_on": false,
+  "n_deliveries": 6,
+  "heals_per_outage": 6,
+  "approval_cards_per_outage": 6,
+  "self_traffic_counted_in_detection": 5,
+  "unattended_terminal_states": 5,
+  "statuses": [
+    "awaiting_approval",
+    "awaiting_approval",
+    "awaiting_approval",
+    "awaiting_approval",
+    "awaiting_approval",
+    "awaiting_approval"
+  ]
+}

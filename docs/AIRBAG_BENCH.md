@@ -202,6 +202,38 @@ or zero-5xx no-op run, or a `_verify`-proven mitigation target) — not a guaran
 correct): the committed guard is now *never block a rollback aimed at a healthy-modeled target* plus
 a recall ratchet against the committed causal scorecards.
 
+## Storm scorecard — v5 Phase 2 (`AIRBAG_STORM_COALESCE` + `AIRBAG_SELF_TRAFFIC_EXCLUDE`)
+
+The decision-quality scorecards above score ONE heal per fixture. The **storm scorecard** scores a
+different thing: the OUTCOME SHAPE of a whole *outage* — one broken service hit by **N alert
+deliveries** (distinct Cloud Monitoring incident ids), replayed sequentially through the real
+`run_self_heal` seam against a `StormBackend` that models Airbag's own probe-feedback (its triage
+5xx land in the log-based detection COUNT unless the self-traffic exclusion filters the probe UA).
+It reproduces the real 2026-07-02 storm SHAPE and proves the storm flags fix it. Committed for BOTH
+flag states, pre-registered + CI-ratcheted (`tests/test_storm_scorecard.py`).
+
+| Metric (per outage, N=6) | flag-off (2026-07-02 shape) | flag-on (storm-safe) |
+|---|---|---|
+| `heals_per_outage` | **6** — every alert ran its own full heal | **1** — one leader; the rest coalesce |
+| `approval_cards_per_outage` | **6** — each heal filed its own card | **1** — one operator card |
+| `self_traffic_counted_in_detection` | **5** — Airbag's own probe 5xx counted as user 5xx | **0** — probe UA excluded |
+| `unattended_terminal_states` | **5** — N−1 redundant cards pile up + expire silently | **0** — followers attach cleanly |
+
+Flag-off is the honest ugly baseline (committed on purpose, labeled — *the storm stops being an
+anecdote*); flag-on is `1/1/0/0`. **HONEST FRAMING:** the scorecard measures outcome shape on a
+deterministic *sequential* replay; it does **not** claim to reproduce concurrency — the concurrent
+transactional safety (N simultaneous deliveries → exactly one leader, no lost ids) is proven
+separately by the threaded lease-contention tests in `test_state_store.py`. Both together are the
+exit criterion. (`unattended` here = redundant pending operator items, the silent pile-up; the
+single legitimate card for an outage is *attended*, not counted.) Two honesty notes on the metric
+independence in this sequential replay: `approval_cards` and `unattended` move together on a
+pure-awaiting storm (they measure different things — the approval store vs the run outcomes — but
+agree here); and `self_traffic=0` flag-on is *over-determined* — EITHER storm flag alone zeroes it
+in the model (coalescing removes the follower probes; the UA exclusion filters them). The real
+self-traffic filter and the one-leader coalesce are each proven independently at the unit level
+(`test_probe_marking.py`, `test_state_store.py`), so the scorecard neither invents nor over-credits
+a single flag.
+
 ## How Phases 1–2 use this (the TDD loop)
 
 1. Make a change behind its flag (e.g. `AIRBAG_SIGNALS`).
@@ -220,5 +252,7 @@ a recall ratchet against the committed causal scorecards.
 make bench                                  # print the scorecard
 cd agent && python tests/bench/run_bench.py # same, directly
 cd agent && python tests/bench/run_bench.py --write   # regenerate the committed baseline JSON
+cd agent && python tests/bench/run_bench.py --storm          # print the storm scorecard (both flags)
+cd agent && python tests/bench/run_bench.py --storm --write  # regenerate the committed storm scorecards
 cd agent && python -m pytest tests/test_bench.py -q   # the regression tests
 ```

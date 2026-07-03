@@ -20,6 +20,26 @@ for p in (str(_AGENT), str(_TESTS)):
 
 from bench.harness import run_bench          # noqa: E402
 from bench.scorecard import score            # noqa: E402
+from bench.storm import run_storm            # noqa: E402
+
+
+def _run_storm(write: bool) -> int:
+    """v5 Phase 2: replay the storm scenario for BOTH flag states and (with --write) commit the two
+    pre-registered scorecards. flag-off = the honest 2026-07-02 shape; flag-on = storm-safe."""
+    for flag_on, fname in ((False, "storm_scorecard_flagoff.json"),
+                           (True, "storm_scorecard_flagon.json")):
+        card = run_storm(flag_on=flag_on)
+        d = card.to_dict()
+        print(f"[storm {'ON ' if flag_on else 'OFF'}] heals={d['heals_per_outage']} "
+              f"cards={d['approval_cards_per_outage']} "
+              f"self_traffic={d['self_traffic_counted_in_detection']} "
+              f"unattended={d['unattended_terminal_states']}  ({d['n_deliveries']} deliveries)")
+        if write:
+            out = _HERE.parent / fname
+            out.write_text(json.dumps(d, indent=2) + "\n", encoding="utf-8")
+            print(f"[wrote] {out}")
+    return 0
+
 
 def _arg(flag: str, default=None):
     if flag in sys.argv:
@@ -40,6 +60,8 @@ def _scorecard_path(signals: str | None, causal: bool):
 
 def main() -> int:
     write = "--write" in sys.argv
+    if "--storm" in sys.argv:                         # v5 Phase 2 storm scorecard
+        return _run_storm(write)
     signals = _arg("--signals")                      # e.g. --signals 5xx,latency
     causal = "--causal" in sys.argv
     label = (f"signals={signals or '5xx'}" + (" +causal" if causal else "")) or "5xx floor (LLM off)"
