@@ -13,7 +13,7 @@ import logging
 import time
 
 from . import (adk_brain, autonomy, causal, config, events, gemini, incidents, memory,
-               pending, reversibility, signals, state_store, tools)
+               pending, reversibility, revision_delta, signals, state_store, tools)
 
 log = logging.getLogger("airbag.sm")
 
@@ -335,6 +335,19 @@ def _mitigate(service: str, incident_id: str, decision: dict, decision_summary: 
         rec["causal"] = causal_verdict
     if blind_landing:   # v5 3.1: first-class marker — this rollback landed on unverifiable evidence
         rec["blind_landing"] = True
+    if config.REVISION_DELTA:
+        # v5 5.3: the honest "what changed" forward story — an LLM-free spec diff (image digest, env
+        # NAMES, resource limits) of the bad serving revision vs the rollback target. Attached to the
+        # record (and thence the report + signed proof). Fail-open: a spec-fetch error simply omits
+        # the delta — evidence attachment must NEVER block a heal. Flag OFF -> the key is never set
+        # (record/report/proof-digest unchanged) -> byte-identical to v4.
+        try:
+            bad_rev = decision.get("bad_revision")
+            rec["revision_delta"] = revision_delta.diff(
+                tools.revision_spec(service, config.GCP_REGION, bad_rev) if bad_rev else {},
+                tools.revision_spec(service, config.GCP_REGION, target))
+        except Exception as e:  # noqa: BLE001 — fail-open: never block the heal on evidence attachment
+            log.warning("revision-delta evidence skipped (%s)", e)
 
     # A LATENCY regression's remedy IS the rollback to the healthy revision — there's no HTTP 500 / code
     # bug for a forward fix-PR to repair, so we don't fabricate one (that path targets 5xx/code-bug

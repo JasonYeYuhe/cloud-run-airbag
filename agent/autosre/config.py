@@ -185,6 +185,18 @@ BURN_MIN_ERRORS = int(os.getenv("AIRBAG_BURN_MIN_ERRORS", "5"))    # min POOLED 
 BASELINE_GUARD = _bool("AIRBAG_BASELINE_GUARD", "false")
 BASELINE_MAX_FOLD_DRIFT = float(os.getenv("AIRBAG_BASELINE_MAX_FOLD_DRIFT", "0.01"))  # max |Δ| per fold
 
+# Revision-delta evidence (v5 Phase 5.3, behind AIRBAG_REVISION_DELTA, default OFF -> byte-identical).
+# An LLM-free, DETERMINISTIC spec diff of the bad (currently-serving) revision vs the rollback TARGET —
+# image digest, env var NAMES (never VALUES — a name is metadata, a value can be a secret), and
+# resource limits — attached to the incident record/report/proof. This is the honest "what changed"
+# FORWARD story: a latency regression's remedy IS the rollback (no HTTP-500 bug for a fix-PR to
+# repair, so none is fabricated), yet an operator still deserves to see how the bad deploy differed
+# from the revision we rolled back to. Deterministic (a spec read + set diff), so it never imports the
+# LLM (revision_delta.py is in the action-tier invariant scan). Fail-open: a spec-fetch error simply
+# omits the delta, never blocks the heal. Flag OFF -> the delta is never computed/attached (no record,
+# report, or proof-digest change) -> byte-identical to v4. See revision_delta.py + tools.revision_spec.
+REVISION_DELTA = _bool("AIRBAG_REVISION_DELTA", "false")
+
 # Causal pre-check (v3 Phase 2a; v4 adds the latency axis). Before committing a rollback, probe the
 # rollback TARGET's health directly: if the target is ALSO confidently degraded (an external
 # dependency/quota outage breaking every revision — or the target itself being broken), landing on

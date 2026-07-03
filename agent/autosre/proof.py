@@ -51,6 +51,11 @@ def build(rec: dict) -> dict:
         "fix_pr": rec.get("pr_url"),
         "transitions": [{"stage": e.get("stage"), "ts": e.get("ts")} for e in events],
     }
+    # v5 5.3: the revision-delta evidence rides the signed bundle — but ONLY when present. Adding the
+    # key unconditionally (value None when absent) would change the canonical JSON + digest for EVERY
+    # v4 incident; keying it on presence keeps a flag-off bundle byte-identical to v4.
+    if rec.get("revision_delta"):
+        bundle["revision_delta"] = rec["revision_delta"]
     canonical = json.dumps(bundle, sort_keys=True, separators=(",", ":"), default=str)
     digest = "sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
     return {"bundle": bundle, "digest": digest,

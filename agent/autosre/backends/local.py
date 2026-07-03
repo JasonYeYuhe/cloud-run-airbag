@@ -46,6 +46,19 @@ def list_cloud_run_revisions(service: str, region: str) -> dict:
     ]}
 
 
+def revision_spec(service: str, region: str, revision: str) -> dict:
+    """v5 5.3: representative {image, env_names, limits} for the local synthetic revisions (the local
+    target is a single process — like list_cloud_run_revisions, the revisions are simulated). Mirrors
+    the real demo delta: the bad/fault revision differs from the healthy one by IMAGE digest and
+    carries the FAULT_MODE env the healthy revision lacks (limits identical). NAMES only, never values."""
+    faulty = "bad" in revision
+    fixrev = "fix" in revision
+    digest = "%064x" % (0xBAD if faulty else 0xF1 if fixrev else 0x600D)
+    return {"image": f"gcr.io/airbag-hack/target-app@sha256:{digest}",
+            "env_names": sorted(["PORT", "FAULT_MODE"]) if faulty else ["PORT"],
+            "limits": {"cpu": "1", "memory": "512Mi"}}
+
+
 def query_error_rate(service: str, region: str, window_minutes: int = 5,
                      since_epoch: float | None = None) -> dict:
     errs, total = _sample()

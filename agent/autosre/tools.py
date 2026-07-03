@@ -19,6 +19,19 @@ def list_cloud_run_revisions(service: str, region: str) -> dict:
     return get_backend().list_cloud_run_revisions(service, region)
 
 
+def revision_spec(service: str, region: str, revision: str) -> dict:
+    """LLM-free spec of one revision — {image, env_names, limits} — the deterministic diff input for
+    the v5 5.3 revision-delta evidence (image digest, env NAMES only, resource limits). Env VALUES are
+    never returned (a value can be a secret). Only called when AIRBAG_REVISION_DELTA is on.
+
+    Args:
+        service (str): Cloud Run service name.
+        region (str): GCP region.
+        revision (str): the revision to read the spec of.
+    """
+    return get_backend().revision_spec(service, region, revision)
+
+
 def query_error_rate(service: str, region: str, window_minutes: int = 5,
                      since_epoch: float | None = None) -> dict:
     """Return the 5xx error rate and request count over a recent window.

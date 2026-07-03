@@ -66,6 +66,33 @@ def list_cloud_run_revisions(service: str, region: str) -> dict:
     return {"service": service, "revisions": revs, "uri": svc.uri}
 
 
+def _spec_from_revision(rev) -> dict:
+    """v5 5.3: the LLM-free spec of ONE Cloud Run revision — {image, env_names, limits} — extracted
+    from the RevisionsClient object. PURE (no API/LLM) so it's unit-testable with a duck-typed object.
+    Reads the ingress container (containers[0] — Cloud Run's serving container). Returns env NAMES
+    only, never VALUES (a value can be a secret; a name is metadata). Tolerant of missing fields."""
+    containers = list(getattr(rev, "containers", None) or [])
+    c0 = containers[0] if containers else None
+    image = getattr(c0, "image", None) if c0 is not None else None
+    # names across ALL containers (a sidecar's env is still part of "what changed"), sorted + de-duped
+    env_names = sorted({e.name for c in containers for e in (getattr(c, "env", None) or []) if e.name})
+    limits: dict = {}
+    if c0 is not None:
+        res = getattr(c0, "resources", None)
+        lim = getattr(res, "limits", None) if res is not None else None
+        if lim:
+            limits = {str(k): str(v) for k, v in dict(lim).items()}
+    return {"image": image, "env_names": env_names, "limits": dict(sorted(limits.items()))}
+
+
+def revision_spec(service: str, region: str, revision: str) -> dict:
+    """v5 5.3: fetch ONE revision's LLM-free spec ({image, env_names, limits}) — the deterministic
+    diff input for the "what changed" evidence. One get_revision call; env NAMES only (never values)."""
+    from google.cloud import run_v2
+    name = f"{_service_path(service, region)}/revisions/{revision}"
+    return _spec_from_revision(run_v2.RevisionsClient().get_revision(name=name))
+
+
 def _error_rate_filter(service: str, region: str, start: datetime.datetime) -> str:
     """The Cloud Logging filter for the 5xx COUNT — pure + unit-testable (v5 Phase 1.2) so the
     self-traffic exclusion is provable without a live Logging client. With SELF_TRAFFIC_EXCLUDE on,

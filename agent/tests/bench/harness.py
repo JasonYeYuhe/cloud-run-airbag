@@ -52,6 +52,12 @@ class FixtureBackend:
     def list_cloud_run_revisions(self, service: str, region: str) -> dict:
         return {"service": service, "revisions": list(self.world["revisions"])}
 
+    def revision_spec(self, service: str, region: str, revision: str) -> dict:
+        # v5 5.3: per-revision {image, env_names, limits} from the fixture world (optional — worlds
+        # without revision_specs read as empty, so the diff attaches as all-no-change). Only reached
+        # when AIRBAG_REVISION_DELTA is on (pinned OFF for the corpus baseline).
+        return dict((self.world.get("revision_specs") or {}).get(revision) or {})
+
     def query_error_rate(self, service: str, region: str, window_minutes: int = 5,
                          since_epoch: float | None = None) -> dict:
         rate = 0.0 if self._cleared() else float(self.world["error_rate"])
@@ -179,6 +185,8 @@ _PINNED = {
                                            # exercises the guard on the dedicated fixtures.
     "TARGET_EVIDENCE": False,   # v5 3.1 PINNED off so the corpus baseline is hermetic (a stray
                                 # AIRBAG_TARGET_EVIDENCE=1 must not add BLIND_LANDING stages/drift).
+    "REVISION_DELTA": False,    # v5 5.3 PINNED off so the corpus baseline is hermetic (a stray
+                                # AIRBAG_REVISION_DELTA=1 must not attach a delta / perturb records).
     "VERIFY_ATTEMPTS": 2,        # keep the verify loop short
     "VERIFY_INTERVAL_S": 0.0,    # no wall-clock sleeps
     "CI_SELF_CORRECT": False,    # no background CI-watch thread

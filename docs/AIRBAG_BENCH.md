@@ -252,6 +252,21 @@ self-traffic filter and the one-leader coalesce are each proven independently at
 (`test_probe_marking.py`, `test_state_store.py`), so the scorecard neither invents nor over-credits
 a single flag.
 
+## Revision-delta evidence — v5 Phase 5.3 (`AIRBAG_REVISION_DELTA`)
+
+Not a scorecard — this phase adds no detector and changes no outcome SHAPE, so there is nothing to
+ratchet here. It attaches, to every mitigated record/report/proof, an **LLM-free deterministic spec
+diff** of the bad (serving) revision vs the rollback target: `image_changed`, `env_added` /
+`env_removed` (var **NAMES only — never values**; a name is metadata, a value can be a secret), and
+`limits_changed` (`revision_delta.diff`, an action-tier module in the no-LLM invariant scan). It is
+the honest "what changed" FORWARD story for a **latency** incident — which correctly gets *no*
+fabricated fix-PR (there is no HTTP-500 code bug for a PR to repair), yet still deserves to show how
+the bad deploy differed. Proven by `test_revision_delta.py` (the pure diff; the gcp/mock/local
+extractors; the wiring through the real `run_self_heal` seam for a 5xx AND a latency incident) rather
+than a committed scorecard. Flag default **OFF** → the delta is never computed and the record,
+report, and **signed proof digest are byte-identical to v4** (the bundle key is added only when
+present — a unit test pins this).
+
 ## How Phases 1–2 use this (the TDD loop)
 
 1. Make a change behind its flag (e.g. `AIRBAG_SIGNALS`).

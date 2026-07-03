@@ -62,11 +62,13 @@ def _action_files() -> list[pathlib.Path]:
         PROPOSES the rollback target — both must stay deterministic facts, never an LLM output.
       - reversibility.py (v4): its BLOCK verdict converts a rollback into an ESCALATE — a
         hallucinated block/pass would directly drive prod, so it must stay a declared-marker read.
+      - revision_delta.py (v5 5.3): its deterministic spec diff rides the signed proof bundle, so it
+        must stay a fact (a set diff), never an LLM output that could forge "what changed" evidence.
     (adk_brain.py / gemini.py / agent.py are the LLM-advisory tier — they ARE allowed to import it.)"""
     return (sorted((_AUTOSRE / "backends").glob("*.py"))
             + sorted((_AUTOSRE / "signals").glob("*.py"))
             + [_AUTOSRE / "tools.py", _AUTOSRE / "causal.py", _AUTOSRE / "memory.py",
-               _AUTOSRE / "reversibility.py"])
+               _AUTOSRE / "reversibility.py", _AUTOSRE / "revision_delta.py"])
 
 
 def test_action_layer_never_imports_the_llm():
@@ -100,6 +102,7 @@ def test_causal_and_signals_are_in_the_scanned_set():
     LLM-free guarantee is unenforced for them."""
     scanned = {p.name for p in _action_files()}
     assert "causal.py" in scanned
+    assert "revision_delta.py" in scanned   # v5 5.3: its diff rides the signed proof bundle
     assert any(p.parent.name == "signals" for p in _action_files())
 
 

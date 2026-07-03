@@ -68,6 +68,44 @@ def _target_html(d: dict) -> str:
     return out
 
 
+def _short_image(s) -> str:
+    """A long image ref (…@sha256:<64 hex>) is unreadable in full; keep the tail (repo + digest head)."""
+    s = str(s) if s is not None else "—"
+    return s if len(s) <= 56 else "…" + s[-53:]
+
+
+def _revision_delta_html(rec: dict) -> str:
+    """v5 5.3: the LLM-free spec diff (image digest, env NAMES, resource limits) of the bad serving
+    revision vs the rollback target — the honest "what changed" forward story. Present ONLY when
+    AIRBAG_REVISION_DELTA drove the heal (rec carries revision_delta); absent -> the card is omitted
+    and the report is byte-identical to v4. A latency regression gets this instead of a fabricated
+    fix-PR (there is no HTTP-500 code bug for a PR to repair)."""
+    rd = rec.get("revision_delta")
+    if not rd:
+        return ""
+    rows = ""
+    if rd.get("image_changed"):
+        rows += (f'<div class="kv"><span>image</span><span class="mono" style="color:#e3b341">'
+                 f'{_esc(_short_image(rd.get("image_bad")))} → '
+                 f'{_esc(_short_image(rd.get("image_target")))}</span></div>')
+    else:
+        rows += '<div class="kv"><span>image</span><span class="mono">unchanged</span></div>'
+    if rd.get("env_added"):
+        rows += (f'<div class="kv"><span>env added by bad rev</span>'
+                 f'<span class="mono" style="color:#e3b341">{_esc(", ".join(rd["env_added"]))}</span></div>')
+    if rd.get("env_removed"):
+        rows += (f'<div class="kv"><span>env dropped by bad rev</span>'
+                 f'<span class="mono">{_esc(", ".join(rd["env_removed"]))}</span></div>')
+    if rd.get("limits_changed"):
+        rows += (f'<div class="kv"><span>resource limits</span><span class="mono" style="color:#e3b341">'
+                 f'{_esc(rd.get("limits_bad"))} → {_esc(rd.get("limits_target"))}</span></div>')
+    return ('<div class="card"><h2>Revision delta — what changed</h2>'
+            f'{rows}'
+            '<div style="color:#6b7a8d;font-size:12px">deterministic (LLM-free) spec diff of the bad '
+            'serving revision vs the rollback target — image digest, env NAMES only (never values), '
+            'resource limits; a latency regression\'s forward story, no fabricated fix-PR</div></div>')
+
+
 def _recovery_seconds(events) -> float | None:
     """Alert-to-Verified-Recovery time (the v3 headline metric): from the incident's first stage to
     the proven recovery (MITIGATED) or the closed transaction (ROLLBACK_UNDONE/CLOSED)."""
@@ -156,8 +194,9 @@ def render(rec: dict) -> str:
             '<div style="color:#6b7a8d;font-size:12px">a rollback across a DECLARED forward-only '
             'change (schema migration) would corrupt writes — the guard honors the declared '
             'contract and escalates instead</div></div>')
-    v3_grid = (f'<div class="grid">{detect_html}{causal_html}{reversibility_html}</div>'
-               if (detect_html or causal_html or reversibility_html) else "")
+    rd_html = _revision_delta_html(rec)   # v5 5.3: present only when the flag drove the heal
+    v3_grid = (f'<div class="grid">{detect_html}{causal_html}{reversibility_html}{rd_html}</div>'
+               if (detect_html or causal_html or reversibility_html or rd_html) else "")
     recovery_s = _recovery_seconds(events)
     recovery_html = (f'<div class="kv"><span>alert → verified recovery</span>'
                      f'<span class="mono" style="color:#3fb950">{recovery_s:.0f}s</span></div>'
