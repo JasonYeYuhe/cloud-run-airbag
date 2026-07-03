@@ -49,14 +49,19 @@ def precheck(service: str, region: str, target: str | None, primary_signal: str 
         probe = tools.probe_revision_health(service, region, target, config.CAUSAL_PROBE_N)
     except Exception as e:  # noqa: BLE001 — a probe error must never block a legitimate rollback
         log.warning("causal target-probe failed (%s); proceeding with the rollback", e)
-        return {"verdict": "INCONCLUSIVE", "reason": f"target probe errored ({e}); proceeding", "target": target}
+        # v5 3.1: machine-readable probe_errored so _mitigate can measure a BLIND landing on an
+        # unwitnessed target (proceed fail-open + mark it) without changing this fail-safe verdict.
+        return {"verdict": "INCONCLUSIVE", "reason": f"target probe errored ({e}); proceeding",
+                "target": target, "probe_errored": True}
 
     errs, total = int(probe.get("errs", 0)), int(probe.get("total", 0))
     slow = int(probe.get("slow", 0))
     seen = {"errs": errs, "total": total, "slow": slow}
     if total <= 0:
+        # no samples = the probe could not assess the target (all requests unreachable/dropped, or an
+        # error the backend swallowed to {total:0}) — also a blind spot (v5 3.1 probe_errored).
         return {"verdict": "INCONCLUSIVE", "reason": "no target-probe samples; proceeding",
-                "target": target, "probe": probe}
+                "target": target, "probe": probe, "probe_errored": True}
     v = analyzer.analyze(errs, total, config.CAUSAL_TOLERANCE,
                          z=config.STAT_Z, min_fail_errors=config.CAUSAL_MIN_ERRORS)
     if v["verdict"] == "FAIL":   # the target is CONFIDENTLY also failing → landing on it is futile

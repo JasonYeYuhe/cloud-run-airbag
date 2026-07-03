@@ -145,7 +145,7 @@ def _heal_body(incident_id: str, service: str) -> dict:
     # v4: the serving-history ledger (witnessed-healthy revisions) informs the DETERMINISTIC target
     # selectors — the heuristic and _validate's promotion. It only PROPOSES: whatever target is
     # chosen still flows through the live causal pre-check in _mitigate before any traffic shifts.
-    witnessed = memory.witnessed_healthy(service)
+    witnessed = _witnessed_for_selection(service)
     decision = adk_brain.decide(service)
     if decision:
         emit("ADK", f"ADK SequentialAgent (triage→decide) ran; "
@@ -230,6 +230,7 @@ def _mitigate(service: str, incident_id: str, decision: dict, decision_summary: 
     `primary_signal` is the detector that drove the incident — a latency regression's remedy is the
     rollback itself, so we don't open a code-fix PR (that path targets 5xx/code-bug incidents)."""
     causal_verdict: dict | None = None
+    blind_landing = False   # v5 3.1: set when we proceed onto an unwitnessed target the probe couldn't assess
     # REVERSIBILITY GUARD (v4 Phase 3, default-OFF, fail-open): if the rollback would CROSS a
     # revision that DECLARED a forward-only change (schema migration → annotation
     # airbag.dev/irreversible=true), the "reversible" action isn't — old code in front of a
@@ -261,6 +262,23 @@ def _mitigate(service: str, incident_id: str, decision: dict, decision_summary: 
         # the probe is keyed on the TRIGGERING signal (v4 Phase 2): a latency incident also vetoes
         # a confidently-SLOW target — a 200-but-slow target can't remedy a latency regression.
         c = causal.precheck(service, config.GCP_REGION, target, primary_signal=primary_signal)
+        # v5 3.1 (AIRBAG_TARGET_EVIDENCE, a NO-OP unless CAUSAL is also on): a probe-ERROR against an
+        # UNWITNESSED target means we'd land traffic with ZERO positive evidence. ONE bounded retry; if
+        # it STILL can't assess, PROCEED fail-open but MARK a blind_landing (never block — a network
+        # blip must not abandon users mid-outage). A retry that DOES assess replaces the verdict (so a
+        # genuinely-COINCIDENT target still vetoes). Never blocks a legit rollback — measured, surfaced.
+        if (config.TARGET_EVIDENCE and c.get("probe_errored")
+                and target not in _witnessed_for_selection(service)):
+            c_retry = causal.precheck(service, config.GCP_REGION, target, primary_signal=primary_signal)
+            if c_retry.get("probe_errored"):
+                blind_landing = True
+                c = {**c, "blind_landing": True, "retry_probe_errored": True}
+                emit("BLIND_LANDING",
+                     f"target {target} has no fresh witnessed-healthy history and the causal probe "
+                     f"could not assess it (after one retry) — proceeding fail-open (never block a "
+                     f"legit rollback); this landing is MEASURED, not blocked", target=target)
+            else:
+                c = c_retry
         causal_verdict = c
         emit("CAUSAL", f"{c['verdict']} — {c['reason']}", **{k: c[k] for k in ("verdict", "target") if k in c})
         if c["verdict"] == "COINCIDENT":
@@ -287,6 +305,7 @@ def _mitigate(service: str, incident_id: str, decision: dict, decision_summary: 
                                        "decision": decision_summary, "rolled_back_to": target,
                                        "error_before": before.get("error_rate"),
                                        **({"causal": causal_verdict} if causal_verdict else {}),
+                                       **({"blind_landing": True} if blind_landing else {}),
                                        "events": run_events})
         return {"status": "escalated", "incident_id": incident_id, "events": run_events}
 
@@ -309,6 +328,8 @@ def _mitigate(service: str, incident_id: str, decision: dict, decision_summary: 
            "error_after": after.get("error_rate"), "events": run_events}
     if causal_verdict is not None:
         rec["causal"] = causal_verdict
+    if blind_landing:   # v5 3.1: first-class marker — this rollback landed on unverifiable evidence
+        rec["blind_landing"] = True
 
     # A LATENCY regression's remedy IS the rollback to the healthy revision — there's no HTTP 500 / code
     # bug for a forward fix-PR to repair, so we don't fabricate one (that path targets 5xx/code-bug
@@ -660,6 +681,19 @@ def _serving_revision(revs: dict) -> str | None:
     rs = (revs or {}).get("revisions", [])
     serving = max(rs, key=lambda r: r.get("traffic_percent", 0), default=None)
     return serving["name"] if serving and serving.get("traffic_percent", 0) > 0 else None
+
+
+def _witnessed_for_selection(service: str) -> dict:
+    """The witnessed-healthy map used for rollback target selection. v5 3.1 (AIRBAG_TARGET_EVIDENCE):
+    drop entries older than WITNESS_FRESH_S — a witness from arbitrarily long ago is not evidence about
+    NOW, so a stale entry falls back to recency (the live causal probe still gates whatever is picked).
+    Flag OFF -> the full v4 map, byte-identical."""
+    w = memory.witnessed_healthy(service)
+    if not config.TARGET_EVIDENCE:
+        return w
+    now = time.time()
+    return {rev: ent for rev, ent in w.items()
+            if isinstance(ent, dict) and (now - ent.get("last_witnessed_at", 0)) <= config.WITNESS_FRESH_S}
 
 
 def _healthy_witness(stat: dict | None, before: dict) -> bool:

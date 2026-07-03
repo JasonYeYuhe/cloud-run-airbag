@@ -6,6 +6,7 @@
   "approval_cards_per_outage": 1,
   "self_traffic_counted_in_detection": 0,
   "unattended_terminal_states": 0,
+  "blind_landings": 0,
   "statuses": [
     "awaiting_approval",
     "attached",

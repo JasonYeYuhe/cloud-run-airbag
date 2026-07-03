@@ -41,6 +41,7 @@ def test_flag_on_is_storm_safe():
     assert sc.approval_cards_per_outage == 1
     assert sc.self_traffic_counted_in_detection == 0
     assert sc.unattended_terminal_states == 0
+    assert sc.blind_landings == 0   # L1 gates before any rollback (mechanism proven in test_blind_landing)
     # the mechanism: one leader awaits, the rest coalesce (attach) BEFORE triage
     assert sc.statuses[0] == "awaiting_approval"
     assert sc.statuses[1:] == ["attached"] * (sc.n_deliveries - 1)

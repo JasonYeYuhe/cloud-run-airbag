@@ -23,7 +23,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 
-from autosre import autonomy, config, state_store, tools
+from autosre import autonomy, config, incidents, state_store, tools
 from autosre.state_machine import run_self_heal
 
 SERVICE = "airbag-target"
@@ -127,6 +127,7 @@ class StormScorecard:
     approval_cards_per_outage: int
     self_traffic_counted_in_detection: int
     unattended_terminal_states: int
+    blind_landings: int  # rollbacks onto an unverifiable-evidence target (v5 3.1; 0 in this L1 scenario)
     statuses: list  # the terminal status of each delivery, in order (the shape, for auditing)
 
     def to_dict(self) -> dict:
@@ -185,6 +186,11 @@ def run_storm(flag_on: bool, n_deliveries: int = 6, level: str = "L1") -> StormS
         needs_human = sum(1 for s in statuses
                           if s in ("awaiting_approval", "awaiting_fix_approval", "escalated"))
         unattended = max(0, needs_human - 1)
+        # v5 3.1: blind landings (a rollback onto a target the causal probe couldn't assess). This L1
+        # scenario gates before any rollback, so it produces none; the metric is measured here so the
+        # scorecard genuinely counts them, and the mechanism is proven in test_blind_landing.py.
+        blind_landings = sum(1 for i in range(n_deliveries)
+                             if (incidents.get(f"storm-inc-{i}") or {}).get("blind_landing"))
     finally:
         tools.get_backend = saved_get_backend
         for k, v in saved_cfg.items():
@@ -196,4 +202,4 @@ def run_storm(flag_on: bool, n_deliveries: int = 6, level: str = "L1") -> StormS
         label=label, flag_on=flag_on, n_deliveries=n_deliveries,
         heals_per_outage=heals, approval_cards_per_outage=n_cards,
         self_traffic_counted_in_detection=fb.self_5xx_in_detection,
-        unattended_terminal_states=unattended, statuses=statuses)
+        unattended_terminal_states=unattended, blind_landings=blind_landings, statuses=statuses)

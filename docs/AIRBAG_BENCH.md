@@ -218,6 +218,7 @@ flag states, pre-registered + CI-ratcheted (`tests/test_storm_scorecard.py`).
 | `approval_cards_per_outage` | **6** — each heal filed its own card | **1** — one operator card |
 | `self_traffic_counted_in_detection` | **5** — Airbag's own probe 5xx counted as user 5xx | **0** — probe UA excluded |
 | `unattended_terminal_states` | **5** — N−1 redundant cards pile up + expire silently | **0** — followers attach cleanly |
+| `blind_landings` (v5 3.1) | **0** — L1 gates before any rollback | **0** — same; mechanism proven in `test_blind_landing.py` |
 
 Flag-off is the honest ugly baseline (committed on purpose, labeled — *the storm stops being an
 anecdote*); flag-on is `1/1/0/0`. **HONEST FRAMING:** the scorecard measures outcome shape on a

@@ -166,6 +166,8 @@ _PINNED = {
     "CAUSAL_CHECK_ENABLED": False,  # PINNED off for the baseline; run_bench(causal=True) exercises it.
     "REVERSIBILITY_GUARD_ENABLED": False,  # PINNED off (default posture); run_case(reversibility=True)
                                            # exercises the guard on the dedicated fixtures.
+    "TARGET_EVIDENCE": False,   # v5 3.1 PINNED off so the corpus baseline is hermetic (a stray
+                                # AIRBAG_TARGET_EVIDENCE=1 must not add BLIND_LANDING stages/drift).
     "VERIFY_ATTEMPTS": 2,        # keep the verify loop short
     "VERIFY_INTERVAL_S": 0.0,    # no wall-clock sleeps
     "CI_SELF_CORRECT": False,    # no background CI-watch thread

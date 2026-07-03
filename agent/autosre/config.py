@@ -198,6 +198,17 @@ MEMORY_RECENT_MAX = int(os.getenv("AIRBAG_MEMORY_RECENT_MAX", "20"))        # bo
 # rollback selector PREFERS a witnessed revision over bare recency; see memory.witness_serving.
 WITNESS_MAX = int(os.getenv("AIRBAG_WITNESS_MAX", "10"))
 
+# Witness-freshness horizon + blind-landing visibility (v5 Phase 3.1). Behind AIRBAG_TARGET_EVIDENCE
+# (default OFF, and a documented NO-OP unless AIRBAG_CAUSAL_CHECK is also on): (i) a witnessed-healthy
+# revision older than WITNESS_FRESH_S is treated as COLD in target selection (last_witnessed_at is
+# already stored) — a witness from arbitrarily long ago is not evidence about NOW, so it falls back to
+# recency (+ the live causal probe still gates whatever is picked); (ii) on a causal PROBE-ERROR
+# against an UNWITNESSED target, _mitigate makes ONE bounded probe retry then PROCEEDS fail-open with
+# a first-class blind_landing marker — MEASURED + surfaced, NEVER blocking (the locked v3 "never block
+# a legit rollback" posture: a network blip must not abandon users mid-outage — Gemini-review MAJOR fix).
+TARGET_EVIDENCE = _bool("AIRBAG_TARGET_EVIDENCE", "false")
+WITNESS_FRESH_S = float(os.getenv("AIRBAG_WITNESS_FRESH_S", str(7 * 24 * 3600)))   # 7 days
+
 # verify loop
 VERIFY_ATTEMPTS = int(os.getenv("AIRBAG_VERIFY_ATTEMPTS", "6"))
 VERIFY_INTERVAL_S = float(os.getenv("AIRBAG_VERIFY_INTERVAL_S", "2"))
