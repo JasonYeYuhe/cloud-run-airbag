@@ -17,6 +17,9 @@ venv/
 *-sa.json
 service-account*.json
 *.pem
+# EXCEPTION: the Airbag proof PUBLIC key is meant to be committed (offline proof verification,
+# scripts/verify-proof.py) — it is a public key, never the private key (that stays in Cloud KMS).
+!scripts/airbag-proof-pubkey.pem
 client_secret*.json
 
 # Node / dashboard

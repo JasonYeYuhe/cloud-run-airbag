@@ -27,3 +27,22 @@ revision — the causal probe vetoed it safely (escalated, zero traffic shifted)
 motivated the v4 FSM **re-aim** (an LLM aim with no witnessed history is substituted with the
 witnessed candidate, only when the live probe is on to gate it), which shipped in rev 00034 and is
 exercised by `test_llm_wrong_aim_heals_end_to_end_via_reaim`.
+
+## v5 — cryptographically SIGNED proof (captured 2026-07-04, agent rev 00041)
+
+| File | Incident | What it proves |
+|---|---|---|
+| [`live-kms-signed-latency-heal.json`](live-kms-signed-latency-heal.json) | `inc-7d44556f` | 🔏 A REAL live latency heal whose bundle is **Cloud KMS-signed** (`EC_SIGN_P256_SHA256`, Phase 4.2) — provenance, not just integrity. It also carries the v5.3 **`revision_delta`** ("what changed" spec diff) *inside the signed bundle*: for this demo the delta is honestly empty (`image_changed:false`, no env/limit change) because the demo's `slow` fault is a runtime `FAULT_MODE` env-**value** toggle on the **same image** — a real bad-image deploy would show `image_changed:true`. |
+
+**Verify it offline** (zero network — recomputes the digest AND checks the KMS signature against the
+committed public key `scripts/airbag-proof-pubkey.pem`; the private key never leaves Cloud KMS):
+
+```bash
+python scripts/verify-proof.py docs/proof/live-kms-signed-latency-heal.json
+# -> INTEGRITY OK …  /  SIGNATURE OK: provenance verified (EC_SIGN_P256_SHA256, key …/airbag-proof/…/1)
+```
+
+Live verification run (2026-07-04, agent rev 00041, `airbag-hack-260628` / `asia-northeast1`): **1.1**
+storm-coalesce (5 distinct-id alerts → 1 leader + 4 attached), **1.2** observer-safe (10 marked probe
+5xx excluded from the log-scan count, 10 user 5xx kept), and **4.2** KMS-signed proof (this bundle,
+verified offline incl. a tamper negative-control) all passed. The demo baseline was left HEALTHY.

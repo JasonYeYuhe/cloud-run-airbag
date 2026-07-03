@@ -97,14 +97,24 @@ fi
 # (AIRBAG_EVENTS=pubsub fan-out) make scale-out safe, so the agent runs --max-instances 3.
 # AIRBAG_QUEUE + AIRBAG_MCP_HTTP are left UNSET (inproc + MCP off) — built + tested opt-in flags,
 # kept off in the demo for simplicity + a small attack surface.
-# v3 is ON by default. AIRBAG_SIGNALS=all runs every shipped detector — today 5xx + latency — so the
-# multi-signal engine catches a latency regression with ~0 5xx, not just outright 5xx. (We use "all"
-# rather than "5xx,latency" because gcloud --set-env-vars treats a comma as a KEY=VALUE separator, so a
-# comma INSIDE a value would be mis-split; "all" is comma-free and documented as "every shipped
-# detector".) AIRBAG_CAUSAL_CHECK=1 probes the rollback target's health before committing, so a
-# dependency/quota outage that isn't THIS revision's fault escalates instead of a futile rollback.
-# Both are deterministic — the action tier never calls the LLM.
-ENVS="AIRBAG_BACKEND=gcp,GOOGLE_CLOUD_PROJECT=${PROJECT},GOOGLE_CLOUD_LOCATION=${REGION},TARGET_SERVICE=airbag-target,TARGET_BASE_URL=${TURL},AIRBAG_SIGNALS=all,AIRBAG_CAUSAL_CHECK=1,AIRBAG_VERIFY_INTERVAL_S=4,AIRBAG_VERIFY_ATTEMPTS=8,AIRBAG_STATE=firestore,AIRBAG_EVENTS=pubsub,AIRBAG_SELF_URL=${AURL},AIRBAG_TASKS_QUEUE=airbag-heals,AIRBAG_TASKS_LOCATION=${REGION}"
+# --- v5 flag posture (LIVE-VERIFIED 2026-07-04 on airbag-hack-260628; signed proof in docs/proof/) ---
+# Storm-safe + provenance flags ON per V5_VISION §8 Q1/Q2 (their documented default is ON *after* live
+# verify, which is now done):
+#   AIRBAG_STORM_COALESCE=1       — N alert deliveries for ONE outage coalesce to ONE heal
+#                                   (verified live: 5 distinct-id alerts -> 1 leader + 4 attached).
+#   AIRBAG_SELF_TRAFFIC_EXCLUDE=1 — the log-scan detection COUNT excludes Airbag's own probe UA
+#                                   (verified live: 10 marked probe 5xx excluded, 10 user 5xx kept).
+#   AIRBAG_PROOF_SIGN=1 + AIRBAG_KMS_KEY — Cloud KMS-sign the proof bundle (verified offline, incl. a
+#                                   tamper negative-control). FAIL-OPEN: a missing key / KMS hiccup
+#                                   degrades to digest-only, so run infra/kms-setup.sh FIRST to create
+#                                   the key (a fresh clone without it simply signs nothing — never blocks).
+#   AIRBAG_REVISION_DELTA=1       — attach the LLM-free "what changed" spec diff to record/report/proof.
+# AIRBAG_SIGNALS is "5xx,latency" (NOT "all"): the burn detector (5.1) stays opt-in + CI-ratcheted but
+# is OFF live — its 300-sample burst makes the SLOW-fault latency heal ~10min (the 5xx demo is
+# unaffected). We now pass env vars with a "^@^" CUSTOM DELIMITER so the comma inside "5xx,latency" (and
+# any future comma value) is not mis-split by gcloud. AIRBAG_CAUSAL_CHECK=1 probes the rollback target's
+# health before committing. All of these are deterministic — the action tier never calls the LLM.
+ENVS="AIRBAG_BACKEND=gcp@GOOGLE_CLOUD_PROJECT=${PROJECT}@GOOGLE_CLOUD_LOCATION=${REGION}@TARGET_SERVICE=airbag-target@TARGET_BASE_URL=${TURL}@AIRBAG_SIGNALS=5xx,latency@AIRBAG_CAUSAL_CHECK=1@AIRBAG_STORM_COALESCE=1@AIRBAG_SELF_TRAFFIC_EXCLUDE=1@AIRBAG_PROOF_SIGN=1@AIRBAG_KMS_KEY=projects/${PROJECT}/locations/${REGION}/keyRings/airbag/cryptoKeys/airbag-proof/cryptoKeyVersions/1@AIRBAG_REVISION_DELTA=1@AIRBAG_VERIFY_INTERVAL_S=4@AIRBAG_VERIFY_ATTEMPTS=8@AIRBAG_STATE=firestore@AIRBAG_EVENTS=pubsub@AIRBAG_SELF_URL=${AURL}@AIRBAG_TASKS_QUEUE=airbag-heals@AIRBAG_TASKS_LOCATION=${REGION}"
 SECRETS="GEMINI_API_KEY=airbag-gemini-key:latest,AIRBAG_DEMO_TOKEN=airbag-demo-secret:latest,AIRBAG_WEBHOOK_TOKEN=airbag-webhook-secret:latest,AIRBAG_INTERNAL_TOKEN=airbag-internal-token:latest,AIRBAG_MCP_TOKEN=airbag-mcp-token:latest"
 
 # Optional fix-PR slow path: use a FINE-GRAINED, repo-scoped GitHub token (Contents +
@@ -116,7 +126,7 @@ if grep -q '^GITHUB_TOKEN=..' "$ROOT/agent/.env" 2>/dev/null; then
     || printf '%s' "$GHT" | gcloud secrets versions add airbag-github-token --data-file=-
   gcloud secrets add-iam-policy-binding airbag-github-token --member="serviceAccount:${SA}" \
     --role=roles/secretmanager.secretAccessor -q >/dev/null
-  ENVS="${ENVS},GITHUB_REPO=$(grep '^GITHUB_REPO=' "$ROOT/agent/.env" | cut -d= -f2-)"
+  ENVS="${ENVS}@GITHUB_REPO=$(grep '^GITHUB_REPO=' "$ROOT/agent/.env" | cut -d= -f2-)"  # @ = the ^@^ delimiter
   SECRETS="${SECRETS},GITHUB_TOKEN=airbag-github-token:latest"
 fi
 
@@ -130,7 +140,7 @@ echo "== deploy agent =="
 # enable AIRBAG_MCP_HTTP=on, pin --max-instances 1.
 gcloud run deploy airbag-agent --source "$ROOT/agent" --region "$REGION" \
   --service-account "$SA" --allow-unauthenticated --min-instances 1 --max-instances 3 \
-  --no-cpu-throttling --timeout 3600 --set-env-vars "$ENVS" --update-secrets "$SECRETS" -q
+  --no-cpu-throttling --timeout 3600 --set-env-vars "^@^$ENVS" --update-secrets "$SECRETS" -q
 
 AURL="$(gcloud run services describe airbag-agent --region "$REGION" --format='value(status.url)')"
 echo
