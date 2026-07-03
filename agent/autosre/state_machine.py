@@ -405,9 +405,13 @@ def _arm_pending(service: str, incident_id: str, decision: dict, target: str,
     (the fix-PR's CI calls /internal/complete-rollback; or the dashboard's Verify & Undo). Tracking
     the pin is REQUIRED even without a fix-PR: rollback pins traffic to an explicit revision, so a
     later healthy deploy would get 0% traffic until complete_rollback restores it."""
-    pending.set_pending(service, {
-        "incident_id": incident_id, "bad_revision": decision.get("bad_revision"),
-        "rolled_back_to": target, "rollback_at_epoch": rollback_at, "pr_url": pr_url})
+    pend = {"incident_id": incident_id, "bad_revision": decision.get("bad_revision"),
+            "rolled_back_to": target, "rollback_at_epoch": rollback_at, "pr_url": pr_url}
+    if config.CLOSE_SETTLEMENT:
+        # v5 3.2: _arm_pending is only reached after a SUCCESSFUL verify (record_outcome success=True
+        # already credited the trust ramp for this incident), so mark it so CLOSED won't double-credit.
+        pend["outcome_counted"] = True
+    pending.set_pending(service, pend)
     emit("PENDING_REVERT", note or "rollback held until the fix deploys + is verified",
          rolled_back_to=target, pr_url=pr_url)
 
@@ -587,6 +591,17 @@ def complete_rollback(service: str, fix_revision: str | None = None,
              f"via canary {config.CANARY_STAGES}")
         emit("CLOSED", "incident closed: rolled back, fixed, and traffic restored to the fix")
         closed = True
+        # v5 3.2 (AIRBAG_CLOSE_SETTLEMENT): the fix survived direct-probed canary 10/50/100 — the
+        # STRONGEST evidence Airbag collects. Witness the fix revision + credit the trust ramp, WITHOUT
+        # double-counting: the mitigate-time record_outcome already counted a SUCCESS (outcome_counted
+        # on the pending), so credit only when unset — e.g. a verify-FAIL mitigate that then got fixed
+        # (the recovery credit). Fixes the asymmetry: canary-FAIL demotes, canary-SUCCESS did nothing.
+        if config.CLOSE_SETTLEMENT:
+            memory.witness_serving(service, candidate)
+            if not rec.get("outcome_counted"):
+                autonomy.record_outcome(service, success=True, incident_id=incident_id)
+                emit("TRUST_CREDIT", f"fix {candidate} survived canary — crediting the trust ramp "
+                     f"(recovery from an unverified mitigate)")
         _save("closed", restored_to=candidate, fix_git_sha=git_sha)
         _release_service_lease("closed")
         return {"status": "closed", "restored_to": candidate,

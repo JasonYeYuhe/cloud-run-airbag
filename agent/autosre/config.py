@@ -209,6 +209,16 @@ WITNESS_MAX = int(os.getenv("AIRBAG_WITNESS_MAX", "10"))
 TARGET_EVIDENCE = _bool("AIRBAG_TARGET_EVIDENCE", "false")
 WITNESS_FRESH_S = float(os.getenv("AIRBAG_WITNESS_FRESH_S", str(7 * 24 * 3600)))   # 7 days
 
+# Close-time settlement (v5 Phase 3.2, behind AIRBAG_CLOSE_SETTLEMENT, default OFF). A fix that
+# survived direct-probed canary 10/50/100 is the STRONGEST evidence Airbag collects, yet CLOSED
+# neither witnessed the fix revision nor credited the trust ramp — while the canary-FAIL path DID
+# demote (a trust asymmetry). Fixed: CLOSED witnesses the fix revision (memory.witness_serving) and
+# credits the trust ramp, WITHOUT double-counting — the mitigate-time record_outcome already counted
+# a SUCCESS (persisted as outcome_counted on the pending record), so CLOSED credits only when unset
+# (e.g. a verify-fail mitigate that then got fixed — the recovery credit). Canary-fail semantics
+# unchanged. Flag OFF -> byte-identical v4.
+CLOSE_SETTLEMENT = _bool("AIRBAG_CLOSE_SETTLEMENT", "false")
+
 # verify loop
 VERIFY_ATTEMPTS = int(os.getenv("AIRBAG_VERIFY_ATTEMPTS", "6"))
 VERIFY_INTERVAL_S = float(os.getenv("AIRBAG_VERIFY_INTERVAL_S", "2"))
