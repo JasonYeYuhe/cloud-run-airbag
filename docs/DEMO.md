@@ -26,7 +26,10 @@ Repeatable: Break → Heal → Reset, as many times as you like.
 This is the payoff scenario: **a bad revision that returns HTTP 200 but slowly** (past the latency
 SLO) with **~0 5xx**. A 5xx-only monitor — every auto-rollback tool on the market — sees a perfectly
 healthy service. Airbag's multi-signal engine catches it and heals it. Multi-signal + causal are
-**on by default** on the live agent (`AIRBAG_SIGNALS=all`, `AIRBAG_CAUSAL_CHECK=1`).
+**on by default** on the live agent (`AIRBAG_SIGNALS=5xx,latency`, `AIRBAG_CAUSAL_CHECK=1`) — plus the
+v5 storm-safety + provenance flags (see "Scenario C" below), all **live-verified 2026-07-04**.
+(The 5.1 burn detector is CI-ratcheted + available via `AIRBAG_SIGNALS=all`, but OFF in the live set:
+its 300-sample burst makes the *slow*-fault latency heal ~10 min; the 5xx demo is unaffected.)
 
 Trigger it one-click (`POST /demo/run-latency`) or as two steps (`/demo/break-latency` then Heal):
 ```bash
@@ -57,6 +60,28 @@ back-to-back** (it only shifts traffic, creates no revisions). The **Verify & Un
 *new* fix revision (now the newest) — after demoing it, re-run `./scripts/gcp-demo-setup.sh` to
 restore the healthy-newest baseline before the next cycle.
 
+## Scenario C — storm-safe autonomy + cryptographic provenance (v5, live-verified 2026-07-04)
+The v5 thesis: **the first remediation agent provably safe around ITSELF.** On 2026-07-02 Airbag hit a
+real self-inflicted storm — its own probes fired the alert it was diagnosing, and N alert deliveries
+for ONE outage spawned N heals. v5 closes that, and all three headline pieces were verified live on
+the deployed agent (`airbag-hack-260628` / `asia-northeast1`, agent rev 00041):
+
+- **Storm coalesce (1.1)** — 5 distinct-id alert deliveries for one outage → **exactly 1 leader heal +
+  4 ATTACHED** followers (which run zero diagnostic probes). One outage = one heal, not a fan-out.
+- **Observer-safe diagnostics (1.2)** — against real Cloud Run request logs, the detection COUNT
+  **excludes Airbag's own probe traffic** (`User-Agent: airbag-probe/1`): 10 marked probe 5xx dropped,
+  10 real-user 5xx kept. The agent can no longer poison its own triage.
+- **KMS-signed proof (4.2)** — every heal's proof bundle is **Cloud KMS-signed** (EC_SIGN_P256_SHA256):
+  provenance, not just integrity. Verify offline, zero network:
+  `python scripts/verify-proof.py docs/proof/live-kms-signed-latency-heal.json` → `INTEGRITY OK` +
+  `SIGNATURE OK`; a tampered bundle FAILs both. (Azure markets "verified recovery" with zero crypto.)
+- **Revision-delta evidence (5.3)** — the LLM-free "what changed" spec diff (image digest, env NAMES,
+  limits) of the bad revision vs the rollback target, attached to the record/report/**signed bundle**.
+
+**The one line for judges:** *"Nobody else addresses the agent's own observer effect or alert-storm
+fan-out. We turned our own 2026-07-02 outage into a committed benchmark, fixed it, and proved it live —
+with a cryptographic signature you can verify offline without trusting us."*
+
 ## Why judges should care (the differentiation, grounded)
 - **Out-of-window detection.** Every auto-rollback tool (Argo/Harness/LaunchDarkly/Sedai) only acts inside the deploy/canary window. **78% of orgs have had an incident with *no* alert firing** — that's the gap we own: an independent production alert, hours later, still triggers a rollback.
 - **Action layer, not diagnosis layer.** Gemini Cloud Assist is officially advisory ("don't modify… human-in-the-loop required"); Jules only writes code offline. We *act* on Cloud Run and *prove* recovery. "Cloud Assist tells you what's wrong; Jules writes code; **we fix the live incident.**"
@@ -74,5 +99,5 @@ governance. (ADK can be disabled with `AIRBAG_USE_ADK=false`, falling back to a 
 call then a heuristic — the heal never blocks on the LLM.)
 
 ## Real vs stretch (be honest with judges)
-- **Real now:** detection → **ADK/Gemini decision** → **rollback** → **verified recovery** → **Gemini fix PR through real CI** (with **CI self-correction** on red) → **verify the fix + undo the rollback via a gradual canary** (10→50→100, compensate on failure), end-to-end on a live target. Every run is persisted as a **verifiable incident-report Artifact** (`/incidents/{id}/report`). Three execution backends (mock/local/gcp); same agent code; 254 tests (246 agent + 8 mcp-server), including a firestore-emulator CI job.
+- **Real now:** detection → **ADK/Gemini decision** → **rollback** → **verified recovery** → **Gemini fix PR through real CI** (with **CI self-correction** on red) → **verify the fix + undo the rollback via a gradual canary** (10→50→100, compensate on failure), end-to-end on a live target. Every run is persisted as a **verifiable incident-report Artifact** (`/incidents/{id}/report`). Plus **storm-safe autonomy + KMS-signed provenance** (v5, Scenario C) — live-verified. Three execution backends (mock/local/gcp); same agent code; 347 tests (339 agent + 8 mcp-server), including a firestore-emulator CI job.
 - **Stretch / roadmap (P2):** the *fully-unattended* CI trigger (`complete-rollback.yml` deploys the fix then calls the endpoint) needs a one-time Workload Identity Federation binding; durable Firestore state; Cloud Tasks/Pub-Sub worker.
