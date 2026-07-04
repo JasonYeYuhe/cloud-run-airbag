@@ -60,7 +60,7 @@ ORDERS = [{"id": 1, "price": 10}, {"id": 2, "price": 25}]
 def total_revenue(orders, buggy=False):
     # A "bad deploy" ships buggy=True, which reads a key that doesn't exist on the order
     # dicts -> KeyError -> HTTP 500. The fix is to read the correct "price" key.
-    key = "amount" if buggy else "price"
+    key = "price"
     return sum(o[key] for o in orders)
 
 
