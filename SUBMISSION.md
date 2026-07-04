@@ -129,7 +129,8 @@ The v2 moat ("catch a bad deploy out-of-window and act reversibly") was single-s
 un-measured. v3 makes Airbag *causally certain before it acts, across more than one signal* — and
 builds a measuring stick to prove it. All new intelligence is **deterministic + LLM-free** (guarded
 by an AST architecture-invariant test); the FSM still acts, the LLM only advises. **Multi-signal +
-causal are now ON by default in the live demo** (`AIRBAG_SIGNALS=all`, `AIRBAG_CAUSAL_CHECK=1`) —
+causal are now ON by default in the live demo** (`AIRBAG_SIGNALS=5xx,latency`, `AIRBAG_CAUSAL_CHECK=1`;
+the v5.1 burn detector is CI-ratcheted + opt-in via `AIRBAG_SIGNALS=all`, kept OFF in the live set) —
 verified end-to-end on a live latency-regression scenario (below).
 - **Airbag-Bench** ([`docs/AIRBAG_BENCH.md`](docs/AIRBAG_BENCH.md)) — a labeled incident-replay harness
   that scores rollback precision/recall, false-rollback rate, and Alert-to-Verified-Recovery over a
