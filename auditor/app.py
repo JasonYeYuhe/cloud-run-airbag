@@ -31,15 +31,19 @@ log = logging.getLogger("airbag.auditor")
 # In-memory latest snapshot (the FLOOR is stateless-ish; Phase 2 adds AUDITOR-owned durable checkpoint
 # storage). Keyed by incident_id -> counter-signed attestation envelope.
 _STATE: dict = {"attestations": {}, "last_poll_at": None, "error": None}
+# Persistent attestation cache across poll cycles ({incident_id: (raw_fetched_digest, env)}) — a
+# published proof is immutable, so an unchanged incident reuses its counter-signature instead of a
+# fresh KMS sign every cycle (keeps the poll fast + cheap; a tamper changes the bytes -> re-audit).
+_CACHE: dict = {}
 
 
 def _signer():
-    """The auditor's counter-signer: KMS when configured, else a fail-open no-op (UNSIGNED attestations
-    in dev / before the airbag-auditor key is minted). Never raises."""
+    """The auditor's REUSABLE counter-signer: KMS when configured (credentials created once + reused),
+    else a fail-open no-op (UNSIGNED attestations in dev / before the airbag-auditor key is minted)."""
     key = config.AUDITOR_KMS_KEY
     if not key:
         return lambda digest: None
-    return lambda digest: attestation.sign_digest_kms(digest, key)
+    return attestation.kms_signer(key)
 
 
 async def _poll_loop():
@@ -60,7 +64,9 @@ async def _poll_loop():
             res = await run_in_threadpool(
                 poller.poll_once, fetch=fetch, agent_url=config.AGENT_PROOF_URL, expected_pem=pem,
                 expected_key=config.EXPECTED_AGENT_KEY, signer=signer, now=time.time,
-                limit=config.MAX_INCIDENTS, signed_not_before=config.SIGNED_NOT_BEFORE)
+                limit=config.MAX_INCIDENTS, signed_not_before=config.SIGNED_NOT_BEFORE, cache=_CACHE)
+            for stale in [k for k in _CACHE if k not in res]:   # bound the cache to the current window
+                del _CACHE[stale]
             _STATE.update(attestations=res, last_poll_at=time.time(), error=None)
         except Exception as e:  # noqa: BLE001 — the out-of-band loop must NEVER die
             _STATE["error"] = str(e)

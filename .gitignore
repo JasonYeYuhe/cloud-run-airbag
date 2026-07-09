@@ -20,6 +20,9 @@ service-account*.json
 # EXCEPTION: the Airbag proof PUBLIC key is meant to be committed (offline proof verification,
 # scripts/verify-proof.py) — it is a public key, never the private key (that stays in Cloud KMS).
 !scripts/airbag-proof-pubkey.pem
+# EXCEPTION: the AUDITOR's PUBLIC key is likewise committed — it is the offline trust anchor for the
+# auditor's counter-signed attestations (verify with auditor/verify.py). Private key stays in KMS.
+!scripts/auditor-pubkey.pem
 client_secret*.json
 
 # Node / dashboard
@@ -37,3 +40,7 @@ venv-test/
 
 # Claude Code local session config
 .claude/
+
+# Auditor deploy staging: infra/auditor-deploy.sh COPIES the committed trust-anchor PEMs here into the
+# build context (sources of truth live in scripts/). Not committed — avoids a duplicate.
+auditor/keys/

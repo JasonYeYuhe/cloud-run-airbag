@@ -46,3 +46,39 @@ Live verification run (2026-07-04, agent rev 00041, `airbag-hack-260628` / `asia
 storm-coalesce (5 distinct-id alerts → 1 leader + 4 attached), **1.2** observer-safe (10 marked probe
 5xx excluded from the log-scan count, 10 user 5xx kept), and **4.2** KMS-signed proof (this bundle,
 verified offline incl. a tamper negative-control) all passed. The demo baseline was left HEALTHY.
+
+## v6 — INDEPENDENTLY counter-signed attestation (captured 2026-07-09)
+
+The v6 marquee: a SECOND, adversarially-independent Cloud Run service — the **Auditor** — polls the
+agent's public `/incidents/{id}/proof`, re-verifies each heal against a **PINNED** signer identity
+(refusing even a cryptographically-valid signature from an *unexpected* key version — the stock
+`verify-proof.py` only echoes the claimed key), and **counter-signs its verdict with its OWN, distinct
+Cloud KMS key** (`airbag-auditor`, NEVER the agent's `airbag-proof`).
+
+| File | Incident | What it proves |
+|---|---|---|
+| [`auditor-attestation-inc-7d44556f.json`](auditor-attestation-inc-7d44556f.json) | `inc-7d44556f` | 🛡 The deployed auditor's **counter-signed attestation** of the v5 KMS-signed heal above. It independently re-verified the heal → **SIGNED-VERIFIED** against the pinned agent key, and BINDS THE FETCH CONTEXT it verified under (`fetch.raw_fetched_digest` of the exact bytes, `agent_url`, `requested_incident_id`, HTTP status, and a `bundle.incident_id == requested-id` check). Its `subject_digest` equals the heal bundle's own `digest`. The attestation is itself **offline-verifiable** against the committed auditor pubkey. |
+
+**Verify the auditor's counter-signature offline** (zero network — the same kernel, the auditor's
+committed public key `scripts/auditor-pubkey.pem`; the auditor's private key never leaves its Cloud KMS):
+
+```bash
+python3 - <<'EOF'
+import json, sys; sys.path.insert(0, "auditor")
+import verify
+env = json.load(open("docs/proof/auditor-attestation-inc-7d44556f.json"))
+key = ("projects/airbag-hack-260628/locations/asia-northeast1/keyRings/airbag/"
+       "cryptoKeys/airbag-auditor/cryptoKeyVersions/1")
+v = verify.attest(env, expected_pem=open("scripts/auditor-pubkey.pem", "rb").read(), expected_key=key)
+print("auditor counter-signature :", v["tri_state"])              # -> SIGNED-VERIFIED
+print("the HEAL verdict it attests:", env["bundle"]["tri_state"])  # -> SIGNED-VERIFIED
+EOF
+```
+
+Live verification run (2026-07-09, `airbag-hack-260628` / `asia-northeast1`): the auditor
+(`airbag-auditor`, a 2nd Cloud Run service under its OWN zero-role SA with `signerVerifier` on the
+auditor key ONLY) independently attested 25 real incidents — the KMS-signed heal as
+**SIGNED-VERIFIED**, the unsigned recency heal (`inc-eb3daee9`) honestly as **INTEGRITY-ONLY** — and
+counter-signed each with its own KMS identity. This is the on-camera FLOOR: an independent party
+proving Airbag's heal, trusting neither Airbag's word nor its own echo. The agent was **untouched**
+(read-only, out-of-band — the auditor has no write path into it).

@@ -141,6 +141,47 @@ def _bounded(fn, seconds: float):
         ex.shutdown(wait=False)
 
 
+def kms_signer(key_resource: str, *, sign_timeout_s: float = 10.0,
+               refresh_timeout_s: float = 10.0) -> Signer:
+    """Build a REUSABLE counter-signer bound to `key_resource`. Credentials AND the HTTP client are
+    created ONCE and reused across every attestation (the ADC token auto-refreshes only near expiry).
+    Re-running google.auth.default() + a token refresh on EVERY signature is what made per-incident
+    signing ~18s on Cloud Run — fatal for the money-shot's 5-10s flip. Fail-open at BOTH construction
+    and per-sign: any error yields an UNSIGNED attestation, never a raised exception. The rare token
+    refresh is bounded (Round-1 #6); the KMS POST is bounded by the client timeout."""
+    try:
+        import httpx
+        from google.auth import default as _adc
+        from google.auth.transport.requests import Request as _Req
+        creds, _ = _adc(scopes=["https://www.googleapis.com/auth/cloud-platform"])
+        req = _Req()
+        client = httpx.Client(timeout=httpx.Timeout(sign_timeout_s))
+    except Exception as e:  # noqa: BLE001 — a signer that can't init -> unsigned attestations, never crash
+        log.warning("auditor: KMS signer init failed (%s); attestations will be UNSIGNED", e)
+        return lambda digest: None
+
+    def _sign(digest: str) -> dict | None:
+        try:
+            if not creds.valid:                       # refresh ONLY when expired (~hourly), bounded
+                _bounded(lambda: creds.refresh(req), refresh_timeout_s)
+            raw = bytes.fromhex(digest.split(":", 1)[-1])
+            r = client.post(f"https://cloudkms.googleapis.com/v1/{key_resource}:asymmetricSign",
+                            json={"digest": {"sha256": base64.b64encode(raw).decode()}},
+                            headers={"Authorization": f"Bearer {creds.token}"})
+            r.raise_for_status()
+            sig = r.json().get("signature")
+            if not sig:
+                return None
+            return {"algorithm": "EC_SIGN_P256_SHA256", "key": key_resource, "signature": sig,
+                    "signed_at": time.time(),
+                    "note": "auditor attestation counter-signature (PROVENANCE of the verdict)"}
+        except Exception as e:  # noqa: BLE001 — FAIL-OPEN per sign
+            log.warning("auditor: KMS counter-sign failed (%s); unsigned attestation", e)
+            return None
+
+    return _sign
+
+
 def sign_digest_kms(digest: str, key_resource: str, *, refresh_timeout_s: float = 10.0,
                     sign_timeout_s: float = 10.0) -> dict | None:
     """The AUDITOR's KMS counter-sign over Cloud KMS asymmetricSign (EC_SIGN_P256_SHA256), using the

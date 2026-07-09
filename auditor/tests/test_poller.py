@@ -178,6 +178,69 @@ def test_one_poison_incident_does_not_abort_the_cycle(monkeypatch):
     assert "inc-good" in res and "inc-bad" not in res
 
 
+def test_cache_hit_reuses_attestation_without_resigning():
+    """A published proof is immutable: an unchanged incident reuses its counter-signature instead of a
+    fresh KMS sign every cycle (the steady-state cost/latency fix)."""
+    priv = ec.generate_private_key(ec.SECP256R1())
+    pem = priv.public_key().public_bytes(serialization.Encoding.PEM,
+                                         serialization.PublicFormat.SubjectPublicKeyInfo)
+    raw = _sign_with(priv, "inc-A")
+    sign_calls = {"n": 0}
+
+    def _counting_signer(digest):
+        sign_calls["n"] += 1
+        return {"algorithm": "EC_SIGN_P256_SHA256", "key": "auditor", "signature": "c2ln", "signed_at": 1.0}
+
+    cache: dict = {}
+    kw = dict(fetch=_fake_fetch({"inc-A": raw}), agent_url=_URL, expected_pem=pem,
+              expected_key=_AGENT_KEY, signer=_counting_signer, cache=cache)
+    e1 = poller.audit_incident("inc-A", verified_at=1.0, **kw)
+    e2 = poller.audit_incident("inc-A", verified_at=2.0, **kw)
+    assert e2 is e1                                     # reused the cached attestation object
+    assert sign_calls["n"] == 1                         # signed ONCE, not per cycle
+
+
+def test_cache_miss_on_tamper_resigns_and_flips_to_fail():
+    """A tamper changes the fetched bytes -> cache miss -> re-audit -> the verdict flips to FAIL on
+    camera (the money shot). The cache must never mask a tamper."""
+    priv = ec.generate_private_key(ec.SECP256R1())
+    pem = priv.public_key().public_bytes(serialization.Encoding.PEM,
+                                         serialization.PublicFormat.SubjectPublicKeyInfo)
+    raw = _sign_with(priv, "inc-A")
+    proof = json.loads(raw)
+    proof["bundle"]["recovery"]["rolled_back_to"] = "attacker-swapped"
+    tampered = json.dumps(proof).encode()
+    cache: dict = {}
+    e1 = poller.audit_incident("inc-A", fetch=_fake_fetch({"inc-A": raw}), agent_url=_URL,
+                               expected_pem=pem, expected_key=_AGENT_KEY, signer=_NONE_SIGNER,
+                               verified_at=1.0, cache=cache)
+    e2 = poller.audit_incident("inc-A", fetch=_fake_fetch({"inc-A": tampered}), agent_url=_URL,
+                               expected_pem=pem, expected_key=_AGENT_KEY, signer=_NONE_SIGNER,
+                               verified_at=2.0, cache=cache)
+    assert e1["bundle"]["tri_state"] == verify.SIGNED_VERIFIED
+    assert e2["bundle"]["tri_state"] == verify.FAIL     # tamper -> cache miss -> re-audit -> FAIL
+
+
+def test_cache_invalidates_when_pinned_pem_changes():
+    """Confirmed review finding: the cached verdict depends on expected_pem (re-read each cycle so an
+    unreadable-then-mounted anchor self-heals). A PEM change under UNCHANGED immutable bytes must
+    re-audit, never serve a stale verdict that masks the anchor self-heal."""
+    priv = ec.generate_private_key(ec.SECP256R1())
+    pem = priv.public_key().public_bytes(serialization.Encoding.PEM,
+                                         serialization.PublicFormat.SubjectPublicKeyInfo)
+    raw = _sign_with(priv, "inc-A")
+    cache: dict = {}
+    fetch = _fake_fetch({"inc-A": raw})
+    # cycle 1: the pinned anchor is not yet available -> provenance uncheckable -> FAIL, cached
+    e1 = poller.audit_incident("inc-A", fetch=fetch, agent_url=_URL, expected_pem=None,
+                               expected_key=_AGENT_KEY, signer=_NONE_SIGNER, verified_at=1.0, cache=cache)
+    assert e1["bundle"]["tri_state"] == verify.FAIL
+    # cycle 2: SAME bytes, anchor now mounted -> must re-audit to SIGNED-VERIFIED (not stale FAIL)
+    e2 = poller.audit_incident("inc-A", fetch=fetch, agent_url=_URL, expected_pem=pem,
+                               expected_key=_AGENT_KEY, signer=_NONE_SIGNER, verified_at=2.0, cache=cache)
+    assert e2["bundle"]["tri_state"] == verify.SIGNED_VERIFIED
+
+
 def test_httpx_fetch_returns_body_and_status():
     import httpx
     t = httpx.MockTransport(lambda req: httpx.Response(200, content=b'{"ok":true}'))

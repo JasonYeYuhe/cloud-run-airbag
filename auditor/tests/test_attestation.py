@@ -207,3 +207,57 @@ def test_sign_digest_kms_fails_open_on_error(monkeypatch):
 
     monkeypatch.setattr("google.auth.default", _boom)
     assert attestation.sign_digest_kms("sha256:" + "ab" * 32, _AUDITOR_KEY) is None
+
+
+def test_kms_signer_reuses_credentials_across_signs(monkeypatch):
+    """The perf fix: ADC is discovered ONCE at construction and the token refreshed once, then reused
+    — NOT re-discovered per signature (which made per-incident signing ~18s live on Cloud Run)."""
+    calls = {"default": 0, "refresh": 0, "post": 0}
+
+    class _Creds:
+        def __init__(self):
+            self.valid = False
+            self.token = "tok"
+
+        def refresh(self, req):
+            calls["refresh"] += 1
+            self.valid = True
+
+    def _default(scopes=None):
+        calls["default"] += 1
+        return _Creds(), "p"
+
+    class _Resp:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"signature": "YmFzZTY0c2ln"}
+
+    class _Client:
+        def __init__(self, *a, **k):
+            pass
+
+        def post(self, *a, **k):
+            calls["post"] += 1
+            return _Resp()
+
+    monkeypatch.setattr("google.auth.default", _default)
+    monkeypatch.setattr("httpx.Client", _Client)
+    signer = attestation.kms_signer(_AUDITOR_KEY)
+    assert calls["default"] == 1                       # ADC discovered ONCE at construction
+    e1 = signer("sha256:" + "ab" * 32)
+    e2 = signer("sha256:" + "cd" * 32)
+    assert e1["signature"] == "YmFzZTY0c2ln" and e1["key"] == _AUDITOR_KEY and e2["signature"]
+    assert calls["default"] == 1                       # NOT re-discovered per sign (the fix)
+    assert calls["refresh"] == 1                       # refreshed once; token reused thereafter
+    assert calls["post"] == 2
+
+
+def test_kms_signer_init_failure_is_fail_open(monkeypatch):
+    def _boom(scopes=None):
+        raise RuntimeError("no ADC")
+
+    monkeypatch.setattr("google.auth.default", _boom)
+    signer = attestation.kms_signer(_AUDITOR_KEY)      # construction must not raise
+    assert signer("sha256:" + "ab" * 32) is None       # and it signs nothing (fail-open)

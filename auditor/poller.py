@@ -14,6 +14,7 @@ Service tier (denylist-guarded): imports the pure kernel + counter-signer siblin
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 from typing import Callable
@@ -52,37 +53,58 @@ def _list_incident_ids(fetch: Fetch, agent_url: str, limit: int) -> list[str]:
 
 def audit_incident(incident_id: str, *, fetch: Fetch, agent_url: str, expected_pem: bytes | None,
                    expected_key: str | None, signer, verified_at: float,
-                   signed_not_before: float | None = None) -> dict:
+                   signed_not_before: float | None = None, cache: dict | None = None) -> dict:
     """Fetch ONE incident's published proof and produce its counter-signed attestation. Fail-open:
-    a fetch/parse failure still yields an attestation (FAIL, http_status recorded)."""
+    a fetch/parse failure still yields an attestation (FAIL, http_status recorded).
+
+    `cache` (optional {incident_id: (raw_fetched_digest, attestation_env)}): a published proof is
+    IMMUTABLE, so when the fetched bytes are unchanged we reuse the prior counter-signed attestation
+    (skip re-verify AND re-sign) — the KMS sign is the expensive step, and a tamper changes the bytes
+    so the cache correctly invalidates + flips the verdict on camera."""
     url = f"{agent_url.rstrip('/')}/incidents/{incident_id}/proof"
     try:
         raw, status = fetch(url)
     except Exception as e:  # noqa: BLE001 — an unreachable agent is an honest FAIL, not a crash
         log.warning("auditor: fetch failed for %s (%s)", incident_id, e)
         raw, status = b"", 0
+    # The cached VERDICT depends on more than the proof bytes: expected_pem is re-read from disk every
+    # cycle (so an unreadable-then-mounted trust anchor self-heals), and expected_key/signed_not_before
+    # are pins. Fold ALL verdict-determining inputs into the cache validity key — else a PEM change
+    # under UNCHANGED (immutable) bytes would serve a stale verdict and mask the anchor self-heal.
+    raw_digest = "sha256:" + hashlib.sha256(raw or b"").hexdigest()
+    cache_key = (raw_digest,
+                 hashlib.sha256(expected_pem).hexdigest() if expected_pem else None,
+                 expected_key, signed_not_before)
+    if cache is not None and status == 200:
+        hit = cache.get(incident_id)
+        if hit and hit[0] == cache_key:
+            return hit[1]                              # unchanged proof + pins -> reuse (no re-verify/re-sign)
     try:
         proof = json.loads(raw) if raw else None
     except Exception:  # noqa: BLE001 — non-JSON -> None -> verify_and_attest classifies it FAIL
         proof = None
-    return attestation.verify_and_attest(
+    env = attestation.verify_and_attest(
         proof, raw or b"", expected_pem=expected_pem, expected_key=expected_key, agent_url=agent_url,
         requested_incident_id=incident_id, http_status=status, verified_at=verified_at,
         signer=signer, signed_not_before=signed_not_before)
+    if cache is not None and status == 200:
+        cache[incident_id] = (cache_key, env)
+    return env
 
 
 def poll_once(*, fetch: Fetch, agent_url: str, expected_pem: bytes | None, expected_key: str | None,
               signer, now: Callable[[], float], limit: int = 25,
-              signed_not_before: float | None = None) -> dict:
+              signed_not_before: float | None = None, cache: dict | None = None) -> dict:
     """List incidents and audit each. Returns {incident_id: attestation_envelope}. `now` is injected
-    (now() -> epoch float) so audit timestamps are deterministic in tests."""
+    (now() -> epoch float) so audit timestamps are deterministic in tests. `cache` (optional) reuses
+    counter-signatures for unchanged proofs across cycles."""
     out: dict[str, dict] = {}
     for iid in _list_incident_ids(fetch, agent_url, limit):
         try:                                          # defense-in-depth: one poison id can't abort the cycle
             out[iid] = audit_incident(
                 iid, fetch=fetch, agent_url=agent_url, expected_pem=expected_pem,
                 expected_key=expected_key, signer=signer, verified_at=now(),
-                signed_not_before=signed_not_before)
+                signed_not_before=signed_not_before, cache=cache)
         except Exception as e:  # noqa: BLE001 — never let a single incident kill the whole poll cycle
             log.warning("auditor: audit failed for %r (%s)", iid, e)
     return out
