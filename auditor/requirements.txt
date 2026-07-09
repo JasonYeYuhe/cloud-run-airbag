@@ -1,0 +1,6 @@
+# Airbag Auditor — the SECOND, adversarially-independent Cloud Run service that re-verifies and
+# counter-signs the agent's published heal proofs. Its verify core (verify.py) is stdlib +
+# `cryptography` ONLY — the "zero agent imports" independence property is AST-enforced by
+# auditor/tests/test_auditor_invariant.py (Phase 1.3). Network/KMS deps for the polling service +
+# counter-signer land with Phase 1.2/1.3 (httpx, google-auth).
+cryptography>=42

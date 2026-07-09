@@ -82,7 +82,7 @@ jobs:
           python-version: "3.12"
       - run: pip install ruff
       - name: Ruff (real errors only — syntax + pyflakes)
-        run: ruff check --select E9,F --exclude venv-test agent target-app
+        run: ruff check --select E9,F --exclude venv-test agent target-app auditor
 
   target-app:
     runs-on: ubuntu-latest
@@ -110,4 +110,22 @@ jobs:
           python-version: "3.12"
       - run: pip install -r requirements.txt pytest
       - name: Contract tests (mocked HTTP — tool registration, auth gating, sanitized errors)
+        run: python -m pytest -q
+
+  # v6 Phase 1 — the independent Auditor service. Its verify core is stdlib + `cryptography` only
+  # (the "zero agent imports" independence property is AST-enforced by test_auditor_invariant.py).
+  # This job MUST exist from the SAME commit that creates auditor/tests (Round-2 #21 — a test suite
+  # that never runs in CI enforces nothing); the finals ONE-test-count is agent + mcp-server + auditor.
+  auditor:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: auditor
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt pytest
+      - name: Verify core + signer-pin tri-state tests (independent auditor kernel)
         run: python -m pytest -q
