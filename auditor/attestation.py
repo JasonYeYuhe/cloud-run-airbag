@@ -64,6 +64,12 @@ def build_attestation(proof: dict, raw_bytes: bytes, verdict: dict, *, agent_url
         "attestation_version": ATTESTATION_VERSION,
         "incident_id": bundle_incident_id,
         "tri_state": tri,
+        # the verdict breakdown behind the tri_state — WHY it verified or FAILed (transparency for the
+        # status page + a judge inspecting the JSON). Reported RAW even when an id mismatch forced FAIL,
+        # so "integrity OK, signature OK, but WRONG incident" is legible (fetch.incident_id_match=false).
+        "integrity_ok": verdict["integrity_ok"],
+        "signature_ok": verdict["signature_ok"],
+        "signer_pinned": verdict["signer_pinned"],
         "signed_expected": verdict["signed_expected"],
         "expected_key": verdict["expected_key"],
         # report the CONFIGURED verified signer only when the heal itself is SIGNED-VERIFIED
