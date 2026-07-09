@@ -221,6 +221,37 @@ def test_tri_state_is_always_one_of_the_four_and_never_claims_correct():
     assert v_unsigned["verified_signer"] is None
 
 
+# --- hostile-input robustness: attest must NEVER raise on garbage (confirmed review finding, major) --
+def test_hostile_malformed_proof_never_crashes_attest():
+    """A hostile PUBLISHED proof must yield an honest verdict, never an uncaught exception — the exact
+    suppression vector a compromised agent would use against its own auditor. Covers a non-dict bundle,
+    a non-dict proof, and malformed `transitions` (None / string / list-of-non-dicts) — the symmetric
+    twin of the non-dict-signature case."""
+    hostile = [
+        {"bundle": "x", "digest": "sha256:" + "0" * 64},              # bundle a string
+        {"bundle": [1, 2], "digest": "sha256:" + "0" * 64},           # bundle a list
+        {"bundle": {"transitions": None}, "digest": "sha256:" + "0" * 64},
+        {"bundle": {"transitions": "oops"}, "digest": "sha256:" + "0" * 64},
+        {"bundle": {"transitions": [1, 2, 3]}, "digest": "sha256:" + "0" * 64},
+        ["not", "even", "an", "object"],                              # proof itself a list
+        "a bare string",                                              # proof a string
+        42,                                                           # proof a number
+    ]
+    for proof in hostile:
+        v = verify.attest(proof, expected_pem=None, expected_key=_EXPECTED_KEY)   # must not raise
+        assert v["tri_state"] in {verify.SIGNED_VERIFIED, verify.INTEGRITY_ONLY,
+                                  verify.DEGRADED, verify.FAIL}
+
+
+def test_valid_integrity_bundle_with_malformed_transitions_does_not_crash_degraded_path():
+    """Pins the exact crash site: an integrity-VALID unsigned bundle with `transitions: null`, attested
+    with a cutover set, reaches _incident_ts on the DEGRADED path. Pre-fix `for t in None` raised."""
+    b = {"incident_id": "inc-A", "service": "s", "transitions": None}
+    proof = _unsigned(b)
+    v = verify.attest(proof, expected_pem=None, expected_key=_EXPECTED_KEY, signed_not_before=1.0)
+    assert v["tri_state"] == verify.INTEGRITY_ONLY and v["signed_expected"] is False
+
+
 # --- parity: the lifted kernel is behaviour-identical to the shipped verifier -----------------------
 def test_kernel_parity_with_the_shipped_verifier():
     """`_verify_kernel` must be a genuine VERBATIM lift of scripts/verify-proof.py:verify() — same

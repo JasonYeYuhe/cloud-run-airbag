@@ -65,3 +65,72 @@ def test_allowlist_allows_the_kernel_deps():
                 "from cryptography.hazmat.primitives.asymmetric import ec"):
         tops = _imported_tops(ast.parse(src))
         assert not (tops - _ALLOWED_TOP), f"allowlist false-positived on a clean kernel import: {src!r}"
+
+
+# --- DENYLIST for the rest of the auditor SERVICE (Phase 1.2/1.3) -----------------------------------
+# The service files (the counter-signer, and the poller/server in 1.3) legitimately need httpx /
+# google-auth, so they get a DENYLIST instead of the kernel's allowlist. It forbids the agent's LLM
+# tier AND the whole `autosre` package — the auditor imports ZERO agent code. The repo-level parity
+# test in agent/tests asserts this set is a SUPERSET of the agent's own _FORBIDDEN (read by path,
+# no import coupling), so the two can never silently drift.
+_DENYLIST = frozenset({
+    "gemini", "adk_brain", "genai", "generativeai", "adk",   # the agent's LLM/diagnosis tier
+    "autosre",                                               # ANY agent code — the independence claim
+})
+
+
+def _module_strings(node: ast.AST) -> list[str]:
+    """Every dotted module name a single Import/ImportFrom brings into scope (mirrors the agent's
+    architecture-invariant helper) so component matching catches google.adk / from google import genai."""
+    out: list[str] = []
+    if isinstance(node, ast.Import):
+        out += [a.name for a in node.names]
+    elif isinstance(node, ast.ImportFrom):
+        if node.module:
+            out.append(node.module)
+            out += [f"{node.module}.{a.name}" for a in node.names]
+        else:
+            out += [a.name for a in node.names]                # from . import gemini  (relative)
+    return out
+
+
+def _denylist_hits(tree: ast.AST) -> set[str]:
+    hits: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            for mod in _module_strings(node):
+                if _DENYLIST & set(mod.split(".")):
+                    hits.add(mod)
+    return hits
+
+
+def _service_files() -> list[pathlib.Path]:
+    """Every auditor .py EXCEPT the allowlist-pure kernel (verify.py) — i.e. the network-using service
+    modules the denylist guards."""
+    return [p for p in sorted(_AUDITOR.glob("*.py")) if p.name != "verify.py"]
+
+
+def test_auditor_service_files_never_import_agent_or_llm():
+    offenders = {}
+    for p in _service_files():
+        bad = _denylist_hits(ast.parse(p.read_text(encoding="utf-8"), filename=str(p)))
+        if bad:
+            offenders[p.name] = sorted(bad)
+    assert not offenders, (
+        "auditor service files must import NO agent code (`autosre`) and NO LLM tier — the "
+        f"independence property. Offending imports: {offenders}")
+
+
+def test_denylist_flags_every_agent_and_llm_import_form():
+    for src in ("from autosre import proof", "import autosre.state_machine",
+                "from autosre.gemini import _client", "from google import genai",
+                "import google.generativeai as g", "from google.adk.runners import InMemoryRunner",
+                "from . import adk_brain"):
+        assert _denylist_hits(ast.parse(src)), f"denylist FAILED to flag an agent/LLM import: {src!r}"
+
+
+def test_denylist_allows_network_and_sibling_imports():
+    for src in ("import httpx", "from google.auth import default",
+                "from google.auth.transport.requests import Request", "import verify",
+                "import base64, hashlib, json"):
+        assert not _denylist_hits(ast.parse(src)), f"denylist false-positived on a clean import: {src!r}"

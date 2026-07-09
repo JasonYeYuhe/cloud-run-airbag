@@ -49,6 +49,8 @@ def _verify_kernel(proof: dict, pem_bytes: bytes | None) -> dict:
     bundle or when no key was supplied. Pure — no I/O. Kept behaviour-identical to the shipped script
     (parity test) so the auditor is a genuine independent re-run, not a divergent second opinion."""
     msgs: list[str] = []
+    if not isinstance(proof, dict):       # a hostile fetch may not even be a JSON object
+        proof = {}
     bundle = proof.get("bundle") or {}
     claimed = proof.get("digest", "")
     recomputed = "sha256:" + hashlib.sha256(_canonical(bundle).encode("utf-8")).hexdigest()
@@ -79,13 +81,24 @@ def _verify_kernel(proof: dict, pem_bytes: bytes | None) -> dict:
             "signed": bool(sig), "messages": msgs}
 
 
-def _incident_ts(bundle: dict) -> float | None:
+def _incident_ts(bundle) -> float | None:
     """The incident's activity time = the latest FSM transition timestamp inside the (integrity-covered)
     bundle. Used only to decide `signed_expected` for the DEGRADED classification. Honest caveat: on an
     UNSIGNED bundle a signature-stripping attacker also controls these timestamps (they are only
     integrity-consistent with the recomputed digest, not authentic), so DEGRADED is a best-effort
-    signal — the genuine anti-suppression teeth arrive with Phase 2's counter-signed log."""
-    ts = [t.get("ts") for t in bundle.get("transitions", []) if isinstance(t.get("ts"), (int, float))]
+    signal — the genuine anti-suppression teeth arrive with Phase 2's counter-signed log.
+
+    Fully defensive: a HOSTILE published bundle may be a non-dict, or carry `transitions` that is None /
+    a string / a list of non-dict elements — NONE of which may raise. The auditor consumes
+    attacker-controlled JSON and must fail open on garbage, never crash the out-of-band audit (the exact
+    suppression vector a compromised agent would use against its own auditor)."""
+    if not isinstance(bundle, dict):
+        return None
+    transitions = bundle.get("transitions")
+    if not isinstance(transitions, list):
+        return None
+    ts = [t.get("ts") for t in transitions
+          if isinstance(t, dict) and isinstance(t.get("ts"), (int, float))]
     return max(ts) if ts else None
 
 
@@ -109,6 +122,8 @@ def attest(proof: dict, *, expected_pem: bytes | None, expected_key: str | None,
     expected_key, verified_signer, signed_expected, messages}. `verified_signer` is the CONFIGURED
     identity (reported only when SIGNED-VERIFIED), never the envelope's self-asserted key.
     """
+    if not isinstance(proof, dict):       # defensive: hostile published JSON may be a list/string/number
+        proof = {}
     k = _verify_kernel(proof, expected_pem)
     integrity_ok = k["integrity_ok"]
     signature_ok = k["signature_ok"]

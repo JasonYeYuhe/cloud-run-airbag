@@ -118,3 +118,20 @@ def test_ast_guard_allows_legitimate_action_layer_imports():
     ]
     for src in must_pass:
         assert not _offending_in_source(src), f"AST guard false-positived on a clean import: {src!r}"
+
+
+def test_auditor_denylist_supersets_the_agent_forbidden_set():
+    """Repo-level parity (v6 Phase 1.2/1.3): the auditor's SERVICE denylist must forbid everything the
+    agent's action-tier denylist forbids — so the independent auditor is at least as LLM-isolated as
+    the agent's action tier — AND additionally forbids ALL agent code (`autosre`). Read the auditor
+    invariant BY PATH (exec in an isolated namespace, `__file__` injected) so there is no import
+    coupling across the two test suites and the sets can never silently drift apart."""
+    inv = _AUTOSRE.parent.parent / "auditor" / "tests" / "test_auditor_invariant.py"
+    assert inv.exists(), f"auditor invariant not found at {inv}"
+    ns: dict = {"__file__": str(inv)}
+    exec(compile(inv.read_text(encoding="utf-8"), str(inv), "exec"), ns)   # noqa: S102 — trusted repo file
+    auditor_denylist = ns["_DENYLIST"]
+    assert _FORBIDDEN <= auditor_denylist, (
+        f"auditor denylist {sorted(auditor_denylist)} must be a SUPERSET of the agent's _FORBIDDEN "
+        f"{sorted(_FORBIDDEN)} — otherwise the auditor could import an LLM form the agent forbids")
+    assert "autosre" in auditor_denylist, "the auditor must forbid ALL agent code (autosre)"
