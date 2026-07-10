@@ -112,6 +112,20 @@ jobs:
       - name: Contract tests (mocked HTTP — tool registration, auth gating, sanitized errors)
         run: python -m pytest -q
 
+  # v6 Phase 4 — the offline Proof Explorer's verification core. Byte-parity gate: the JS canonicalizer
+  # must emit output byte-identical to Python's canonical for every committed fixture (else a valid heal
+  # shows INTEGRITY FAIL in-browser), plus WebCrypto reproduces the auditor's SIGNED-VERIFIED /
+  # INTEGRITY-ONLY / FAIL verdicts against the real committed keys. node is preinstalled on the runner.
+  explorer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Proof Explorer byte-parity + verify (WebCrypto core)
+        run: node docs/explorer/parity-test.js
+
   # v6 Phase 1 — the independent Auditor service. Its verify core is stdlib + `cryptography` only
   # (the "zero agent imports" independence property is AST-enforced by test_auditor_invariant.py).
   # This job MUST exist from the SAME commit that creates auditor/tests (Round-2 #21 — a test suite

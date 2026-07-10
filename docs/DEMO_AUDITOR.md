@@ -65,8 +65,16 @@ verifier like this."*
 
 ## 3. Offline "verify it yourself" (no live infra)
 
-A skeptic can verify the auditor's counter-signature with zero network, against the **committed**
-public key — the private key never leaves the auditor's own Cloud KMS:
+**In the browser** — the **Proof Explorer** (`docs/explorer/index.html`) re-verifies a proof or the
+auditor's attestation with WebCrypto, zero network: recomputes the byte-exact canonical digest and
+checks the Cloud KMS ECDSA-P256 signature against a public key the judge supplies, with an optional
+pinned signer. Serve it (`python -m http.server` in the repo, or link it from the deployed auditor)
+and hit the example buttons — real heal → SIGNED-VERIFIED, rogue signer → FAIL, unsigned →
+INTEGRITY-ONLY, auditor attestation → SIGNED-VERIFIED — all verified client-side. The byte-exact
+canonicalizer (ensure_ascii + number-token preservation) is CI-gated by `docs/explorer/parity-test.js`.
+
+**On the CLI** — a skeptic can verify the auditor's counter-signature with zero network, against the
+**committed** public key — the private key never leaves the auditor's own Cloud KMS:
 
 ```bash
 python3 - <<'EOF'

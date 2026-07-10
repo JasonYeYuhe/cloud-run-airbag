@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Airbag Proof Explorer — verify a heal in your browser</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { font: 14px/1.55 -apple-system, "Segoe UI", Roboto, sans-serif; margin: 0;
+    background: #0f1720; color: #e6edf3; }
+  header { padding: 20px 26px; background: #111d2b; border-bottom: 1px solid #22303f; }
+  h1 { margin: 0; font-size: 19px; }
+  .sub { color: #9fb3c8; font-size: 12.5px; margin-top: 6px; max-width: 900px; }
+  main { padding: 20px 26px; display: grid; grid-template-columns: 1fr 1fr; gap: 20px;
+    max-width: 1200px; align-items: start; }
+  @media (max-width: 820px) { main { grid-template-columns: 1fr; } }
+  label { display: block; font-size: 12px; color: #9fb3c8; margin: 12px 0 4px; }
+  textarea, input { width: 100%; background: #0b131c; color: #e6edf3; border: 1px solid #22303f;
+    border-radius: 7px; padding: 9px 11px; font-family: ui-monospace, Menlo, monospace; font-size: 12px; }
+  textarea#proof { min-height: 220px; resize: vertical; }
+  textarea#pem { min-height: 80px; resize: vertical; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+  button { background: #1c2c3d; color: #e6edf3; border: 1px solid #2c4055; border-radius: 7px;
+    padding: 8px 13px; font-size: 12.5px; cursor: pointer; }
+  button:hover { background: #24384d; }
+  button.primary { background: #1f6feb; border-color: #1f6feb; font-weight: 600; }
+  button.primary:hover { background: #388bfd; }
+  .ex { font-size: 12px; }
+  .card { background: #111d2b; border: 1px solid #22303f; border-radius: 9px; padding: 18px; }
+  .badge { display: inline-block; font-weight: 800; font-size: 22px; padding: 8px 16px;
+    border-radius: 999px; letter-spacing: .3px; }
+  .blurb { color: #9fb3c8; font-size: 12.5px; margin: 12px 0; }
+  table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+  td { padding: 4px 8px 4px 0; font-size: 12.5px; vertical-align: top; }
+  td.k { color: #9fb3c8; white-space: nowrap; }
+  .mono { font-family: ui-monospace, Menlo, monospace; font-size: 11px; color: #c6d2de; word-break: break-all; }
+  .msgs { margin-top: 12px; font-family: ui-monospace, Menlo, monospace; font-size: 11.5px;
+    color: #9fb3c8; white-space: pre-wrap; border-top: 1px dashed #22303f; padding-top: 10px; }
+  .note { color: #6f8296; font-size: 11px; margin-top: 8px; }
+  a { color: #58a6ff; }
+</style>
+</head>
+<body>
+<header>
+  <h1>🔎 Airbag Proof Explorer</h1>
+  <div class="sub">Verify an Airbag heal proof — or the independent <b>auditor's counter-signed
+  attestation</b> — entirely in <b>your</b> browser. Zero network, zero server trust: it recomputes the
+  canonical digest (SHA-256) and checks the Cloud&nbsp;KMS ECDSA&nbsp;P-256 signature with WebCrypto,
+  against a public key <b>you</b> supply. The private keys never leave Google Cloud KMS. Pin an expected
+  signer to reject a valid-looking signature from the wrong identity — exactly what the auditor does.</div>
+</header>
+<main>
+  <section>
+    <label for="proof">Proof / attestation JSON</label>
+    <textarea id="proof" spellcheck="false"></textarea>
+    <label for="pem">Public key (PEM) — the offline trust anchor</label>
+    <textarea id="pem" spellcheck="false"></textarea>
+    <label for="key">Expected signer (optional pin) — a valid signature claiming any other key FAILs</label>
+    <input id="key" spellcheck="false" placeholder="projects/…/cryptoKeys/…/cryptoKeyVersions/N">
+    <div class="row"><button class="primary" id="verify">Verify</button></div>
+    <label>Load an example (served: fetches the committed fixture; if opened via file:// only the
+      pre-filled auditor attestation works — run <span class="mono">python -m http.server</span> or use
+      the deployed link)</label>
+    <div class="row ex">
+      <button data-ex="attestation">Auditor attestation ✓</button>
+      <button data-ex="real">Real KMS heal ✓</button>
+      <button data-ex="rogue">Rogue signer ✗</button>
+      <button data-ex="unsigned">Unsigned heal ◐</button>
+    </div>
+  </section>
+  <section>
+    <div class="card">
+      <div id="badge" class="badge" style="background:#1c2c3d">— paste + Verify —</div>
+      <div id="blurb" class="blurb">Loads pre-filled with the deployed auditor's real counter-signed
+        attestation of a live heal. Click <b>Verify</b>.</div>
+      <table id="detail"></table>
+      <div id="msgs" class="msgs"></div>
+      <div class="note">Honest by design: this page only ever reports <b>SIGNED-VERIFIED</b> (provenance +
+        integrity), <b>INTEGRITY-ONLY</b> (unsigned; integrity holds, provenance unchecked), or
+        <b>FAIL</b> — never "the decisions were correct".</div>
+    </div>
+  </section>
+</main>
+
+<script src="verify-core.js"></script>
+<script>
+  const AGENT_KEY = "projects/airbag-hack-260628/locations/asia-northeast1/keyRings/airbag/" +
+    "cryptoKeys/airbag-proof/cryptoKeyVersions/1";
+  const AUDITOR_KEY = "projects/airbag-hack-260628/locations/asia-northeast1/keyRings/airbag/" +
+    "cryptoKeys/airbag-auditor/cryptoKeyVersions/1";
+  const AGENT_PEM = `-----BEGIN PUBLIC KEY-----
+MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEVNDPK1i1HsBaue5XqVJN9hgOPfmT
+844GdbDp39GnFQoUyY5znsv+Te6lUK5Z+vurnQRnd4kp39hrlpc+Ip+39Q==
+-----END PUBLIC KEY-----`;
+  const AUDITOR_PEM = `-----BEGIN PUBLIC KEY-----
+MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEF3YakD02F7mhKCPvxKRo1m74uT+P
+oS2q3gwVcNCcOnVLbnuSyru6GIBFB7KedYaSeuH55GZO7vj1Acpkyc99Hw==
+-----END PUBLIC KEY-----`;
+  // Embedded snapshot so the page shows one working verification even via file:// (source of truth:
+  // docs/proof/auditor-attestation-inc-7d44556f.json).
+  const ATTESTATION = String.raw`{"bundle":{"attestation_version":"airbag.attestation/v1","incident_id":"inc-7d44556f","tri_state":"SIGNED-VERIFIED","integrity_ok":true,"signature_ok":true,"signer_pinned":true,"signed_expected":false,"expected_key":"projects/airbag-hack-260628/locations/asia-northeast1/keyRings/airbag/cryptoKeys/airbag-proof/cryptoKeyVersions/1","verified_signer":"projects/airbag-hack-260628/locations/asia-northeast1/keyRings/airbag/cryptoKeys/airbag-proof/cryptoKeyVersions/1","subject_digest":"sha256:6a737fa7d98c18fdca0cae44177cdfa195353cbcd47b9ae6031960272f2f02b4","verified_at":1783575955.5885828,"fetch":{"agent_url":"https://airbag-agent-43ohujtr3q-an.a.run.app","requested_incident_id":"inc-7d44556f","http_status":200,"raw_fetched_digest":"sha256:e2204ca99c341837b8b278cc0249f83d62f776692ae64b66c1e3e731edaa7e56","incident_id_match":true}},"digest":"sha256:d3dc53472851969d56f76cc3c5dbd619f49b7340a79af498aea4b94105e832ec","note":"auditor COUNTER-SIGNED attestation — an independent second agent's verdict on a PUBLISHED heal proof; PROVENANCE of the verdict, NOT a claim the heal's decisions are correct. Verify offline: auditor/verify.py against scripts/auditor-pubkey.pem","signature":{"algorithm":"EC_SIGN_P256_SHA256","key":"projects/airbag-hack-260628/locations/asia-northeast1/keyRings/airbag/cryptoKeys/airbag-auditor/cryptoKeyVersions/1","signature":"MEUCIGAJXwbCaX+h8pfPkn0hftQdgy4PgmwKanQTJ7g82YWuAiEAhtUpVegL3thpTSWh31GKTEp3+vAwnu3/3mQx9pzS0IE=","signed_at":1783575958.08969,"note":"auditor attestation counter-signature (PROVENANCE of the verdict)"}}`;
+
+  const EXAMPLES = {
+    attestation: { file: "auditor-attestation-inc-7d44556f.json", pem: AUDITOR_PEM, key: AUDITOR_KEY, embed: ATTESTATION },
+    real:        { file: "live-kms-signed-latency-heal.json",     pem: AGENT_PEM,   key: AGENT_KEY },
+    rogue:       { file: "rogue-signer-FAIL-demo.json",           pem: AGENT_PEM,   key: AGENT_KEY },
+    unsigned:    { file: "live-5xx-heal-recency.json",            pem: AGENT_PEM,   key: AGENT_KEY },
+  };
+  const COLOR = {
+    "SIGNED-VERIFIED": ["#0b8457", "provenance + integrity confirmed against the pinned key"],
+    "INTEGRITY-ONLY":  ["#2b6cb0", "unsigned — integrity holds, provenance unchecked (honest, not hidden)"],
+    "FAIL":            ["#c53030", "integrity broke, the signature is invalid, or the signer isn't the pinned one"],
+  };
+  const $ = (id) => document.getElementById(id);
+
+  async function loadExample(name) {
+    const ex = EXAMPLES[name];
+    $("pem").value = ex.pem; $("key").value = ex.key;
+    try {
+      const r = await fetch("../proof/" + ex.file);
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      $("proof").value = await r.text();
+    } catch (e) {
+      if (ex.embed) { $("proof").value = ex.embed; }
+      else { $("msgs").textContent = "Could not fetch " + ex.file + " (" + e.message +
+        "). Opened via file://? Run a local server or paste the JSON from docs/proof/."; return; }
+    }
+    run();
+  }
+
+  async function run() {
+    const badge = $("badge"), blurb = $("blurb"), detail = $("detail"), msgs = $("msgs");
+    detail.innerHTML = ""; msgs.textContent = "";
+    let res;
+    try {
+      res = await window.AirbagVerify.attest($("proof").value, $("pem").value, $("key").value);
+    } catch (e) {
+      badge.textContent = "ERROR"; badge.style.background = "#8a5a00";
+      blurb.textContent = "Could not parse the proof: " + e.message; return;
+    }
+    const [c, note] = COLOR[res.tri_state] || ["#444", ""];
+    badge.textContent = res.tri_state; badge.style.background = c;
+    blurb.textContent = note;
+    const rows = [
+      ["integrity", res.integrity_ok],
+      ["signature", res.signature_ok === null ? "— (unsigned / no key)" : res.signature_ok],
+      ["signer pinned", res.signer_pinned === null ? "— (no pin set)" : res.signer_pinned],
+      ["canonical bytes", res.canonical_bytes + " B (byte-exact vs Python)"],
+    ];
+    detail.innerHTML = rows.map(([k, v]) => `<tr><td class="k">${k}</td><td>${v}</td></tr>`).join("");
+    msgs.textContent = res.messages.join("\n");
+  }
+
+  document.querySelectorAll("[data-ex]").forEach((b) => b.onclick = () => loadExample(b.dataset.ex));
+  $("verify").onclick = run;
+  // pre-fill with the embedded auditor attestation so file:// shows a working verification immediately
+  $("proof").value = ATTESTATION; $("pem").value = AUDITOR_PEM; $("key").value = AUDITOR_KEY;
+</script>
+</body>
+</html>
