@@ -17,13 +17,18 @@ import logging
 import time
 from contextlib import asynccontextmanager
 
+from pathlib import Path
+
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 
 import attestation
 import config
 import poller
+
+_HERE = Path(__file__).resolve().parent
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("airbag.auditor")
@@ -86,6 +91,15 @@ async def _lifespan(_app):
 
 
 app = FastAPI(title="Airbag Auditor — independent heal attestation", lifespan=_lifespan)
+
+# Serve the offline Proof Explorer (Phase 4) + the committed proof fixtures live from the auditor, so a
+# judge clicks from an attestation card straight to a client-side "verify it yourself". Staged into the
+# image at deploy (infra/auditor-deploy.sh copies docs/explorer + docs/proof); mounted only when present
+# so tests / a bare boot don't require them. The Explorer is byte-identical to docs/explorer (a copy).
+for _sub, _at in (("explorer", "/explorer"), ("proof", "/proof")):
+    if (_HERE / _sub).is_dir():
+        app.mount(_at, StaticFiles(directory=str(_HERE / _sub), html=True), name=_sub)
+EXPLORER_SERVED = (_HERE / "explorer").is_dir()
 
 
 @app.get("/health")
@@ -179,6 +193,7 @@ def _status_html(state: dict) -> str:
 <header><h1>🛡 Airbag Auditor — independent heal attestation</h1>
  <div class="sub">pinned agent signer <span class="mono">{html.escape(config.EXPECTED_AGENT_KEY)}</span></div>
  <div class="sub">counter-signing: {"ON (auditor KMS key)" if config.AUDITOR_KMS_KEY else "OFF (unsigned — dev)"}
-   · last poll {last_s} · auditing {html.escape(config.AGENT_PROOF_URL or "(no agent configured)")}</div>
+   · last poll {last_s} · auditing {html.escape(config.AGENT_PROOF_URL or "(no agent configured)")}
+   {'· <a href="/explorer" style="color:#58a6ff">🔎 verify these yourself (zero-network, in-browser)</a>' if EXPLORER_SERVED else ''}</div>
  {err_html}
 </header><main>{cards}</main></body></html>"""

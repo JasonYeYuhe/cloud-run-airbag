@@ -26,6 +26,13 @@ mkdir -p "$HERE/auditor/keys"
 cp "$HERE/scripts/airbag-proof-pubkey.pem" "$HERE/auditor/keys/airbag-proof-pubkey.pem"
 cp "$HERE/scripts/auditor-pubkey.pem" "$HERE/auditor/keys/auditor-pubkey.pem"
 
+# Stage the offline Proof Explorer (Phase 4) + the committed proof fixtures so the auditor serves a live
+# /explorer ("verify it yourself") whose example buttons fetch /proof/*.json (gitignored copies).
+echo "== stage Proof Explorer + fixtures into auditor/explorer,/proof =="
+mkdir -p "$HERE/auditor/explorer" "$HERE/auditor/proof"
+cp "$HERE/docs/explorer/index.html" "$HERE/docs/explorer/verify-core.js" "$HERE/auditor/explorer/"
+cp "$HERE/docs/proof/"*.json "$HERE/auditor/proof/"
+
 echo "== deploy ${SERVICE} (min-instances ${MIN_INSTANCES}, max 1, read-only, SA ${AUDITOR_SA}) =="
 # ^@^ sets '@' as the env-var delimiter (mirrors deploy.sh) so URLs/resource names with ',' are safe.
 gcloud run deploy "$SERVICE" --source "$HERE/auditor" --region "$REGION" --project "$PROJECT" \

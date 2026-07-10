@@ -41,9 +41,12 @@ venv-test/
 # Claude Code local session config
 .claude/
 
-# Auditor deploy staging: infra/auditor-deploy.sh COPIES the committed trust-anchor PEMs here into the
-# build context (sources of truth live in scripts/). Not committed — avoids a duplicate.
+# Auditor deploy staging: infra/auditor-deploy.sh COPIES the committed trust-anchor PEMs + the Proof
+# Explorer + proof fixtures here into the build context (sources of truth live in scripts/ + docs/).
+# Not committed — avoids duplicates.
 auditor/keys/
+auditor/explorer/
+auditor/proof/
 
 # demo-tamper.sh backups (the original proof, restored after the money-shot FAIL beat) — runtime only.
 scripts/.demo-tamper-*.json
