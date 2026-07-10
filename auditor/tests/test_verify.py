@@ -91,6 +91,18 @@ def test_real_committed_kms_fixture_is_signed_verified():
     assert v["verified_signer"] == _EXPECTED_KEY and _EXPECTED_KEY.endswith("cryptoKeyVersions/1")
 
 
+def test_committed_rogue_key_fixture_fails_provenance():
+    """The money-shot's rogue-signer beat: the real heal bundle re-signed by a THROWAWAY key that
+    CLAIMS Airbag's key resource name. Integrity is intact but provenance FAILs against the pinned
+    agent PEM — a valid-looking signature from an unauthorized signer is rejected."""
+    proof = json.loads((_REPO / "docs" / "proof" / "rogue-signer-FAIL-demo.json").read_text())
+    pem = (_REPO / "scripts" / "airbag-proof-pubkey.pem").read_bytes()
+    assert proof["signature"]["key"] == _EXPECTED_KEY          # it CLAIMS the real key (impersonation)
+    v = verify.attest(proof, expected_pem=pem, expected_key=_EXPECTED_KEY)
+    assert v["tri_state"] == verify.FAIL
+    assert v["integrity_ok"] is True and v["signature_ok"] is False   # intact bundle, rogue signature
+
+
 # --- FAIL: tamper, wrong keypair, and THE NEW pinned-version case -----------------------------------
 def test_tamper_inside_bundle_fails():
     proof, pem = _sign(_bundle())

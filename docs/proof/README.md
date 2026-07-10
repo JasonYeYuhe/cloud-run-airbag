@@ -58,6 +58,7 @@ Cloud KMS key** (`airbag-auditor`, NEVER the agent's `airbag-proof`).
 | File | Incident | What it proves |
 |---|---|---|
 | [`auditor-attestation-inc-7d44556f.json`](auditor-attestation-inc-7d44556f.json) | `inc-7d44556f` | 🛡 The deployed auditor's **counter-signed attestation** of the v5 KMS-signed heal above. It independently re-verified the heal → **SIGNED-VERIFIED** against the pinned agent key, and BINDS THE FETCH CONTEXT it verified under (`fetch.raw_fetched_digest` of the exact bytes, `agent_url`, `requested_incident_id`, HTTP status, and a `bundle.incident_id == requested-id` check). Its `subject_digest` equals the heal bundle's own `digest`. The attestation is itself **offline-verifiable** against the committed auditor pubkey. |
+| [`rogue-signer-FAIL-demo.json`](rogue-signer-FAIL-demo.json) | `inc-7d44556f` (bundle) | 🚫 The money-shot's **rogue-signer FAIL** fixture: the real heal bundle re-signed by a **throwaway** keypair that *claims* Airbag's KMS key resource name. Integrity is intact but PROVENANCE FAILs against `scripts/airbag-proof-pubkey.pem` — a valid-looking signature from an unauthorized signer is rejected. Verify: `python scripts/verify-proof.py docs/proof/rogue-signer-FAIL-demo.json` → SIGNATURE FAIL. The throwaway private key is intentionally discarded (never committed). |
 
 **Verify the auditor's counter-signature offline** (zero network — the same kernel, the auditor's
 committed public key `scripts/auditor-pubkey.pem`; the auditor's private key never leaves its Cloud KMS):

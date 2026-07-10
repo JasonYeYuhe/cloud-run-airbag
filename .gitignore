@@ -44,3 +44,6 @@ venv-test/
 # Auditor deploy staging: infra/auditor-deploy.sh COPIES the committed trust-anchor PEMs here into the
 # build context (sources of truth live in scripts/). Not committed — avoids a duplicate.
 auditor/keys/
+
+# demo-tamper.sh backups (the original proof, restored after the money-shot FAIL beat) — runtime only.
+scripts/.demo-tamper-*.json
