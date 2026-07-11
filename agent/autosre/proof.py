@@ -170,3 +170,24 @@ def build_signed(rec: dict) -> dict:
         out["signature"] = env
         out["note"] = "cryptographically SIGNED (Cloud KMS EC_SIGN_P256_SHA256, provenance) + " + out["note"]
     return out
+
+
+def build_dsse_envelope(signed: dict) -> dict | None:
+    """Build a DSSE in-toto heal-attestation to emit BESIDE the legacy envelope (never INSIDE it — the
+    legacy `signed` dict is not mutated). The payload IS an in-toto Statement whose predicate is the
+    SAME signed bundle and whose subject binds the bundle's canonical digest; the DSSE signature is a
+    SECOND Cloud KMS asymmetricSign over sha256(PAE) (both terminal-stamp signs are wall-clock bounded,
+    R1 #6). cosign `verify-blob-attestation` accepts it (gated in CI). Fail-open: returns None on a bad
+    input or ANY error, so a DSSE hiccup never touches the legacy envelope or blocks the heal — this
+    function MUST NEVER raise, so the caller's single incidents.record still persists the legacy proof."""
+    try:
+        from . import dsse
+        bundle = signed.get("bundle")
+        digest = signed.get("digest") or ""
+        if not isinstance(bundle, dict) or not digest.startswith("sha256:"):
+            return None
+        # signer = the bounded KMS sign_digest, reused as the DSSE signer over "sha256:<hex of PAE>"
+        return dsse.build_dsse(bundle, bundle.get("incident_id"), digest.split(":", 1)[-1], signer=sign_digest)
+    except Exception as e:  # noqa: BLE001 — FAIL-OPEN: a DSSE build error must never lose the legacy proof
+        log.warning("DSSE envelope build failed (%s); degrading to the legacy envelope only", e)
+        return None

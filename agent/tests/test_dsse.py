@@ -107,6 +107,46 @@ def test_a_tampered_payload_fails_cosign_equivalent_verification():
     assert _cosign_equivalent_verify(env, priv.public_key()) is False
 
 
+# --- the proof.py emit wrapper (_persist_proof's path) is genuinely cosign-verifiable --------------
+def test_build_dsse_envelope_from_a_signed_proof_is_cosign_verifiable(monkeypatch):
+    """proof.build_dsse_envelope (what _persist_proof calls) must yield a cosign-verifiable DSSE when
+    the KMS signer is a real EC key — bridging the mock wiring tests to the cosign construction gate.
+    The DSSE signature is the SECOND sign, over sha256(PAE), distinct from the legacy bundle signature."""
+    from autosre import config
+    priv = ec.generate_private_key(ec.SECP256R1())
+    monkeypatch.setattr(config, "PROOF_SIGN", True)
+    monkeypatch.setattr(config, "KMS_KEY", "projects/p/l/keyRings/r/cryptoKeys/k/cryptoKeyVersions/1")
+    monkeypatch.setattr(proof, "sign_digest", _kms_like_signer(priv))
+    signed = proof.build_signed({"incident_id": "inc-x", "service": "svc", "status": "mitigated",
+                                 "decision": {"action": "ROLLBACK", "confidence": 0.9},
+                                 "events": [{"stage": "MITIGATED", "ts": 1.0}]})
+    env = proof.build_dsse_envelope(signed)
+    assert env is not None
+    assert _cosign_equivalent_verify(env, priv.public_key())         # the DSSE sig verifies over PAE
+    stmt = json.loads(base64.b64decode(env["payload"]))
+    assert stmt["subject"][0]["digest"]["sha256"] == signed["digest"].split(":", 1)[-1]  # binds the bundle
+
+
+def test_build_dsse_envelope_is_fail_open_and_never_mutates_the_legacy_envelope(monkeypatch):
+    monkeypatch.setattr(proof, "sign_digest", lambda digest, **k: None)   # the second sign declines
+    signed = {"bundle": {"incident_id": "i"}, "digest": "sha256:" + "ab" * 32, "signature": {"sig": "x"}}
+    before = json.loads(json.dumps(signed))
+    assert proof.build_dsse_envelope(signed) is None                # signer declined -> no DSSE
+    assert signed == before                                          # beside, never inside (unmutated)
+    assert proof.build_dsse_envelope({"digest": "sha256:" + "ab" * 32}) is None   # missing bundle -> None
+    assert proof.build_dsse_envelope({"bundle": {}, "digest": "not-a-digest"}) is None
+
+
+def test_build_dsse_envelope_swallows_a_raising_signer(monkeypatch):
+    """Defense-in-depth: even a signer that RAISES must yield None (not propagate), so _persist_proof's
+    single incidents.record still persists the legacy proof."""
+    def _boom(digest, **k):
+        raise RuntimeError("KMS exploded")
+    monkeypatch.setattr(proof, "sign_digest", _boom)
+    signed = {"bundle": {"incident_id": "i"}, "digest": "sha256:" + "cd" * 32}
+    assert proof.build_dsse_envelope(signed) is None
+
+
 # --- the COMMITTED golden (what the cosign-in-CI job verifies) stays internally consistent ---------
 def test_committed_golden_is_self_consistent():
     """The committed docs/proof/dsse-golden/* must verify with the same crypto cosign uses AND its

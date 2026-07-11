@@ -741,8 +741,19 @@ def _persist_proof(incident_id: str) -> None:
     try:
         from . import proof
         rec = incidents.get(incident_id)
-        if rec:
-            incidents.record(incident_id, {"proof": proof.build_signed(rec)})
+        if not rec:
+            return
+        signed = proof.build_signed(rec)
+        fields = {"proof": signed}
+        # v6 Phase 1.2 borrow: additionally emit a DSSE in-toto heal-attestation BESIDE the legacy
+        # envelope (never inside it), so `rec["proof"]` stays byte-identical apart from bundle_version.
+        # Only alongside a SIGNED legacy (never an unsigned-legacy/signed-DSSE mismatch), and ALWAYS
+        # (re)set the field when the flag is on — _persist_proof re-fires at MITIGATED then CLOSED, and
+        # the CLOSED bundle differs, so a stale proof_dsse must be overwritten (to a fresh env, or to
+        # None if this stamp's second sign hiccups) and never left attesting the earlier bundle. Fail-open.
+        if config.PROOF_DSSE:
+            fields["proof_dsse"] = proof.build_dsse_envelope(signed) if signed.get("signature") else None
+        incidents.record(incident_id, fields)
     except Exception as e:  # noqa: BLE001 — proof persistence must never break a completed heal
         log.warning("proof persistence failed for %s: %s", incident_id, e)
 

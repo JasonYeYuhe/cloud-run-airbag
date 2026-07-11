@@ -284,6 +284,11 @@ SANDBOX_JOB_TIMEOUT_S = float(os.getenv("AIRBAG_SANDBOX_TIMEOUT_S", "180"))
 PROOF_SIGN = _bool("AIRBAG_PROOF_SIGN", "false")
 # the full KMS key-VERSION resource name to sign with (.../cryptoKeyVersions/N). Empty -> can't sign.
 KMS_KEY = os.getenv("AIRBAG_KMS_KEY", "")
+# v6 Phase 1.2 borrow: ADDITIONALLY emit a DSSE in-toto heal-attestation (cosign-verifiable) BESIDE the
+# legacy envelope, as rec["proof_dsse"]. Default OFF; requires PROOF_SIGN + KMS_KEY. It is a SECOND KMS
+# asymmetricSign over sha256(PAE) at the terminal stamp (both signs wall-clock bounded — R1 #6), so the
+# legacy envelope stays byte-identical (apart from the permanent bundle_version schema field). FAIL-OPEN.
+PROOF_DSSE = _bool("AIRBAG_PROOF_DSSE", "false")
 
 # fix-PR slow path (optional). Empty token -> the FIX_PR stage is a no-op note.
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "")
