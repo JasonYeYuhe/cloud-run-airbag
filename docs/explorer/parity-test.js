@@ -109,6 +109,17 @@ for (const f of FIXTURES) {
   console.log(`${bvOk ? 'OK  ' : 'FAIL'} bundle_version canonicalizes byte-identically (js=${Buffer.byteLength(bvJsCanon, 'utf8')}B, tag in-band)`);
   if (!bvOk) failures++;
 
+  // [4] v6 full bundle: trigger_evidence_digest + the SLSA split (bool + null + 0.0 float) must
+  // canonicalize byte-identically too (target_overridden:false, autonomy_level:null are the trap types).
+  const v6Bundle = '{"bundle":{"bundle_version":"airbag.heal/v1","externalParameters":{"action":"ROLLBACK",' +
+    '"confidence":0.9,"source":"gemini-adk"},"internalParameters":{"autonomy_level":null,' +
+    '"target_overridden":false,"target_source":"ledger"},"trigger_evidence_digest":"sha256:' + 'ab'.repeat(32) + '"}}';
+  const v6JsCanon = V.canonicalBundleFromText(v6Bundle);
+  const v6PySha = execFileSync(PY, ['-c', pyCode], { input: v6Bundle, encoding: 'utf8' }).trim();
+  const v6Ok = jsSha(v6JsCanon) === v6PySha;
+  console.log(`${v6Ok ? 'OK  ' : 'FAIL'} full v6 bundle (SLSA split + trigger digest) canonicalizes byte-identically`);
+  if (!v6Ok) failures++;
+
   console.log(failures ? `\nFAILED (${failures})` : '\nALL PASS');
   process.exit(failures ? 1 : 0);
 })();

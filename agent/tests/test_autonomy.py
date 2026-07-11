@@ -2,7 +2,7 @@
 approval gate, and the advisory trust ramp. Mock backend; conftest pins memory store + resets it."""
 import pytest
 
-from autosre import autonomy, config, pending
+from autosre import autonomy, config, incidents, pending, proof
 from autosre.backends import mock
 from autosre.state_machine import apply_approval, run_self_heal
 
@@ -96,6 +96,22 @@ def test_l1_gates_rollback_then_approve_mitigates():
     done = apply_approval("inc-l1", approve=True)
     assert done["status"] == "mitigated"
     assert autonomy.get_approval("inc-l1") is None  # consumed
+
+
+def test_l1_approved_proof_keeps_the_advisory_suggestion():
+    """Regression (v6 SLSA split): the L1 approval round-trip must preserve the _suggested snapshot so a
+    signed L1 proof's externalParameters stays HONEST — a PROMOTED L1 rollback must never sign
+    externalParameters.action=ROLLBACK while internalParameters.promoted=True. Before the fix, save_approval
+    stored only the raw validated decision, dropping _suggested; proof.build then fell back to the resolved
+    action (the direct L2/L3 path already carried it)."""
+    autonomy.set_level("airbag-target", "L1")
+    assert run_self_heal("inc-l1sug", "airbag-target")["status"] == "awaiting_approval"
+    assert apply_approval("inc-l1sug", approve=True)["status"] == "mitigated"
+    rec = incidents.get("inc-l1sug")
+    assert "_suggested" in rec["decision"]                          # carried through save -> approve -> mitigate
+    b = proof.build(rec)["bundle"]
+    assert b["externalParameters"]["action"] == rec["decision"]["_suggested"]["action"]
+    assert b["internalParameters"]["action"] == rec["decision"]["action"]
 
 
 def test_l1_deny_does_not_act():

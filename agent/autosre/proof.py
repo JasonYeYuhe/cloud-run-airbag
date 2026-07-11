@@ -41,17 +41,24 @@ def _stage(events, stage, keys):
 BUNDLE_VERSION = "airbag.heal/v1"
 
 
+def _canon(obj) -> str:
+    """The one canonicalization used everywhere a digest is computed (byte-identical to the auditor's
+    verify._canonical and the Explorer's JS canonicalizer — the parity gate enforces this)."""
+    return json.dumps(obj, sort_keys=True, separators=(",", ":"), default=str)
+
+
 def build(rec: dict) -> dict:
     """Build the canonical proof bundle + its content digest from a persisted incident record."""
     events = rec.get("events", []) or []
     d = rec.get("decision") or {}
+    detection = _stage(events, "ANALYZED", ("verdict", "reason", "signals", "rate"))
     bundle = {
         "bundle_version": BUNDLE_VERSION,
         "incident_id": rec.get("incident_id"),
         "service": rec.get("service"),
         "status": rec.get("status"),
         "decision": {k: d.get(k) for k in ("action", "confidence", "reasoning", "_source")},
-        "detection": _stage(events, "ANALYZED", ("verdict", "reason", "signals", "rate")),
+        "detection": detection,
         "causal": _stage(events, "CAUSAL", ("verdict", "msg")),
         "reversibility": _stage(events, "REVERSIBILITY",
                                 ("verdict", "marker_revision", "target", "marker_value", "msg")),
@@ -68,7 +75,30 @@ def build(rec: dict) -> dict:
     # v4 incident; keying it on presence keeps a flag-off bundle byte-identical to v4.
     if rec.get("revision_delta"):
         bundle["revision_delta"] = rec["revision_delta"]
-    canonical = json.dumps(bundle, sort_keys=True, separators=(",", ":"), default=str)
+    # v6 Phase 1.2 borrow (§1b.3 #7, intent binding): a sha256 over the TRIGGERING signal evidence (the
+    # ANALYZED multi-signal verdict + the cited evidence), so a signed heal can't be replayed as the
+    # proof for a differently-triggered incident. Presence-keyed on the detection (always present on the
+    # alert path); it lands AFTER bundle_version, which already made a fresh build differ from an old one
+    # — presence-keying alone can't preserve prior bytes here because the evidence is always present.
+    if detection is not None:
+        bundle["trigger_evidence_digest"] = "sha256:" + hashlib.sha256(
+            _canon({"detection": detection, "evidence": d.get("evidence")}).encode("utf-8")).hexdigest()
+    # v6 Phase 1.2 borrow (§1b.3 #6, SLSA-style split): make the LLM-QUARANTINE VISIBLE in the
+    # attestation. externalParameters = what the advisory tier (Gemini/ADK) SUGGESTED — untrusted input;
+    # internalParameters = what the DETERMINISTIC FSM resolved/clamped — the rollback TARGET the LLM
+    # never picks (with how it was chosen + whether the FSM OVERRODE an LLM target) plus the autonomy
+    # ceiling. Presence-keyed on a decision (a no-decision/sparse bundle stays as-is).
+    if d:
+        sug = d.get("_suggested") or {}   # pristine pre-validation proposal; fall back for pre-v6 records
+        bundle["externalParameters"] = {
+            "action": sug.get("action", d.get("action")), "confidence": sug.get("confidence", d.get("confidence")),
+            "reasoning": sug.get("reasoning", d.get("reasoning")), "source": d.get("_source")}
+        bundle["internalParameters"] = {
+            "action": d.get("action"),   # the FSM-RESOLVED action (differs from external on a promote/withhold)
+            "rollback_revision": d.get("rollback_revision"), "bad_revision": d.get("bad_revision"),
+            "target_source": d.get("_target_source"), "target_overridden": d.get("_target_overridden"),
+            "promoted": d.get("_promoted"), "autonomy_level": rec.get("autonomy")}
+    canonical = _canon(bundle)
     digest = "sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
     return {"bundle": bundle, "digest": digest,
             "note": "content digest — tamper-evident (recompute sha256 over the canonical bundle to "

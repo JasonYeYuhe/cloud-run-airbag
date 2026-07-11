@@ -34,6 +34,9 @@ def test_bundle_stitches_the_evidence():
     assert b["recovery"]["recovery_seconds"] == 30.0            # 130 - 100
     assert b["fix_pr"].endswith("/pull/9")
     assert [t["stage"] for t in b["transitions"]] == ["RECEIVED", "ANALYZED", "CAUSAL", "MITIGATED"]
+    assert b["trigger_evidence_digest"].startswith("sha256:")   # v6: intent binding rides the bundle
+    assert b["externalParameters"]["action"] == "ROLLBACK"      # v6: LLM-suggested (advisory)
+    assert "rollback_revision" in b["internalParameters"]       # v6: FSM-resolved (deterministic)
     assert p["digest"].startswith("sha256:")
 
 
@@ -61,6 +64,61 @@ def test_report_footer_shows_the_proof_digest():
 def test_bundle_handles_sparse_record():
     p = proof.build({"incident_id": "i", "events": []})
     assert p["digest"].startswith("sha256:") and p["bundle"]["transitions"] == []
+
+
+def test_slsa_parameter_split_quarantines_the_llm():
+    """v6 §1b.3 #6: externalParameters = what the advisory tier SUGGESTED; internalParameters = what the
+    deterministic FSM RESOLVED — including the killer case where the LLM said OBSERVE and the FSM
+    PROMOTED a rollback + picked the target (the quarantine made auditable, not just asserted)."""
+    rec = _rec()
+    rec["autonomy"] = "L2"
+    rec["decision"].update({
+        "action": "ROLLBACK", "_source": "gemini-adk",                     # the FSM-RESOLVED action
+        "_suggested": {"action": "OBSERVE", "confidence": 0.3, "reasoning": "looks fine to me"},
+        "rollback_revision": "airbag-target-00013", "bad_revision": "airbag-target-00022",
+        "_target_source": "ledger", "_target_overridden": True, "_promoted": True})
+    b = proof.build(rec)["bundle"]
+    # externalParameters = what the LLM ACTUALLY proposed (an OBSERVE), not the resolved action
+    assert b["externalParameters"] == {"action": "OBSERVE", "confidence": 0.3,
+                                       "reasoning": "looks fine to me", "source": "gemini-adk"}
+    # internalParameters = the deterministic FSM's resolution — it OVERRODE the LLM to a rollback
+    assert b["internalParameters"] == {"action": "ROLLBACK", "rollback_revision": "airbag-target-00013",
+                                       "bad_revision": "airbag-target-00022", "target_source": "ledger",
+                                       "target_overridden": True, "promoted": True, "autonomy_level": "L2"}
+    assert b["externalParameters"]["action"] != b["internalParameters"]["action"]   # the quarantine, visible
+
+
+def test_slsa_split_falls_back_for_pre_v6_records():
+    """A record written before the _suggested snapshot existed: externalParameters degrades gracefully
+    to the recorded (resolved) decision rather than dropping the split."""
+    rec = _rec()                                       # no _suggested key
+    b = proof.build(rec)["bundle"]
+    assert b["externalParameters"]["action"] == "ROLLBACK"
+    assert b["externalParameters"]["source"] == "gemini-adk"
+    assert b["internalParameters"]["action"] == "ROLLBACK"
+
+
+def test_trigger_evidence_digest_binds_the_triggering_signals():
+    """v6 §1b.3 #7: a recomputable sha256 over the triggering signal evidence (anti-replay)."""
+    rec = _rec()
+    b = proof.build(rec)["bundle"]
+    assert b["trigger_evidence_digest"].startswith("sha256:")
+    expect = "sha256:" + hashlib.sha256(json.dumps(
+        {"detection": b["detection"], "evidence": rec["decision"].get("evidence")},
+        sort_keys=True, separators=(",", ":"), default=str).encode()).hexdigest()
+    assert b["trigger_evidence_digest"] == expect                    # recomputable by an auditor
+    rec2 = _rec()
+    rec2["events"][1]["verdict"] = "PASS"                            # a DIFFERENT triggering verdict
+    assert proof.build(rec2)["bundle"]["trigger_evidence_digest"] != b["trigger_evidence_digest"]
+
+
+def test_v6_evidence_fields_are_presence_keyed():
+    """A sparse bundle (no ANALYZED detection, no decision) omits the trigger digest AND the SLSA split;
+    only bundle_version is UNCONDITIONAL."""
+    b = proof.build({"incident_id": "i", "events": []})["bundle"]
+    assert "trigger_evidence_digest" not in b
+    assert "externalParameters" not in b and "internalParameters" not in b
+    assert b["bundle_version"] == "airbag.heal/v1"
 
 
 def test_bundle_version_is_permanent_and_rides_the_digest():

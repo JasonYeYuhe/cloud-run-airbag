@@ -152,6 +152,10 @@ def _heal_body(incident_id: str, service: str) -> dict:
                     f"tools called: {decision.get('_adk_tools') or '—'}")
     else:
         decision = gemini.decide(service, revs, err) or _heuristic(revs, err, witnessed)
+    # v6 §1b.3 #6: snapshot the pristine ADVISORY suggestion BEFORE _validate can promote/withhold it,
+    # so the signed proof's externalParameters honestly shows what the LLM/heuristic proposed (e.g. an
+    # OBSERVE the deterministic FSM then PROMOTED to a rollback) — the LLM-quarantine made auditable.
+    _suggested = {k: decision.get(k) for k in ("action", "confidence", "reasoning")}
     decision = _validate(decision, revs, stat, witnessed)
     if decision.get("action") == "ROLLBACK" and not decision.get("bad_revision"):
         # backfill the bad (currently-serving) revision when the LLM left it null, so a later
@@ -162,7 +166,8 @@ def _heal_body(incident_id: str, service: str) -> dict:
     emit("DECISION", decision["action"], **decision)
     _decision_summary = {k: decision.get(k) for k in (
         "action", "confidence", "reasoning", "evidence", "_source", "_adk_tools",
-        "bad_revision", "rollback_revision", "_target_source", "_target_overridden")}
+        "bad_revision", "rollback_revision", "_target_source", "_target_overridden", "_promoted")}
+    _decision_summary["_suggested"] = _suggested   # v6: the pre-validation advisory proposal (SLSA split)
     if decision["action"] != "ROLLBACK":
         # ESCALATE (from the safety gate or Gemini) must surface to a human — not look like a no-op.
         if decision["action"] == "ESCALATE":
@@ -210,8 +215,13 @@ def _heal_body(incident_id: str, service: str) -> dict:
                                        "decision": _decision_summary, "events": run_events})
         return {"status": "observed", "incident_id": incident_id, "events": run_events}
     if level == "L1":  # gate BEFORE the rollback — wait for a human to approve touching prod
-        autonomy.save_approval(incident_id, {"service": service, "kind": "rollback",
-                                             "decision": decision, "before": before, "target": target})
+        # persist the decision_summary too (not just the operational decision): it carries the v6
+        # _suggested snapshot + _promoted, so the L1-approved MITIGATED proof's externalParameters
+        # stays HONEST (the LLM's original proposal), matching the direct L2/L3 path — otherwise a
+        # PROMOTED L1 rollback would sign "externalParameters.action=ROLLBACK" while promoted=True.
+        autonomy.save_approval(incident_id, {"service": service, "kind": "rollback", "decision": decision,
+                                             "decision_summary": _decision_summary,
+                                             "before": before, "target": target})
         emit("AWAITING_APPROVAL", f"autonomy L1 — rollback to {target} needs operator approval",
              kind="rollback", rollback_revision=target)
         # NB: don't record_incident here — the gate isn't a terminal outcome; the single memory
@@ -480,6 +490,7 @@ def _apply_approval_body(incident_id: str, approve: bool) -> dict:
     emit("APPROVED", f"{kind} approved by operator")
     if kind == "rollback":  # L1: re-validate the (up to APPROVAL_TTL_S-old) decision before touching prod
         decision = appr.get("decision", {})
+        decision_summary = appr.get("decision_summary", decision)   # v6: keep _suggested for an honest proof
         before = appr.get("before") or {"error_rate": None}
         target = appr["target"]
         revs = tools.list_cloud_run_revisions(service, config.GCP_REGION)
@@ -505,7 +516,7 @@ def _apply_approval_body(incident_id: str, approve: bool) -> dict:
             # carry the triggering signal into _mitigate so the L1 resume verifies + remediates the
             # RIGHT signal (a latency incident shouldn't verify 5xx-only or open a bogus HTTP-500 PR).
             primary_signal = _primary_signal(v)
-        return _mitigate(service, incident_id, decision, decision, before, target,
+        return _mitigate(service, incident_id, decision, decision_summary, before, target,
                          emit, run_events, gate_fix_pr=False, level="L1", primary_signal=primary_signal)
     if kind == "fix_pr":  # L2: rollback already applied + held; now open the approved fix-PR
         pr_url = _open_fix_pr(service, incident_id, appr.get("ctx", ""), emit)
