@@ -63,11 +63,36 @@ def build(rec: dict) -> dict:
                     "verify integrity); NOT a cryptographic signature / authorship claim"}
 
 
-def sign_digest(digest: str) -> dict | None:
+def _bounded(fn, seconds: float):
+    """Run `fn` under a hard wall-clock deadline (Round-1 #6: bound BOTH network calls in the KMS sign
+    path — the previously UNBOUNDED `creds.refresh`, AND a TOTAL wall-clock cap over the KMS POST, which
+    had a per-op `timeout` but no total deadline, so a multi-phase hang could stall the terminal
+    MITIGATED/CLOSED stamp — and the DSSE borrow DOUBLES that terminal-stamp KMS exposure). On timeout
+    the caller's `except` catches TimeoutError and fails open; the worker thread is abandoned (never
+    joined) so a hung socket can't block a completed heal. Mirrors auditor/attestation.py:_bounded (the
+    auditor greenfield already applies R1 #6 — kept as a local copy, never a cross-service import, so
+    proof.py's LLM-free import surface and the auditor's independence both stay intact)."""
+    import concurrent.futures as _f
+    ex = _f.ThreadPoolExecutor(max_workers=1)
+    fut = ex.submit(fn)
+    try:
+        return fut.result(timeout=seconds)
+    finally:
+        ex.shutdown(wait=False)
+
+
+def sign_digest(digest: str, *, refresh_timeout_s: float = 10.0,
+                kms_timeout_s: float = 15.0) -> dict | None:
     """Sign the bundle's sha256 via Cloud KMS asymmetricSign (EC_SIGN_P256_SHA256) over httpx+ADC.
     Returns a signature envelope, or None on ANY failure (FAIL-OPEN — the caller degrades to the
     digest-only bundle; signing must never block a heal). KMS signs the DIGEST (the raw 32 sha256
-    bytes, base64), not the hex string; the offline verifier re-hashes the canonical bundle."""
+    bytes, base64), not the hex string; the offline verifier re-hashes the canonical bundle.
+
+    R1 #6: BOTH network calls are wall-clock bounded — the ADC token refresh (`refresh_timeout_s`) and
+    the KMS POST (`kms_timeout_s` as a TOTAL deadline over the per-op httpx timeout) — so a KMS/token
+    hang can never extend the terminal stamp. Mandatory before the DSSE borrow doubles the KMS
+    exposure. Timeouts are keyword-only so the sole caller (`build_signed`) and the deferred DSSE
+    second-sign can override them per call without touching the positional contract."""
     if not (config.PROOF_SIGN and config.KMS_KEY):
         return None
     try:
@@ -75,10 +100,12 @@ def sign_digest(digest: str) -> dict | None:
         from google.auth.transport.requests import Request as _Req
         raw = bytes.fromhex(digest.split(":", 1)[-1])   # sha256 bytes KMS will sign
         creds, _ = _adc(scopes=["https://www.googleapis.com/auth/cloud-platform"])
-        creds.refresh(_Req())
-        r = httpx.post(f"https://cloudkms.googleapis.com/v1/{config.KMS_KEY}:asymmetricSign",
-                       json={"digest": {"sha256": base64.b64encode(raw).decode()}},
-                       headers={"Authorization": f"Bearer {creds.token}"}, timeout=15.0)
+        _bounded(lambda: creds.refresh(_Req()), refresh_timeout_s)         # R1 #6: bound the token refresh
+        r = _bounded(lambda: httpx.post(                                   # R1 #6: TOTAL wall-clock over the POST
+            f"https://cloudkms.googleapis.com/v1/{config.KMS_KEY}:asymmetricSign",
+            json={"digest": {"sha256": base64.b64encode(raw).decode()}},
+            headers={"Authorization": f"Bearer {creds.token}"},
+            timeout=httpx.Timeout(kms_timeout_s)), kms_timeout_s)
         r.raise_for_status()
         sig = r.json().get("signature")   # base64 DER ECDSA signature
         if not sig:

@@ -6,6 +6,8 @@ import base64
 import hashlib
 import importlib.util
 import json
+import threading
+import time as _time
 from pathlib import Path
 
 from autosre import config, incidents, proof
@@ -87,6 +89,64 @@ def test_build_signed_degrades_on_kms_error(monkeypatch):
     monkeypatch.setattr("google.auth.default", _boom)
     out = proof.build_signed(_REC)
     assert "signature" not in out and out["digest"].startswith("sha256:")   # fail-open: digest intact
+
+
+# --- R1 #6: BOTH KMS network calls are wall-clock bounded (a hang can't extend the terminal stamp) --
+# The terminal MITIGATED/CLOSED stamp calls sign_digest; an UNBOUNDED creds.refresh (previously) or a
+# KMS POST with a per-op timeout but no TOTAL deadline could stall a completed heal's settlement — and
+# the DSSE borrow DOUBLES that terminal-stamp KMS exposure, so bounding is mandatory before DSSE lands.
+def test_sign_digest_bounds_a_hung_token_refresh(monkeypatch):
+    monkeypatch.setattr(config, "PROOF_SIGN", True)
+    monkeypatch.setattr(config, "KMS_KEY", "projects/p/l/keyRings/r/cryptoKeys/k/cryptoKeyVersions/1")
+    released = threading.Event()
+
+    class _Creds:
+        token = "tok"
+
+        def refresh(self, req):
+            released.wait(10)                 # a token endpoint that hangs (released in teardown)
+
+    monkeypatch.setattr("google.auth.default", lambda scopes=None: (_Creds(), "p"))
+    # the POST must never be reached — the refresh bound short-circuits first. Record entry as an
+    # OBSERVABLE list append (a raised guard would be swallowed by sign_digest's fail-open `except`).
+    posts = []
+    monkeypatch.setattr(proof.httpx, "post", lambda *a, **k: posts.append(1))
+    try:
+        t0 = _time.monotonic()
+        assert proof.sign_digest("sha256:" + "ab" * 32, refresh_timeout_s=0.1, kms_timeout_s=0.1) is None
+        assert _time.monotonic() - t0 < 5     # returned on the 0.1s bound, not the 10s hang
+        assert posts == []                    # the refresh bound short-circuited BEFORE the KMS POST
+    finally:
+        released.set()                        # let the abandoned worker thread exit immediately
+
+
+def test_sign_digest_bounds_a_hung_kms_post(monkeypatch):
+    monkeypatch.setattr(config, "PROOF_SIGN", True)
+    monkeypatch.setattr(config, "KMS_KEY", "projects/p/l/keyRings/r/cryptoKeys/k/cryptoKeyVersions/1")
+    released = threading.Event()
+
+    class _Creds:
+        token = "tok"
+
+        def refresh(self, req):
+            pass
+
+    monkeypatch.setattr("google.auth.default", lambda scopes=None: (_Creds(), "p"))
+
+    posts = []
+
+    def _hung_post(*a, **k):
+        posts.append(1)                       # the POST WAS entered (refresh succeeded) ...
+        released.wait(10)                     # ... then the KMS endpoint hangs; the bound must cut it off
+
+    monkeypatch.setattr(proof.httpx, "post", _hung_post)
+    try:
+        t0 = _time.monotonic()
+        assert proof.sign_digest("sha256:" + "ab" * 32, refresh_timeout_s=1.0, kms_timeout_s=0.1) is None
+        assert _time.monotonic() - t0 < 5     # returned on the 0.1s KMS bound, not the 10s hang
+        assert posts == [1]                   # the KMS POST was reached, THEN wall-clock bounded
+    finally:
+        released.set()
 
 
 # --- offline verify round-trip (scripts/verify-proof.py) ------------------------------------------
