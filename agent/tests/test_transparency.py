@@ -102,6 +102,28 @@ def test_entries_is_empty_before_any_append():
     assert transparency.entries() == []
 
 
+def test_entry_hash_matches_the_auditor_reimplementation():
+    """The auditor RE-IMPLEMENTS entry_hash (independence: it imports NO agent code). Pin the two
+    formulas byte-identical so the auditor is a genuine independent re-run, not a divergent second
+    opinion — the same parity discipline as the verify.py kernel (read by path, no import coupling)."""
+    import pathlib
+    import sys
+    auditor_dir = str(pathlib.Path(__file__).resolve().parents[2] / "auditor")
+    sys.path.insert(0, auditor_dir)
+    try:
+        import transparency_audit as ta
+        core = {"seq": 3, "prev_entry_hash": "sha256:abc", "incident_id": "inc-1", "service": "svc",
+                "terminal_status": "closed", "bundle_digest": "sha256:" + "ab" * 32,
+                "signature": {"algorithm": "EC_SIGN_P256_SHA256", "key": "kms/1", "signature": "DERb64"},
+                "ts": 1783736679.637}
+        assert transparency.entry_hash(core) == ta.entry_hash(core)   # byte-identical chain math
+        assert transparency.ENTRY_TAG == ta.ENTRY_TAG                 # and the same domain-sep tag
+    finally:
+        sys.path.remove(auditor_dir)
+        for m in ("transparency_audit", "verify"):
+            sys.modules.pop(m, None)
+
+
 def test_read_only_routes_serve_the_chain_for_the_auditor():
     """The HTTPS-only auditor walks the chain via GET /transparency/head + /transparency/log."""
     from fastapi.testclient import TestClient
