@@ -81,6 +81,58 @@ def _transact_firestore(collection: str, doc_id: str, mutator):
 KEEP = object()  # mutator sentinel: read-only, don't write
 
 
+def transact_multi(collection: str, doc_id: str, mutator):
+    """Atomically read ONE doc (collection/doc_id — the transparency `log_head`) -> mutator(current) ->
+    (writes, result), where writes = [(collection, doc_id, new_doc), ...] are ALL applied together
+    (all-or-nothing) and `result` is returned. This is Phase 2's first primitive: single-doc transact()
+    cannot write the head pointer AND the immutable log entry atomically, so a container kill between
+    the head-advance and the entry-write would leave a permanent seq gap the auditor would read as
+    SUPPRESSION (a false tamper alarm). Both backends guarantee all-or-nothing: Firestore via one
+    @transactional commit, memory via the _lock + stage-then-apply. An empty writes list is a no-op
+    (the idempotent KEEP case — `(incident_id, terminal_status)` already logged). Read-before-write
+    order holds: only `log_head` is read, and every write follows."""
+    if _use_firestore():
+        return _transact_multi_firestore(collection, doc_id, mutator)
+    with _lock:
+        cur = _mem.get(collection, {}).get(doc_id)
+        writes, result = mutator(copy.deepcopy(cur) if cur else None)
+        # stage (validate + deepcopy) every write FIRST so a malformed write / copy error aborts before
+        # ANY write lands; the apply loop is then pure dict assignment -> all-or-nothing like the txn.
+        staged = _staged_writes(writes)
+        for c, i, d in staged:
+            _mem.setdefault(c, {})[i] = d
+        return result
+
+
+def _staged_writes(writes) -> list[tuple[str, str, dict]]:
+    """Validate + deep-materialize a mutator's write list so misuse fails LOUDLY and IDENTICALLY on both
+    backends (transact_multi has no delete semantics — every write is a (collection, doc_id, dict))."""
+    staged: list[tuple[str, str, dict]] = []
+    for w in writes:
+        coll, did, doc = w                                    # a malformed tuple raises here, pre-write
+        if not isinstance(doc, dict):
+            raise TypeError(f"transact_multi write for {coll}/{did} must be a dict, got {type(doc).__name__}")
+        staged.append((coll, did, copy.deepcopy(doc)))
+    return staged
+
+
+def _transact_multi_firestore(collection: str, doc_id: str, mutator):
+    from google.cloud import firestore
+    client = _firestore()
+    ref = client.collection(collection).document(doc_id)
+
+    @firestore.transactional
+    def _txn(txn):
+        snap = ref.get(transaction=txn)                       # the ONLY read (read-before-write holds)
+        cur = snap.to_dict() if snap.exists else None
+        writes, result = mutator(dict(cur) if cur else None)
+        for c, i, d in _staged_writes(writes):                # validate before buffering any write
+            txn.set(client.collection(c).document(i), d)      # all writes commit together, or none
+        return result
+
+    return _txn(client.transaction())
+
+
 def get(collection: str, doc_id: str) -> dict | None:
     if _use_firestore():
         snap = _firestore().collection(collection).document(doc_id).get()

@@ -7,6 +7,8 @@ import os
 import threading
 import time
 
+import pytest
+
 from autosre import config, pending, state_store
 
 # The memory backend's lock serializes writers (all succeed); real Firestore transactions are
@@ -102,6 +104,63 @@ def test_transact_is_atomic_under_contention():
     assert state_store.get("counters", "x")["n"] == len(committed)
     if config.STATE_BACKEND == "memory":
         assert len(committed) == _N_CONTENTION   # the lock serializes: nobody may abort
+
+
+# --- v6 Phase 2: transact_multi (write the log head pointer + the immutable entry ATOMICALLY) -------
+def test_transact_multi_writes_all_docs_together():
+    """The head pointer + the log entry commit as ONE unit — both present, result returned."""
+    def _mut(cur):
+        assert cur is None
+        return ([("log_head", "h", {"seq": 1, "prev_entry_hash": "genesis"}),
+                 ("log_entries", "1", {"seq": 1, "incident_id": "inc-a"})], "committed")
+    assert state_store.transact_multi("log_head", "h", _mut) == "committed"
+    assert state_store.get("log_head", "h") == {"seq": 1, "prev_entry_hash": "genesis"}
+    assert state_store.get("log_entries", "1") == {"seq": 1, "incident_id": "inc-a"}
+
+
+def test_transact_multi_reads_the_current_head_then_advances():
+    state_store.put("log_head", "h", {"seq": 5, "prev_entry_hash": "abc"})
+    seen = {}
+
+    def _mut(cur):
+        seen["prev"] = (cur or {}).get("prev_entry_hash")
+        nxt = (cur or {}).get("seq", 0) + 1
+        return ([("log_head", "h", {"seq": nxt, "prev_entry_hash": "def"}),
+                 ("log_entries", str(nxt), {"seq": nxt})], nxt)
+    assert state_store.transact_multi("log_head", "h", _mut) == 6
+    assert seen["prev"] == "abc"                              # the mutator saw the CURRENT head
+    assert state_store.get("log_head", "h")["seq"] == 6
+    assert state_store.get("log_entries", "6")["seq"] == 6
+
+
+def test_transact_multi_is_all_or_nothing_on_failure():
+    """The crash-between-writes guarantee: a failure before commit leaves NEITHER the advanced head NOR
+    an orphan entry — so a half-append can never forge a seq gap the auditor would read as suppression.
+    (Runs against the REAL Firestore emulator in CI, where @transactional enforces it.)"""
+    state_store.put("log_head", "h", {"seq": 5, "prev_entry_hash": "abc"})
+
+    def _boom(cur):
+        raise RuntimeError("container killed between head-advance and entry-write")
+    with pytest.raises(RuntimeError):
+        state_store.transact_multi("log_head", "h", _boom)
+    assert state_store.get("log_head", "h") == {"seq": 5, "prev_entry_hash": "abc"}   # head UNCHANGED
+    assert state_store.get("log_entries", "6") is None                               # no orphan entry
+
+
+def test_transact_multi_empty_writes_is_an_idempotent_noop():
+    """The KEEP case: `(incident_id, terminal_status)` already logged -> no writes, no dup seq."""
+    state_store.put("log_head", "h", {"seq": 5})
+    assert state_store.transact_multi("log_head", "h", lambda cur: ([], "kept")) == "kept"
+    assert state_store.get("log_head", "h") == {"seq": 5}     # nothing written
+
+
+def test_transact_multi_rejects_a_malformed_write_before_any_lands():
+    """A non-dict doc fails loudly and IDENTICALLY on both backends, with no partial write."""
+    state_store.put("log_head", "h", {"seq": 5})
+    with pytest.raises((TypeError, ValueError)):
+        state_store.transact_multi("log_head", "h",
+                                   lambda cur: ([("log_head", "h", {"seq": 6}), ("log_entries", "6", None)], "x"))
+    assert state_store.get("log_head", "h") == {"seq": 5}     # first write never landed either
 
 
 # --- v5 Phase 1.1: per-service correlation lease (storm coalescing) --------------------------------
