@@ -100,3 +100,26 @@ def test_entries_read_helpers_and_range():
 def test_entries_is_empty_before_any_append():
     assert transparency.head() is None
     assert transparency.entries() == []
+
+
+def test_read_only_routes_serve_the_chain_for_the_auditor():
+    """The HTTPS-only auditor walks the chain via GET /transparency/head + /transparency/log."""
+    from fastapi.testclient import TestClient
+    import app as appmod
+    c = TestClient(appmod.app)
+    # empty log: head reports seq 0 (never 404), log is empty
+    assert c.get("/transparency/head").json() == {"seq": 0, "prev_entry_hash": transparency.GENESIS, "empty": True}
+    assert c.get("/transparency/log").json() == {"entries": []}
+
+    e1 = _append("inc-1", "mitigated")
+    e2 = _append("inc-1", "closed")
+    head = c.get("/transparency/head").json()
+    assert head["seq"] == 2 and head["prev_entry_hash"] == e2["entry_hash"]
+    assert "recent_pairs" not in head                                 # internal idempotency cache not exposed
+
+    entries = c.get("/transparency/log").json()["entries"]
+    assert [e["seq"] for e in entries] == [1, 2]
+    assert entries[1]["prev_entry_hash"] == e1["entry_hash"]          # the link the auditor recomputes
+    assert entries[0]["entry_hash"] == e1["entry_hash"]
+    # range query ?from=&to=
+    assert [e["seq"] for e in c.get("/transparency/log?from=2&to=2").json()["entries"]] == [2]

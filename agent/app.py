@@ -19,7 +19,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 import httpx
-from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request, Response
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import HTMLResponse, StreamingResponse
 from starlette.concurrency import run_in_threadpool
 
@@ -102,6 +102,33 @@ def incident_proof(incident_id: str):
     if rec.get("proof"):
         return rec["proof"]
     return proof.build(rec)
+
+
+# v6 Phase 2 — the read-only transparency-log seam the auditor walks. The auditor is HTTPS-only with NO
+# Firestore access (independence), and the log lives in the agent's Firestore, so it CANNOT walk the
+# chain without these routes. Both are additive + read-only -> the recorded demo stays byte-identical.
+@app.get("/transparency/head")
+def transparency_head():
+    """The log's head pointer. The auditor uses `seq` to know how far to walk and `prev_entry_hash` to
+    confirm the last entry hashes to it. An empty log reports seq 0 (never 404). The internal
+    idempotency cache (recent_pairs) is NOT exposed — only what the auditor walks."""
+    from autosre import transparency
+    h = transparency.head()
+    if not h:
+        return {"seq": 0, "prev_entry_hash": transparency.GENESIS, "empty": True}
+    return {"seq": h.get("seq"), "prev_entry_hash": h.get("prev_entry_hash"),
+            "updated_at": h.get("updated_at")}
+
+
+@app.get("/transparency/log")
+def transparency_log(from_seq: int = Query(1, alias="from"), to_seq: int | None = Query(None, alias="to")):
+    """The immutable log entries in [from, to] (ascending), each with its full chained core + entry_hash
+    for the auditor to recompute the links. Page size is capped so a huge range can't wedge a response;
+    the auditor paginates. Read-only, LLM-free."""
+    from autosre import transparency
+    lo = max(1, from_seq)
+    hi = lo + 999 if to_seq is None else min(to_seq, lo + 999)   # <=1000 entries/page
+    return {"entries": transparency.entries(lo, hi)}
 
 
 @app.get("/events")
