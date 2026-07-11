@@ -74,12 +74,15 @@ def _action_files() -> list[pathlib.Path]:
       - state_store.py (v6 Phase 2): the durable primitive under the transparency log (transact_multi)
         + the per-service heal leases — a hallucinated write here could forge/suppress a log entry or a
         lease, so it must stay LLM-free (it genuinely imports only copy/threading/time/config).
+      - transparency.py (v6 Phase 2): computes the hash-chain links + advances the log head — a
+        hallucinated hash/seq would let a tampered chain walk clean, so it must stay a deterministic
+        sha256 (it imports only hashlib/json/logging/time + state_store).
     (adk_brain.py / gemini.py / agent.py are the LLM-advisory tier — they ARE allowed to import it.)"""
     return (sorted((_AUTOSRE / "backends").glob("*.py"))
             + sorted((_AUTOSRE / "signals").glob("*.py"))
             + [_AUTOSRE / "tools.py", _AUTOSRE / "causal.py", _AUTOSRE / "memory.py",
                _AUTOSRE / "reversibility.py", _AUTOSRE / "revision_delta.py", _AUTOSRE / "proof.py",
-               _AUTOSRE / "dsse.py", _AUTOSRE / "state_store.py"])
+               _AUTOSRE / "dsse.py", _AUTOSRE / "state_store.py", _AUTOSRE / "transparency.py"])
 
 
 def test_action_layer_never_imports_the_llm():
@@ -117,6 +120,7 @@ def test_causal_and_signals_are_in_the_scanned_set():
     assert "proof.py" in scanned            # v6 Round 2 #24: builds+signs the bundle the auditor verifies
     assert "dsse.py" in scanned             # v6 Phase 1.2: assembles the DSSE/in-toto attestation
     assert "state_store.py" in scanned      # v6 Phase 2: the transact_multi primitive under the log
+    assert "transparency.py" in scanned     # v6 Phase 2: the hash-chain link/seq computation
     assert any(p.parent.name == "signals" for p in _action_files())
 
 

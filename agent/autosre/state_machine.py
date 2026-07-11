@@ -754,6 +754,15 @@ def _persist_proof(incident_id: str) -> None:
         if config.PROOF_DSSE:
             fields["proof_dsse"] = proof.build_dsse_envelope(signed) if signed.get("signature") else None
         incidents.record(incident_id, fields)
+        # v6 Phase 2: append this SIGNED heal to the hash-chained transparency log (flag-gated,
+        # fail-open, AND-ed with PROOF_SIGN — an unsigned heal has no signature to log, so the auditor's
+        # coverage check names it as unlogged). Keyed on (incident_id, status): MITIGATED then CLOSED
+        # log as TWO links. Runs AFTER incidents.record, so a log hiccup can never lose the proof.
+        if config.TRANSPARENCY_LOG and signed.get("signature"):
+            from . import transparency
+            transparency.append(incident_id=incident_id, service=rec.get("service"),
+                                 bundle_digest=signed["digest"], signature=signed["signature"],
+                                 terminal_status=rec.get("status") or "")
     except Exception as e:  # noqa: BLE001 — proof persistence must never break a completed heal
         log.warning("proof persistence failed for %s: %s", incident_id, e)
 

@@ -292,3 +292,41 @@ def test_dsse_refire_overwrites_a_stale_sibling(monkeypatch):
     rec = incidents.get("inc-refire")
     assert rec["proof"]["bundle"]["status"] == "closed"              # legacy refreshed to the CLOSED bundle
     assert rec.get("proof_dsse") is None                             # stale MITIGATED DSSE overwritten, not left
+
+
+# --- v6 Phase 2: a SIGNED heal appends to the hash-chained transparency log (flag-gated) ------------
+def test_signed_heal_appends_to_the_transparency_log(monkeypatch):
+    from autosre import transparency
+    mock.reset()
+    monkeypatch.setattr(config, "GEMINI_API_KEY", "")
+    monkeypatch.setattr(config, "PROOF_SIGN", True)
+    monkeypatch.setattr(config, "TRANSPARENCY_LOG", True)
+    monkeypatch.setattr(proof, "sign_digest", lambda digest, **k: dict(_MOCK_SIG))
+    assert run_self_heal("inc-tlog", "airbag-target")["status"] == "mitigated"
+    entries = transparency.entries()
+    mine = [e for e in entries if e["incident_id"] == "inc-tlog"]
+    assert len(mine) == 1 and mine[0]["terminal_status"] == "mitigated"
+    assert mine[0]["bundle_digest"] == incidents.get("inc-tlog")["proof"]["digest"]   # binds the signed proof
+
+
+def test_transparency_log_flag_off_writes_nothing(monkeypatch):
+    from autosre import transparency
+    mock.reset()
+    monkeypatch.setattr(config, "GEMINI_API_KEY", "")
+    monkeypatch.setattr(config, "PROOF_SIGN", True)              # TRANSPARENCY_LOG default OFF
+    monkeypatch.setattr(proof, "sign_digest", lambda digest, **k: dict(_MOCK_SIG))
+    assert run_self_heal("inc-notlog", "airbag-target")["status"] == "mitigated"
+    assert transparency.head() is None                          # byte-identical: no chain
+
+
+def test_unsigned_heal_is_not_logged(monkeypatch):
+    """AND-ed with PROOF_SIGN: an unsigned heal has no signature to log, so it never enters the chain
+    (the auditor's coverage check names it as unlogged instead)."""
+    from autosre import transparency
+    mock.reset()
+    monkeypatch.setattr(config, "GEMINI_API_KEY", "")
+    monkeypatch.setattr(config, "PROOF_SIGN", True)
+    monkeypatch.setattr(config, "TRANSPARENCY_LOG", True)
+    monkeypatch.setattr(proof, "sign_digest", lambda digest, **k: None)   # signing fails -> unsigned
+    assert run_self_heal("inc-unsigned-log", "airbag-target")["status"] == "mitigated"
+    assert transparency.head() is None

@@ -289,6 +289,10 @@ KMS_KEY = os.getenv("AIRBAG_KMS_KEY", "")
 # asymmetricSign over sha256(PAE) at the terminal stamp (both signs wall-clock bounded — R1 #6), so the
 # legacy envelope stays byte-identical (apart from the permanent bundle_version schema field). FAIL-OPEN.
 PROOF_DSSE = _bool("AIRBAG_PROOF_DSSE", "false")
+# v6 Phase 2 (default OFF, effectively AND-ed with PROOF_SIGN): append each SIGNED heal to a
+# hash-chained transparency log (log_head + immutable log_entries) the auditor walks to prove no
+# LOGGED incident was deleted/reordered/back-dated. Fail-open — a log hiccup never blocks a heal.
+TRANSPARENCY_LOG = _bool("AIRBAG_TRANSPARENCY_LOG", "false")
 
 # fix-PR slow path (optional). Empty token -> the FIX_PR stage is a no-op note.
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "")
