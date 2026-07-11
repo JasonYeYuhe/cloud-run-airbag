@@ -13,8 +13,9 @@ Load-bearing properties:
   requested incident id, the HTTP status, AND a `bundle.incident_id == requested-id` check — so a
   cryptographically-valid bundle for incident A can never answer a query for incident B (that FAILs).
 - CARRIES AN IN-BAND TYPE TAG (Round-2 #6): `attestation_version`, so an attestation can never be
-  replayed as a heal proof on a registry-driven verify surface (Phase 3 enforces role/type; the tag
-  is emitted here).
+  replayed as a heal proof. Phase 3's registry SERVES the role/type mapping; a registry-driven verify
+  surface that ENFORCES role-vs-artifact is still future — today the in-band tag (consumed by
+  is_attestation) + the config-pinned key are the defense, not registry-driven name resolution.
 - OFFLINE-VERIFIABLE BY THE SAME KERNEL. The counter-signed envelope has the exact {bundle, digest,
   signature} shape verify.attest consumes, so `auditor/verify.py` re-verifies the attestation against
   the auditor's committed pubkey — the counter-signature is not theatre.

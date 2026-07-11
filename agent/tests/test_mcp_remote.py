@@ -8,8 +8,18 @@ from autosre import config, mcp_remote
 
 def test_remote_mcp_registers_tools():
     names = {t.name for t in asyncio.run(mcp_remote.mcp.list_tools())}
-    assert names == {"airbag_incidents", "airbag_incident", "airbag_autonomy", "airbag_memory",
-                     "airbag_trigger_heal", "airbag_approve", "airbag_set_autonomy"}
+    assert names == {"airbag_incidents", "airbag_incident", "airbag_incident_proof", "airbag_autonomy",
+                     "airbag_memory", "airbag_trigger_heal", "airbag_approve", "airbag_set_autonomy"}
+    # v6 Phase 3: airbag_incident_proof (7 -> 8) makes the remote MCP a first-class A2A proof peer
+    assert len(names) == 8
+
+
+def test_airbag_incident_proof_serves_the_stored_snapshot():
+    from autosre import incidents
+    incidents.record("inc-mcp", {"incident_id": "inc-mcp", "service": "svc", "status": "mitigated",
+                                 "events": [], "proof": {"digest": "sha256:abc", "bundle": {"x": 1}}})
+    assert mcp_remote.airbag_incident_proof("inc-mcp")["digest"] == "sha256:abc"   # verbatim snapshot
+    assert mcp_remote.airbag_incident_proof("nope")["error"].startswith("incident nope")
 
 
 def _drive_gate(headers):

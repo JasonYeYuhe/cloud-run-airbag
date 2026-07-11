@@ -136,6 +136,24 @@ def test_bundle_version_is_permanent_and_rides_the_digest():
         assert p["digest"] == "sha256:" + hashlib.sha256(canonical.encode()).hexdigest()
 
 
+def test_served_trust_anchor_routes():
+    """v6 Phase 3: /.well-known serves the COMMITTED pubkey (byte-identical) + the role-tagged registry."""
+    from pathlib import Path
+    from fastapi.testclient import TestClient
+    import app as appmod
+    c = TestClient(appmod.app)
+    r = c.get("/.well-known/airbag-proof-pubkey.pem")
+    assert r.status_code == 200 and r.headers["content-type"].startswith("application/x-pem-file")
+    committed = (Path(appmod.__file__).resolve().parent.parent / "scripts" / "airbag-proof-pubkey.pem").read_bytes()
+    assert r.content == committed                              # the served bytes ARE the committed root
+    reg = c.get("/.well-known/airbag-registry.json").json()
+    assert reg["version"] == 1 and reg["threshold"] == 1
+    assert {k["role"] for k in reg["keys"]} == {"heal-proof-signer", "attestation-signer"}   # Round 2 #6
+    heal = next(k for k in reg["keys"] if k["role"] == "heal-proof-signer")
+    assert heal["resource"].endswith("airbag-proof/cryptoKeyVersions/1")
+    assert heal["algorithm"] == "EC_SIGN_P256_SHA256"
+
+
 def test_proof_endpoint(monkeypatch):
     from fastapi.testclient import TestClient
     import app as appmod

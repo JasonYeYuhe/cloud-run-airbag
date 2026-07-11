@@ -1,6 +1,6 @@
 """Remote MCP server mounted on the Cloud Run agent (streamable-HTTP at /mcp), behind the
 AIRBAG_MCP_HTTP flag. Any MCP client can point at https://<agent>/mcp/ with
-`Authorization: Bearer <AIRBAG_INTERNAL_TOKEN>` and drive incident response — the same capability
+`Authorization: Bearer <AIRBAG_MCP_TOKEN>` and drive incident response — the same capability
 as the stdio server (mcp-server/), but the deployed agent IS the MCP server (no local proxy).
 
 Tools call the agent's functions IN-PROCESS. Read tools are synchronous + fast; the slow actions
@@ -43,6 +43,20 @@ def airbag_incident(incident_id: str) -> dict:
     """Full evidence for one incident: the ADK/Gemini decision, the signals, before/after metrics,
     and the complete thought-chain timeline."""
     return incidents.get(incident_id) or {"error": f"incident {incident_id} not found"}
+
+
+@mcp.tool()
+def airbag_incident_proof(incident_id: str) -> dict:
+    """The tamper-evident PROOF BUNDLE for one incident (v6 Phase 3, A2A-consumable): the canonical
+    stitch of the decision, detection signals, causal pre-check, recovery proof, fix PR, and FSM
+    timeline + a sha256 content DIGEST (+ a Cloud KMS signature when AIRBAG_PROOF_SIGN is on). Serves
+    the STABLE snapshot persisted at MITIGATED/CLOSED (falls back to a live digest-only build). Verify
+    offline: scripts/verify-proof.py. Read-only — this is what an independent auditor pulls over MCP."""
+    from . import proof
+    rec = incidents.get(incident_id)
+    if not rec:
+        return {"error": f"incident {incident_id} not found"}
+    return rec.get("proof") or proof.build(rec)
 
 
 @mcp.tool()

@@ -13,6 +13,7 @@ import hashlib
 import hmac
 import json
 import logging
+import os
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -129,6 +130,43 @@ def transparency_log(from_seq: int = Query(1, alias="from"), to_seq: int | None 
     lo = max(1, from_seq)
     hi = lo + 999 if to_seq is None else min(to_seq, lo + 999)   # <=1000 entries/page
     return {"entries": transparency.entries(lo, hi)}
+
+
+# v6 Phase 3 — the served trust anchor. Both are READ-ONLY + additive (brand-new routes serving public
+# bytes -> byte-identical demo). The COMMITTED PEM stays the authoritative offline trust root; these
+# endpoints are a convenience for a third party without the repo (never let a served key on the audited
+# service become the root a MITM could swap). Files live in scripts/ (dev) or a deploy-staged dir.
+_ANCHOR_DIR = Path(os.getenv("AIRBAG_ANCHOR_DIR", str(Path(__file__).resolve().parent.parent / "scripts")))
+
+
+@app.get("/.well-known/airbag-proof-pubkey.pem")
+def served_pubkey():
+    """Serve the committed heal-proof public key so a party without the repo can verify a proof."""
+    pem = _ANCHOR_DIR / "airbag-proof-pubkey.pem"
+    if not pem.is_file():
+        raise HTTPException(status_code=404, detail="pubkey not served (not staged in this deployment)")
+    try:
+        return Response(content=pem.read_bytes(), media_type="application/x-pem-file")
+    except Exception as e:  # noqa: BLE001 — an unreadable committed PEM is a controlled 500, never a crash
+        raise HTTPException(status_code=500, detail="pubkey unreadable") from e
+
+
+@app.get("/.well-known/airbag-registry.json")
+def served_registry():
+    """The versioned key REGISTRY (mini TUF), with a `role` field per key that a future registry-driven
+    verify surface MUST match (heal-proof-signer vs attestation-signer) against the artifact type AND
+    the in-payload type tag (bundle_version vs attestation_version), or a counter-signed attestation
+    could be re-wrapped as a SIGNED-VERIFIED heal (Round 2 #6). NOTE: today the registry is SERVED but
+    NOT yet CONSUMED — every verifier pins the committed PEM/key by config, and the in-band type tags do
+    the anti-confusion work; registry-driven name resolution is future. Served from a committed file
+    (generated at setup — never a live KMS call); the committed PEM stays the authoritative root."""
+    reg = _ANCHOR_DIR / "airbag-registry.json"
+    if not reg.is_file():
+        raise HTTPException(status_code=404, detail="registry not served (not staged in this deployment)")
+    try:
+        return json.loads(reg.read_text())
+    except Exception as e:  # noqa: BLE001 — a malformed committed registry is a 500, never a crash-loop
+        raise HTTPException(status_code=500, detail="registry unreadable") from e
 
 
 @app.get("/events")

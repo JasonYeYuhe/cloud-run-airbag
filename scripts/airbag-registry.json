@@ -1,0 +1,27 @@
+{
+  "registry_version": "airbag.registry/v1",
+  "version": 1,
+  "expires": "2027-07-01T00:00:00Z",
+  "threshold": 1,
+  "keys": [
+    {
+      "resource": "projects/airbag-hack-260628/locations/asia-northeast1/keyRings/airbag/cryptoKeys/airbag-proof/cryptoKeyVersions/1",
+      "role": "heal-proof-signer",
+      "algorithm": "EC_SIGN_P256_SHA256",
+      "not_before": "2026-07-04T00:00:00Z",
+      "status": "active",
+      "pem_ref": "scripts/airbag-proof-pubkey.pem",
+      "spiffe_id": "spiffe://airbag.dev/agent"
+    },
+    {
+      "resource": "projects/airbag-hack-260628/locations/asia-northeast1/keyRings/airbag/cryptoKeys/airbag-auditor/cryptoKeyVersions/1",
+      "role": "attestation-signer",
+      "algorithm": "EC_SIGN_P256_SHA256",
+      "not_before": "2026-07-09T00:00:00Z",
+      "status": "active",
+      "pem_ref": "scripts/auditor-pubkey.pem",
+      "spiffe_id": "spiffe://airbag.dev/auditor"
+    }
+  ],
+  "_note": "Mini TUF-style key registry (v6 Phase 3). The `role` field is LOAD-BEARING (Round 2 #6): every verify surface that resolves a key by NAME must match role (heal-proof-signer vs attestation-signer) against the artifact type AND the in-payload type tag (bundle_version airbag.heal/v1 vs attestation_version airbag.attestation/v1), or a counter-signed attestation could be re-wrapped as a SIGNED-VERIFIED heal. The COMMITTED PEMs stay the authoritative offline trust root; this served registry is a convenience for parties without the repo. Rotation is TUF-style: a new `version` is signed by the PREVIOUS version's key (2-role only; full 4-role TUF is out of scope). Generated at setup (infra/kms-setup.sh), never a live KMS call in the request path."
+}
