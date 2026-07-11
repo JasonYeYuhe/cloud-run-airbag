@@ -40,6 +40,11 @@ def _stage(events, stage, keys):
 # /incidents/{id}/proof before build() is ever called, so they keep verifying unchanged.
 BUNDLE_VERSION = "airbag.heal/v1"
 
+# v6 Phase 1.2 borrow (§1b.3 #12): the SPIFFE-style workload identity of the SIGNING agent — an
+# identity STRING (no SPIRE deployed), naming the Cloud Run SA + KMS binding as "workload attestation".
+# Unconditional like bundle_version; the auditor carries the analogous spiffe://airbag.dev/auditor.
+ISSUER = "spiffe://airbag.dev/agent"
+
 
 def _canon(obj) -> str:
     """The one canonicalization used everywhere a digest is computed (byte-identical to the auditor's
@@ -54,6 +59,7 @@ def build(rec: dict) -> dict:
     detection = _stage(events, "ANALYZED", ("verdict", "reason", "signals", "rate"))
     bundle = {
         "bundle_version": BUNDLE_VERSION,
+        "issuer": ISSUER,
         "incident_id": rec.get("incident_id"),
         "service": rec.get("service"),
         "status": rec.get("status"),

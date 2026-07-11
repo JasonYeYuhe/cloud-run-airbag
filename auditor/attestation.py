@@ -37,8 +37,13 @@ log = logging.getLogger("airbag.auditor.attestation")
 
 # In-band type tag: domain separation so a counter-signed attestation can never be re-wrapped as a
 # SIGNED-VERIFIED "heal" on any registry-driven verify surface (Round-2 #6). Heal bundles carry the
-# analogous `bundle_version` (agent-side, Phase 1.2 proof.py — deferred while agent-side is frozen).
+# analogous `bundle_version` (agent-side, Phase 1.2 proof.py — landed dev+test, default-safe).
 ATTESTATION_VERSION = "airbag.attestation/v1"
+
+# v6 Phase 1.2 borrow (§1b.3 #12): the SPIFFE-style workload identity of the AUDITOR — an identity
+# STRING (no SPIRE), the counterpart to the agent's spiffe://airbag.dev/agent. Names the auditor's own
+# Cloud Run SA + distinct KMS key as an independent workload, reinforcing the two-identity story.
+ISSUER = "spiffe://airbag.dev/auditor"
 
 # Signer contract: a callable digest("sha256:...") -> signature-envelope | None (None = fail-open).
 Signer = Callable[[str], "dict | None"]
@@ -62,6 +67,7 @@ def build_attestation(proof: dict, raw_bytes: bytes, verdict: dict, *, agent_url
     tri = verdict["tri_state"] if id_match else verify.FAIL
     return {
         "attestation_version": ATTESTATION_VERSION,
+        "issuer": ISSUER,                                 # v6: the auditor's SPIFFE-style workload identity
         "incident_id": bundle_incident_id,
         "tri_state": tri,
         # the verdict breakdown behind the tri_state — WHY it verified or FAILed (transparency for the

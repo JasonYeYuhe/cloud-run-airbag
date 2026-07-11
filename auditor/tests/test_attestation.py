@@ -88,6 +88,7 @@ def test_counter_signed_attestation_is_offline_verifiable():
     # the attested VERDICT: the heal itself is SIGNED-VERIFIED
     assert env["bundle"]["tri_state"] == verify.SIGNED_VERIFIED
     assert env["bundle"]["attestation_version"] == attestation.ATTESTATION_VERSION
+    assert env["bundle"]["issuer"] == "spiffe://airbag.dev/auditor"   # v6: auditor's SPIFFE identity
     # the ATTESTATION ENVELOPE itself re-verifies through the kernel against the AUDITOR's pinned key
     v = verify.attest(env, expected_pem=auditor_pem, expected_key=_AUDITOR_KEY)
     assert v["tri_state"] == verify.SIGNED_VERIFIED and v["verified_signer"] == _AUDITOR_KEY

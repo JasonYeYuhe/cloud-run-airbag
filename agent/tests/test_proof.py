@@ -28,6 +28,7 @@ def test_bundle_stitches_the_evidence():
     p = proof.build(_rec())
     b = p["bundle"]
     assert b["bundle_version"] == "airbag.heal/v1"              # v6: permanent self-describing type tag
+    assert b["issuer"] == "spiffe://airbag.dev/agent"          # v6: SPIFFE-style workload identity
     assert b["decision"]["action"] == "ROLLBACK"
     assert b["detection"]["verdict"] == "FAIL" and b["detection"]["signals"] == {"latency": {"verdict": "FAIL"}}
     assert b["causal"]["verdict"] == "CAUSAL"
@@ -118,7 +119,8 @@ def test_v6_evidence_fields_are_presence_keyed():
     b = proof.build({"incident_id": "i", "events": []})["bundle"]
     assert "trigger_evidence_digest" not in b
     assert "externalParameters" not in b and "internalParameters" not in b
-    assert b["bundle_version"] == "airbag.heal/v1"
+    assert b["bundle_version"] == "airbag.heal/v1"              # unconditional
+    assert b["issuer"] == "spiffe://airbag.dev/agent"          # unconditional
 
 
 def test_bundle_version_is_permanent_and_rides_the_digest():
