@@ -9,11 +9,16 @@ cosign command consumes:
   - canonical-bundle.json  : the blob whose sha256 == the statement subject  (cosign positional)
   - cosign.pub             : the EC public key  (cosign `--key`)
 
+DECOUPLED from the agent runtime: the heal BUNDLE is read from a committed canonical-bundle.json
+(`--bundle-file`, default = the committed golden's blob), so the CI gate needs only `cryptography` +
+the pure `autosre.dsse` module — NOT httpx / the full agent deps. Only the initial BOOTSTRAP (no
+bundle file present) lazily imports `autosre.proof` to build a fresh bundle; regular runs never do.
+
 CI generates a FRESH key each run (gating the current dsse.py end-to-end). The committed copy under
 docs/proof/dsse-golden/ was produced ONCE with a throwaway key (private discarded, like the rogue-key
 fixture) — a demo artifact + the input to test_dsse.test_committed_golden_is_self_consistent.
 
-Usage:  python scripts/gen_dsse_golden.py --out-dir <dir> [--key priv.pem]
+Usage:  python scripts/gen_dsse_golden.py --out-dir <dir> [--key priv.pem] [--bundle-file blob.json]
 """
 from __future__ import annotations
 
@@ -24,13 +29,16 @@ import json
 import pathlib
 import sys
 
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "agent"))
+_REPO = pathlib.Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(_REPO / "agent"))
 
-from autosre import dsse, proof  # noqa: E402  (LLM-free construction modules; path set above)
+from autosre import dsse  # noqa: E402  (pure stdlib construction module; path set above)
 from cryptography.hazmat.primitives import hashes, serialization  # noqa: E402
 from cryptography.hazmat.primitives.asymmetric import ec, utils  # noqa: E402
 
-# A representative healed incident — mirror of the live latency-heal shape (carries bundle_version).
+_DEFAULT_BUNDLE = _REPO / "docs" / "proof" / "dsse-golden" / "canonical-bundle.json"
+
+# Bootstrap-only representative healed incident (used solely when no committed blob exists yet).
 _REC = {
     "incident_id": "inc-dsse-golden", "service": "airbag-target", "status": "mitigated",
     "decision": {"action": "ROLLBACK", "confidence": 0.9, "reasoning": "latency regression",
@@ -51,10 +59,23 @@ def _local_signer(priv):
     return sign
 
 
+def _load_blob(bundle_file: str | None) -> bytes:
+    """Return the exact canonical bundle BYTES to attest (the cosign blob). Prefer a committed blob so
+    the CI gate never imports the agent runtime; bootstrap via proof.build only when none exists."""
+    path = pathlib.Path(bundle_file) if bundle_file else _DEFAULT_BUNDLE
+    if path.exists():
+        return path.read_bytes()                                     # verbatim -> sha256 matches exactly
+    from autosre import proof  # noqa: E402 — lazy: bootstrap ONLY, keeps CI's import surface tiny
+    built = proof.build(_REC)
+    return json.dumps(built["bundle"], sort_keys=True, separators=(",", ":"),
+                      default=str).encode("utf-8")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--out-dir", required=True)
     ap.add_argument("--key", help="EC-P256 private key PEM (a fresh key is generated if omitted)")
+    ap.add_argument("--bundle-file", help="canonical heal bundle JSON to attest (default: committed golden)")
     args = ap.parse_args()
 
     if args.key:
@@ -62,21 +83,18 @@ def main() -> int:
     else:
         priv = ec.generate_private_key(ec.SECP256R1())
 
-    built = proof.build(_REC)
-    bundle = built["bundle"]
-    canonical = json.dumps(bundle, sort_keys=True, separators=(",", ":"), default=str)
-    # the blob cosign hashes MUST be byte-identical to what proof.build digested
-    assert "sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest() == built["digest"]
-    subject_hex = built["digest"].split(":", 1)[-1]
+    blob = _load_blob(args.bundle_file)
+    bundle = json.loads(blob)
+    subject_hex = hashlib.sha256(blob).hexdigest()                   # cosign --check-claims hashes THIS blob
 
-    env = dsse.build_dsse(bundle, _REC["incident_id"], subject_hex, signer=_local_signer(priv))
+    env = dsse.build_dsse(bundle, bundle.get("incident_id"), subject_hex, signer=_local_signer(priv))
     if env is None:
         print("ERROR: build_dsse returned None (signer declined)", file=sys.stderr)
         return 1
 
     out = pathlib.Path(args.out_dir)
     out.mkdir(parents=True, exist_ok=True)
-    (out / "canonical-bundle.json").write_text(canonical)                    # blob: NO trailing newline
+    (out / "canonical-bundle.json").write_bytes(blob)                # copy the blob verbatim (no re-dump)
     (out / "heal.intoto.dsse.json").write_text(json.dumps(env, indent=2) + "\n")
     (out / "cosign.pub").write_bytes(priv.public_key().public_bytes(
         serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo))
