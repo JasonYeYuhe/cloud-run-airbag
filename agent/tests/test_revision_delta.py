@@ -219,14 +219,18 @@ def _bare_rec():
 
 def test_proof_digest_byte_identical_without_delta_and_included_with_it():
     rec = _bare_rec()
-    digest_v4 = proof.build(rec)["digest"]
+    # revision_delta is a PRESENCE-keyed bundle field: absent -> not in the bundle -> digest is stable
+    # across rebuilds; present -> it rides the signed bundle and the digest changes. (This is a
+    # self-rebuild stability check; the absolute digest is not a fixed historical value — bundle_version
+    # is a permanent v6 schema field, so a fresh build is no longer the v4-era bundle shape.)
+    digest_no_delta = proof.build(rec)["digest"]
     assert "revision_delta" not in proof.build(rec)["bundle"]    # absent -> not in the bundle
-    assert proof.build(rec)["digest"] == digest_v4              # ... so the digest is byte-identical
+    assert proof.build(rec)["digest"] == digest_no_delta        # ... so the digest is stable across rebuilds
 
     rec2 = {**rec, "revision_delta": {"image_changed": True, "env_added": ["FAULT_MODE"]}}
     signed = proof.build(rec2)
     assert signed["bundle"]["revision_delta"] == {"image_changed": True, "env_added": ["FAULT_MODE"]}
-    assert signed["digest"] != digest_v4                       # present -> rides the signed bundle
+    assert signed["digest"] != digest_no_delta                 # present -> rides the signed bundle
 
 
 def test_report_card_present_only_with_delta():

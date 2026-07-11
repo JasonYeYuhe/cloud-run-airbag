@@ -30,11 +30,23 @@ def _stage(events, stage, keys):
     return {k: e.get(k) for k in keys} if e else None
 
 
+# v6 Phase 1.2 (Round 2 #6/#20): a PERMANENT, self-describing in-band type tag on EVERY heal bundle —
+# the heal-side analogue of the auditor's ATTESTATION_VERSION ("airbag.attestation/v1"). NOT flag-gated
+# and NOT keyed-on-presence: it is a schema field on every built bundle, so a registry-driven verify
+# surface (Phase 3) can match artifact type (heal-proof vs attestation) against the resolved key's role
+# and refuse a counter-signed attestation re-wrapped as a "heal". A re-healed proof therefore gains new
+# bytes vs an OLD stored bundle — which is why the guard is "no deploy before video", NOT "flag-off
+# byte-identical": already-STORED proofs (committed fixtures + demo snapshots) are served verbatim by
+# /incidents/{id}/proof before build() is ever called, so they keep verifying unchanged.
+BUNDLE_VERSION = "airbag.heal/v1"
+
+
 def build(rec: dict) -> dict:
     """Build the canonical proof bundle + its content digest from a persisted incident record."""
     events = rec.get("events", []) or []
     d = rec.get("decision") or {}
     bundle = {
+        "bundle_version": BUNDLE_VERSION,
         "incident_id": rec.get("incident_id"),
         "service": rec.get("service"),
         "status": rec.get("status"),

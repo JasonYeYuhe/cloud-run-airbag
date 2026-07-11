@@ -99,6 +99,16 @@ for (const f of FIXTURES) {
   console.log(`${derOk ? 'OK  ' : 'FAIL'} strict DER rejects a trailing-byte signature (got ${mr.tri_state})`);
   if (!derOk) failures++;
 
+  // [3] v6 bundle_version: a NEW bundle carrying the permanent type tag must canonicalize byte-identically
+  // in JS and Python ALONGSIDE the known traps (em-dash -> \uXXXX escape, "rate":0.0 lexeme preserved).
+  // Byte length is DERIVED at runtime here, never transcribed into prose (Round 2 #23).
+  const bvBundle = '{"bundle":{"bundle_version":"airbag.heal/v1","em":"—","rate":0.0,"z":3}}';
+  const bvJsCanon = V.canonicalBundleFromText(bvBundle);
+  const bvPySha = execFileSync(PY, ['-c', pyCode], { input: bvBundle, encoding: 'utf8' }).trim();
+  const bvOk = jsSha(bvJsCanon) === bvPySha && bvJsCanon.includes('"bundle_version":"airbag.heal/v1"');
+  console.log(`${bvOk ? 'OK  ' : 'FAIL'} bundle_version canonicalizes byte-identically (js=${Buffer.byteLength(bvJsCanon, 'utf8')}B, tag in-band)`);
+  if (!bvOk) failures++;
+
   console.log(failures ? `\nFAILED (${failures})` : '\nALL PASS');
   process.exit(failures ? 1 : 0);
 })();

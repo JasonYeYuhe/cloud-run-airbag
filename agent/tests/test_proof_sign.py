@@ -152,6 +152,7 @@ def test_sign_digest_bounds_a_hung_kms_post(monkeypatch):
 # --- offline verify round-trip (scripts/verify-proof.py) ------------------------------------------
 def test_verify_signed_roundtrip_ok():
     signed, pem = _locally_sign(proof.build(_REC)["bundle"])
+    assert signed["bundle"]["bundle_version"] == "airbag.heal/v1"   # v6: a bundle_version bundle verifies E2E
     r = verify_proof.verify(signed, pem)
     assert r["integrity_ok"] is True and r["signature_ok"] is True and r["signed"] is True
 

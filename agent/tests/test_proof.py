@@ -27,6 +27,7 @@ def _rec():
 def test_bundle_stitches_the_evidence():
     p = proof.build(_rec())
     b = p["bundle"]
+    assert b["bundle_version"] == "airbag.heal/v1"              # v6: permanent self-describing type tag
     assert b["decision"]["action"] == "ROLLBACK"
     assert b["detection"]["verdict"] == "FAIL" and b["detection"]["signals"] == {"latency": {"verdict": "FAIL"}}
     assert b["causal"]["verdict"] == "CAUSAL"
@@ -60,6 +61,19 @@ def test_report_footer_shows_the_proof_digest():
 def test_bundle_handles_sparse_record():
     p = proof.build({"incident_id": "i", "events": []})
     assert p["digest"].startswith("sha256:") and p["bundle"]["transitions"] == []
+
+
+def test_bundle_version_is_permanent_and_rides_the_digest():
+    """v6: bundle_version is UNCONDITIONAL (present on the fullest AND the sparsest bundle) and is part
+    of the canonical bytes the digest covers — so it can never be stripped without breaking integrity,
+    and a registry-driven verify surface can always read the artifact type in-band."""
+    for rec in (_rec(), {"incident_id": "i", "events": []}):
+        p = proof.build(rec)
+        assert p["bundle"]["bundle_version"] == "airbag.heal/v1"
+        # the tag is INSIDE the canonical json the digest is computed over (not a sidecar field)
+        canonical = json.dumps(p["bundle"], sort_keys=True, separators=(",", ":"), default=str)
+        assert '"bundle_version":"airbag.heal/v1"' in canonical
+        assert p["digest"] == "sha256:" + hashlib.sha256(canonical.encode()).hexdigest()
 
 
 def test_proof_endpoint(monkeypatch):
