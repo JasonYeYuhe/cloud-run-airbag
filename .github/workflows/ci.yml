@@ -143,3 +143,40 @@ jobs:
       - run: pip install -r requirements.txt pytest
       - name: Verify core + signer-pin tri-state tests (independent auditor kernel)
         run: python -m pytest -q
+
+  # v6 Phase 1.2 borrow — the DSSE cosign HARD GATE (Round 3 #9). A hand-rolled DSSE fails cosign on
+  # PAE / payload type / predicate type / subject digest / ECDSA encoding in ways prose review never
+  # catches, so the emit path is gated by REAL cosign here: build a heal-attestation DSSE via OUR
+  # construction (agent/autosre/dsse.py) signed with an ephemeral EC-P256 key (a faithful proxy for the
+  # KMS EC_SIGN_P256_SHA256 identity — identical DER + PAE), and require `cosign verify-blob-attestation`
+  # to accept it. Runs from the SAME commit that adds dsse.py (before the A5 emit path). If this can
+  # never go green, DSSE is CUT (it is a borrow, not a phase — the auditor without DSSE still wins).
+  dsse-cosign:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install cryptography (the construction's only dep)
+        run: pip install cryptography
+      - name: Install cosign (pinned)
+        uses: sigstore/cosign-installer@v3
+        with:
+          cosign-release: 'v2.4.1'
+      - name: Generate an ephemeral EC-P256 key (a faithful KMS EC_SIGN_P256_SHA256 proxy)
+        run: |
+          openssl ecparam -genkey -name prime256v1 -noout -out dsse-key.pem
+          openssl ec -in dsse-key.pem -pubout -out dsse-key.pub
+      - name: Build a heal DSSE via OUR construction (agent/autosre/dsse.py)
+        run: python scripts/gen_dsse_golden.py --out-dir golden --key dsse-key.pem
+      - name: cosign verify-blob-attestation (the HARD GATE — our hand-rolled DSSE must satisfy cosign)
+        run: |
+          cosign version
+          cosign verify-blob-attestation \
+            --key dsse-key.pub \
+            --signature golden/heal.intoto.dsse.json \
+            --type airbag.dev/heal-attestation/v1 \
+            --check-claims \
+            --insecure-ignore-tlog \
+            golden/canonical-bundle.json

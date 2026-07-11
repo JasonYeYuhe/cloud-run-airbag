@@ -68,11 +68,15 @@ def _action_files() -> list[pathlib.Path]:
         artifact the auditor independently verifies — deserves the guard MORE than the diffs that ride
         it. Its imports are clean today (config, report, httpx, google.auth, stdlib), but "clean" must
         be ENFORCED through a finals sprint of edits to exactly this file (bundle_version, DSSE, etc.).
+      - dsse.py (v6 Phase 1.2): assembles the in-toto Statement + DSSE envelope that rides the signed
+        proof (cosign-verifiable); like proof.py it must stay a deterministic construction, never an
+        LLM output that could forge attestation subjects/predicates.
     (adk_brain.py / gemini.py / agent.py are the LLM-advisory tier — they ARE allowed to import it.)"""
     return (sorted((_AUTOSRE / "backends").glob("*.py"))
             + sorted((_AUTOSRE / "signals").glob("*.py"))
             + [_AUTOSRE / "tools.py", _AUTOSRE / "causal.py", _AUTOSRE / "memory.py",
-               _AUTOSRE / "reversibility.py", _AUTOSRE / "revision_delta.py", _AUTOSRE / "proof.py"])
+               _AUTOSRE / "reversibility.py", _AUTOSRE / "revision_delta.py", _AUTOSRE / "proof.py",
+               _AUTOSRE / "dsse.py"])
 
 
 def test_action_layer_never_imports_the_llm():
@@ -108,6 +112,7 @@ def test_causal_and_signals_are_in_the_scanned_set():
     assert "causal.py" in scanned
     assert "revision_delta.py" in scanned   # v5 5.3: its diff rides the signed proof bundle
     assert "proof.py" in scanned            # v6 Round 2 #24: builds+signs the bundle the auditor verifies
+    assert "dsse.py" in scanned             # v6 Phase 1.2: assembles the DSSE/in-toto attestation
     assert any(p.parent.name == "signals" for p in _action_files())
 
 
